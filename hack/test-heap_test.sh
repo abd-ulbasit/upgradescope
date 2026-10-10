@@ -32,7 +32,8 @@ for want in \
   "internal/server TestFleetReadsOfTheWidestGapsAreBounded" \
   "internal/collect TestCollectHelmPeakHeapIsBoundedByOneRelease" \
   "internal/collect TestCollectHelmGzipBombIsBounded" \
-  "internal/collect TestCollectHelmManifestParsingIsBounded"; do
+  "internal/collect TestCollectHelmManifestParsingIsBounded" \
+  "internal/collect TestParseOnce_NumberDenseStreamIsNotSlower"; do
   if grep -qxF "$want" <<<"$listed"; then
     ok "lists $want"
   else

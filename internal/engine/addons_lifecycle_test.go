@@ -158,15 +158,93 @@ func TestEvalAddOnsCycleCompatDetail(t *testing.T) {
 }
 
 func TestEvalAddOnsNoDataDetail(t *testing.T) {
-	fs := evalAddOns(addOnAt("istio", ""), lifecycleKB(), inventory.Version{Major: 1, Minor: 34}, day("2026-10-02"))
-	want := "Detected Istio version (unknown) via image in namespace(s): istio-system. No version could be read from an image tag, chart appVersion or app.kubernetes.io/version label, so its end of life and Kubernetes compatibility were not assessed."
+	// A collector that takes a pod's version label for an image or chart
+	// without a version (inventory.LabelVersionCollectorSchema).
+	current := func(inv inventory.Inventory) inventory.Inventory {
+		inv.CollectorSchema = inventory.LabelVersionCollectorSchema
+		return inv
+	}
+	fs := evalAddOns(current(addOnAt("istio", "")), lifecycleKB(), inventory.Version{Major: 1, Minor: 34}, day("2026-10-02"))
+	want := "Detected Istio version (unknown) via image in namespace(s): istio-system. No version was read from the image: either its tag names no version (a digest, :latest) and no pod running it whose labels name this add-on gives a usable app.kubernetes.io/version, or it is a component image whose release line the registry does not map yet. Its end of life and Kubernetes compatibility were not assessed."
 	if len(fs) != 1 || fs[0].Detail != want || fs[0].Severity != SevInfo {
 		t.Fatalf("got %+v, want one info with detail %q", fs, want)
+	}
+	// What is missing follows what the add-on was found by (#301): the
+	// detail never claims a source the detector did not consult.
+	for _, tc := range []struct{ source, chart, want string }{
+		{"labels", "", "The pod labels name it, but no app.kubernetes.io/version label gives a version that applies to it."},
+		{"chart", "1.14.5", "The Helm release records no appVersion, and no pod image tag or app.kubernetes.io/version label gives a version."},
+		{"gitops", "", "The GitOps chart reference gives no app version, and no running pod's image tag or app.kubernetes.io/version label does."},
+		{"ingressclass", "", "An IngressClass names it but carries no version."},
+		// A hand-written or third-party inventory may carry a source the
+		// engine does not know, or none: no node-runtime sentence for it.
+		{"", "", "No version was recorded for this add-on."},
+		{"somethingelse", "", "No version was recorded for this add-on."},
+	} {
+		inv := current(inventory.Inventory{AddOns: []inventory.AddOnInstance{{ID: "istio", Namespaces: []string{"istio-system"}, Source: tc.source, ChartVersion: tc.chart}}})
+		fs = evalAddOns(inv, lifecycleKB(), inventory.Version{Major: 1, Minor: 34}, day("2026-10-02"))
+		if len(fs) != 1 || !strings.Contains(fs[0].Detail, " "+tc.want+" Its end of life and Kubernetes compatibility were not assessed.") ||
+			strings.Contains(fs[0].Detail, "No version could be read") {
+			t.Errorf("source %s: got %+v, want a detail with %q", tc.source, fs, tc.want)
+		}
 	}
 	fs = evalAddOns(addOnAt("istio", "1.10.0"), lifecycleKB(), inventory.Version{Major: 1, Minor: 34}, day("2026-10-02"))
 	want = "Detected Istio version 1.10.0 via image in namespace(s): istio-system. The registry has no release-line data for this version, so its end of life was not assessed."
 	if len(fs) != 1 || fs[0].Detail != want {
 		t.Fatalf("got %+v, want detail %q", fs, want)
+	}
+}
+
+// An inventory from an agent that predates the pod-label rule (#301:
+// v0.1.x and v0.2.0's release candidates stamp no CollectorSchema) never
+// took a pod's app.kubernetes.io/version label for an image or chart
+// without a version. A server that evaluates it after an upgrade must not
+// say the label was unreadable or gave nothing (AO-08): it names the tag or
+// component reason and says the agent did not read the label. The stamp
+// decides: any collector schema from the rule's generation on gets the
+// sentence that the label was consulted.
+func TestEvalAddOnsNoDataDetailSaysWhenTheAgentDidNotReadPodLabels(t *testing.T) {
+	const (
+		image = "No version was read from the image: either its tag names no version (a digest, :latest) or it is a component image whose release line the registry does not map yet. The collecting agent predates reading a pod's app.kubernetes.io/version label for an image without a tag, so such a label may carry the version; upgrade the agent."
+		chart = "No app version was read from the Helm release or from a pod image tag: either the release records none, or the collecting agent did not collect it (a v0.1.x agent reported only the chart version). The collecting agent predates reading a pod's app.kubernetes.io/version label for an image without a tag, so such a label may carry the version; upgrade the agent."
+		gitop = "The GitOps chart reference gives no app version, and no running pod's image tag does. The collecting agent predates reading a pod's app.kubernetes.io/version label for an image without a tag, so such a label may carry the version; upgrade the agent."
+	)
+	for _, tc := range []struct{ source, chart, want string }{
+		{"image", "", image},
+		{"chart", "1.14.5", chart},
+		{"gitops", "", gitop},
+	} {
+		for _, schema := range []int{0, inventory.LabelVersionCollectorSchema} {
+			inv := inventory.Inventory{CollectorSchema: schema, AddOns: []inventory.AddOnInstance{{ID: "istio", Namespaces: []string{"istio-system"}, Source: tc.source, ChartVersion: tc.chart}}}
+			fs := evalAddOns(inv, lifecycleKB(), inventory.Version{Major: 1, Minor: 34}, day("2026-10-02"))
+			if len(fs) != 1 || fs[0].Severity != SevInfo {
+				t.Fatalf("%s, schema %d: got %+v, want one info", tc.source, schema, fs)
+			}
+			d := fs[0].Detail
+			if schema == 0 {
+				if !strings.Contains(d, " "+tc.want+" Its end of life and Kubernetes compatibility were not assessed.") {
+					t.Errorf("%s, schema 0: detail %q lacks %q", tc.source, d, tc.want)
+				}
+				// Nothing may say a label was consulted and gave no version.
+				for _, said := range []string{"gives a usable app.kubernetes.io/version", "image tag or app.kubernetes.io/version label", "records no appVersion", "no pod image tag gives"} {
+					if strings.Contains(d, said) {
+						t.Errorf("%s, schema 0: detail %q says the label was consulted (%q)", tc.source, d, said)
+					}
+				}
+			} else if strings.Contains(d, "predates reading") || strings.Contains(d, "upgrade the agent") {
+				t.Errorf("%s, schema %d: detail %q blames the agent, which read the label", tc.source, schema, d)
+			}
+		}
+	}
+	// A schema above the rule's generation reads the label too.
+	inv := inventory.Inventory{CollectorSchema: inventory.LabelVersionCollectorSchema + 1, AddOns: []inventory.AddOnInstance{{ID: "istio", Namespaces: []string{"istio-system"}, Source: "image"}}}
+	if fs := evalAddOns(inv, lifecycleKB(), inventory.Version{Major: 1, Minor: 34}, day("2026-10-02")); len(fs) != 1 || strings.Contains(fs[0].Detail, "predates reading") {
+		t.Errorf("later schema: got %+v, want the sentence that labels were read", fs)
+	}
+	// Node runtimes and labels-found installs read the same on either.
+	inv = inventory.Inventory{AddOns: []inventory.AddOnInstance{{ID: "istio", Namespaces: []string{"istio-system"}, Source: "labels"}}}
+	if fs := evalAddOns(inv, lifecycleKB(), inventory.Version{Major: 1, Minor: 34}, day("2026-10-02")); len(fs) != 1 || strings.Contains(fs[0].Detail, "predates reading") {
+		t.Errorf("labels, schema 0: got %+v, want no blame on the agent", fs)
 	}
 }
 

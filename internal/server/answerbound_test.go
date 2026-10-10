@@ -69,7 +69,7 @@ func boundStream(k kb.KB, name string) string {
 				fmt.Fprintf(&b, "- metadata: {name: %s, namespace: %s}\n", yamlQuoted(fmt.Sprintf("%d%s", i, name)), q)
 				continue
 			}
-			fmt.Fprintf(&b, "- metadata: {name: %s, namespace: %s, annotations: {upgradescope.dev/ignore: %s, upgradescope.dev/ignore-reason: %s}}\n",
+			fmt.Fprintf(&b, "- metadata: {name: %s, namespace: %s, annotations: {upgradescope.basit.engineer/ignore: %s, upgradescope.basit.engineer/ignore-reason: %s}}\n",
 				yamlQuoted(fmt.Sprintf("%d%s", i, name)), q, q, q)
 		}
 		if gvks++; gvks == 12 {

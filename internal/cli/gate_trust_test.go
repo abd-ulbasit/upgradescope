@@ -27,8 +27,8 @@ metadata:
 `
 
 const ingressAnnotated = ingressV1beta1 + `  annotations:
-    upgradescope.dev/ignore: removed-api
-    upgradescope.dev/ignore-reason: accepted in this pull request
+    upgradescope.basit.engineer/ignore: removed-api
+    upgradescope.basit.engineer/ignore-reason: accepted in this pull request
 `
 
 const ignoreRemovedAPIs = "ignore:\n  - category: removed-api\n    reason: x\n"

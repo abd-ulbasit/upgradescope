@@ -148,7 +148,7 @@ type specValidator struct {
 	comp *jsonschema.Compiler
 }
 
-const openapiURL = "https://upgradescope.dev/api/openapi.json"
+const openapiURL = "https://raw.githubusercontent.com/abd-ulbasit/upgradescope/main/api/openapi.yaml"
 
 func newSpecValidator(t *testing.T) *specValidator {
 	t.Helper()

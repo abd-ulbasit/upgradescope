@@ -70,7 +70,7 @@ kubectl delete ucr <old-name>
 The status is only as fresh as the agent's last successful write. An agent
 that can no longer write it (its role narrowed, for example) leaves the
 last verdict and `Ready` condition in place, but marks the object: the
-annotation `upgradescope.dev/status-error` holds the time of the failed
+annotation `upgradescope.basit.engineer/status-error` holds the time of the failed
 write and its reason, and the next successful write removes it. A tick
 that could not read the object's spec, or set its `spec.targets`, writes
 no status and marks the object the same way: it does not know which
@@ -79,7 +79,7 @@ the tick deadline is kept for the status write and this marker
 ([observability](../observability.md#agent-logs)).
 
 ```sh
-kubectl get clusterreadiness cluster -o jsonpath='{.metadata.annotations.upgradescope\.dev/status-error}'
+kubectl get clusterreadiness cluster -o jsonpath='{.metadata.annotations.upgradescope\.basit\.engineer/status-error}'
 ```
 
 Treat a verdict on an object carrying it as stale. If the role lost `patch`
@@ -125,7 +125,7 @@ has the format.
 
 It reads with `get` and `list` only, never `watch`, and writes only its own
 `ClusterReadiness` object, that object's status, and (with
-`agent.manageCRD=true`, the default) the `clusterreadinesses.upgradescope.dev`
+`agent.manageCRD=true`, the default) the `clusterreadinesses.upgradescope.basit.engineer`
 CRD. Reading Helm releases needs get/list on Secrets and ConfigMaps
 cluster-wide, which RBAC cannot narrow; `rbac.helmSecrets=false` removes that
 grant at the cost of Helm findings.

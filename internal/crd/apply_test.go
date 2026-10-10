@@ -15,9 +15,11 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	k8stesting "k8s.io/client-go/testing"
 	"sigs.k8s.io/yaml"
+
+	"github.com/abd-ulbasit/upgradescope/internal/crd/apigroup"
 )
 
-const crdName = "clusterreadinesses.upgradescope.dev"
+const crdName = "clusterreadinesses.upgradescope.basit.engineer"
 
 // establishOnCreate makes the fake behave like a real apiserver: a created
 // CRD immediately reports Established=True (mutate-then-fall-through reactor).
@@ -46,8 +48,8 @@ func TestManifestShape(t *testing.T) {
 	if c.Name != crdName {
 		t.Errorf("name = %q, want %q", c.Name, crdName)
 	}
-	if c.Spec.Group != "upgradescope.dev" {
-		t.Errorf("group = %q, want upgradescope.dev", c.Spec.Group)
+	if c.Spec.Group != "upgradescope.basit.engineer" {
+		t.Errorf("group = %q, want upgradescope.basit.engineer", c.Spec.Group)
 	}
 	if c.Spec.Scope != apiextensionsv1.ClusterScoped {
 		t.Errorf("scope = %q, want Cluster", c.Spec.Scope)
@@ -258,7 +260,7 @@ func TestEnsureCRDNoWriteWhenInSync(t *testing.T) {
 
 // TestEnsureCRDMissingAndCreateForbidden: the chart grants no CRD create
 // (crds/ installs it). A missing CRD must surface as ErrCRDNotInstalled
-// with a message that says how to install it, not a bare Forbidden.
+// that keeps the Forbidden cause; the agent adds how to install it.
 func TestEnsureCRDMissingAndCreateForbidden(t *testing.T) {
 	fc := apiextfake.NewClientset()
 	fc.PrependReactor("create", "customresourcedefinitions",
@@ -270,7 +272,43 @@ func TestEnsureCRDMissingAndCreateForbidden(t *testing.T) {
 	if !errors.Is(err, ErrCRDNotInstalled) {
 		t.Fatalf("err = %v, want ErrCRDNotInstalled", err)
 	}
-	if !strings.Contains(err.Error(), "crds/") {
-		t.Errorf("err = %q, want it to point at the chart's crds/", err)
+	if !apierrors.IsForbidden(err) {
+		t.Errorf("err = %q, want the forbidden cause kept (errors.As reaches it)", err)
+	}
+}
+
+// The CRD v0.1.x and the v0.2.0 release candidates installed, on the old
+// group, is reported when it is still there, so the agent can say how to
+// remove it; LegacyCRDInstalled only reads, and never deletes it.
+func TestLegacyCRDInstalled(t *testing.T) {
+	if LegacyCRDName != Plural+"."+apigroup.LegacyGroup {
+		t.Fatalf("LegacyCRDName = %q", LegacyCRDName)
+	}
+	ctx := context.Background()
+	fc := apiextfake.NewClientset()
+	if got, err := LegacyCRDInstalled(ctx, fc); err != nil || got {
+		t.Fatalf("no legacy CRD: got %v, %v; want false, nil", got, err)
+	}
+	old := &apiextensionsv1.CustomResourceDefinition{ObjectMeta: metav1.ObjectMeta{Name: LegacyCRDName}}
+	if _, err := fc.ApiextensionsV1().CustomResourceDefinitions().Create(ctx, old, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	fc.ClearActions()
+	if got, err := LegacyCRDInstalled(ctx, fc); err != nil || !got {
+		t.Fatalf("legacy CRD present: got %v, %v; want true, nil", got, err)
+	}
+	for _, a := range fc.Actions() {
+		if a.GetVerb() != "get" {
+			t.Errorf("action %v, want reads only", a)
+		}
+	}
+
+	denied := apiextfake.NewClientset()
+	denied.PrependReactor("get", "customresourcedefinitions", func(k8stesting.Action) (bool, k8sruntime.Object, error) {
+		return true, nil, apierrors.NewForbidden(
+			schema.GroupResource{Group: "apiextensions.k8s.io", Resource: "customresourcedefinitions"}, LegacyCRDName, errors.New("RBAC"))
+	})
+	if _, err := LegacyCRDInstalled(ctx, denied); err == nil {
+		t.Error("a forbidden read: want an error, not a silent false")
 	}
 }

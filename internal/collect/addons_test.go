@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	goruntime "runtime"
 	"slices"
 	"testing"
 
@@ -520,8 +521,10 @@ func TestMatchAddOnsUntaggedImageNamedByLabelsOrRelease(t *testing.T) {
 			[]inventory.AddOnInstance{{ID: "rke2-ingress-nginx", Version: "1.12.4", ChartVersion: "4.12.401", Namespaces: []string{"kube-system"}, Source: "chart"}}},
 		{"digest-only, no labels or release: the path-only entry", pod(nil, digest),
 			[]inventory.AddOnInstance{{ID: "ingress-nginx", Namespaces: []string{"kube-system"}, Source: "image"}}},
-		{"digest-only, upstream's labels: the path-only entry", pod(nginxLabels, digest),
-			[]inventory.AddOnInstance{{ID: "ingress-nginx", Namespaces: []string{"kube-system"}, Source: "image"}}},
+		// Upstream's labels name ingress-nginx, whose version label the
+		// digest-only image takes (#301).
+		{"digest-only, upstream's labels: the path-only entry at the label's version", pod(nginxLabels, digest),
+			[]inventory.AddOnInstance{{ID: "ingress-nginx", Version: "1.11.2", Namespaces: []string{"kube-system"}, Source: "image"}}},
 		{"the release is in another namespace", withReleases(pod(nil, digest), []inventory.HelmRelease{{Name: "x", Namespace: "edge", ChartName: "rke2-ingress-nginx", AppVersion: "1.12.4", Status: "deployed"}}),
 			[]inventory.AddOnInstance{
 				{ID: "ingress-nginx", Namespaces: []string{"kube-system"}, Source: "image"},
@@ -730,5 +733,191 @@ func TestCollectAddOnsFollowsListPagination(t *testing.T) {
 	}
 	if !reflect.DeepEqual(inv.AddOns, want) {
 		t.Errorf("addons = %#v\nwant   %#v (images from every page must count)", inv.AddOns, want)
+	}
+}
+
+// An image an entry claims but that names no version (pinned by digest, or
+// ":latest") takes the version label of its own pod when the labels name
+// the same add-on under the label trust rule (#301): a manifest rendered by
+// helm template keeps app.kubernetes.io/version, though its image carries
+// no tag. A parsed tag is never overridden by a label; a label naming
+// another add-on, or one the trust rule does not vouch for, gives nothing;
+// and a component image, whose version is its product line, is not
+// guessed from a label.
+func TestMatchAddOnsImageWithoutVersionTakesLabelVersion(t *testing.T) {
+	addons, err := registry.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	const (
+		digest   = "quay.io/jetstack/cert-manager-controller@sha256:3b1ab0b56f1c2f1f9ba0c6a4b9b4b1b4f0b9d2b2b6c9e2e1d0c1b2a3f4e5d6c7"
+		latest   = "quay.io/jetstack/cert-manager-controller:latest"
+		tagged   = "quay.io/jetstack/cert-manager-controller:v1.14.2"
+		digested = "quay.io/jetstack/cert-manager-controller:v1.14.2@sha256:3b1ab0b56f1c2f1f9ba0c6a4b9b4b1b4f0b9d2b2b6c9e2e1d0c1b2a3f4e5d6c7"
+	)
+	cm := func(version string) map[string]string {
+		return map[string]string{"app.kubernetes.io/name": "cert-manager", "app.kubernetes.io/version": version}
+	}
+	pods := func(images ...string) func(map[string]string) addOnEvidence {
+		return func(labels map[string]string) addOnEvidence {
+			var ev addOnEvidence
+			for _, img := range images {
+				ev.addPod("cert-manager", labels, []string{img})
+			}
+			return ev
+		}
+	}
+	inst := func(version string) []inventory.AddOnInstance {
+		return []inventory.AddOnInstance{{ID: "cert-manager", Version: version, Namespaces: []string{"cert-manager"}, Source: "image"}}
+	}
+	for _, tc := range []struct {
+		name string
+		ev   addOnEvidence
+		want []inventory.AddOnInstance
+	}{
+		{"digest-only, name label with version", pods(digest)(cm("v1.12.3")), inst("1.12.3")},
+		{"latest, name label with version", pods(latest)(cm("v1.12.3")), inst("1.12.3")},
+		{"digest-only, chart label without a name label",
+			pods(digest)(map[string]string{"helm.sh/chart": "cert-manager-v1.12.3", "app.kubernetes.io/version": "v1.12.3"}), inst("1.12.3")},
+		{"digest-only, no version label", pods(digest)(map[string]string{"app.kubernetes.io/name": "cert-manager"}), inst("")},
+		{"digest-only, no labels at all", pods(digest)(nil), inst("")},
+		{"digest-only, a label naming another add-on",
+			pods(digest)(map[string]string{"app.kubernetes.io/name": "cilium", "app.kubernetes.io/version": "1.15.0"}), inst("")},
+		{"digest-only, part-of names it but the version is not vouched for",
+			pods(digest)(map[string]string{"app.kubernetes.io/part-of": "cert-manager", "app.kubernetes.io/version": "v1.12.3"}), inst("")},
+		{"digest-only, a name label for another app overrides the chart label",
+			pods(digest)(map[string]string{"app.kubernetes.io/name": "webhook", "helm.sh/chart": "cert-manager-v1.12.3", "app.kubernetes.io/version": "v1.12.3"}), inst("")},
+		{"digest-only, an unparseable version label", pods(digest)(cm("stable")), inst("")},
+		{"a tag wins over a different label", pods(tagged)(cm("v1.12.3")), inst("1.14.2")},
+		{"a tag with a digest wins over a different label", pods(digested)(cm("v1.12.3")), inst("1.14.2")},
+		// The conservative-oldest rule holds across instances in a namespace.
+		{"digest-only and tagged pods: the oldest", pods(digest, tagged)(cm("v1.12.3")), inst("1.12.3")},
+		{"latest and a tagged pod, label newer: the tag is older", pods(latest, tagged)(cm("v1.16.0")), inst("1.14.2")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, unrec := matchAddOns(tc.ev, addons)
+			if !reflect.DeepEqual(got, tc.want) || len(unrec) != 0 {
+				t.Errorf("got %+v unrecognized %v, want %+v and none", got, unrec, tc.want)
+			}
+		})
+	}
+
+	// Two pods on one digest with different version labels: the older, in
+	// either pod order (first-wins and last-wins both fail one of them).
+	for _, order := range [][]string{{"v1.16.0", "v1.12.3"}, {"v1.12.3", "v1.16.0"}} {
+		var ev addOnEvidence
+		for _, v := range order {
+			ev.addPod("cert-manager", cm(v), []string{digest})
+		}
+		if got, _ := matchAddOns(ev, addons); !reflect.DeepEqual(got, inst("1.12.3")) {
+			t.Errorf("one digest, version labels %v: got %+v, want the older 1.12.3", order, got)
+		}
+	}
+
+	// A component image maps its tag's line to a product line; an unmapped
+	// line stays "no version" however the pod is labelled (never a guess).
+	var flux addOnEvidence
+	flux.addPod("flux-system", map[string]string{"app.kubernetes.io/name": "flux", "app.kubernetes.io/version": "v2.7.0"},
+		[]string{"ghcr.io/fluxcd/source-controller@sha256:3b1ab0b56f1c2f1f9ba0c6a4b9b4b1b4f0b9d2b2b6c9e2e1d0c1b2a3f4e5d6c7"})
+	want := []inventory.AddOnInstance{{ID: "flux", Namespaces: []string{"flux-system"}, Source: "image"}}
+	if got, _ := matchAddOns(flux, addons); !reflect.DeepEqual(got, want) {
+		t.Errorf("component image without a tag: got %+v, want %+v", got, want)
+	}
+}
+
+// The oldest version across pods holds on the untaggedClaim path too: a
+// digest-only rancher/nginx-ingress-controller that its pods' labels claim
+// for rke2-ingress-nginx takes the oldest of their version labels, in any
+// pod order, so a stale or forged newer label on the pod that sorts first
+// cannot hide the older line (AO-09, #301).
+func TestMatchAddOnsUntaggedClaimTakesTheOldestLabelVersion(t *testing.T) {
+	addons, err := registry.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	const digest = "rancher/nginx-ingress-controller@sha256:5b161f051d017e55d358435f295f5e9a297e66158f136321d9b04520ec6c48a3"
+	rke2 := func(version string) map[string]string {
+		return map[string]string{"app.kubernetes.io/name": "rke2-ingress-nginx", "app.kubernetes.io/version": version}
+	}
+	for _, order := range [][]string{{"1.12.6", "1.10.1"}, {"1.10.1", "1.12.6"}} {
+		var ev addOnEvidence
+		for _, v := range order {
+			ev.addPod("kube-system", rke2(v), []string{digest})
+		}
+		want := []inventory.AddOnInstance{{ID: "rke2-ingress-nginx", Version: "1.10.1", Namespaces: []string{"kube-system"}, Source: "image"}}
+		if got, _ := matchAddOns(ev, addons); !reflect.DeepEqual(got, want) {
+			t.Errorf("one digest, version labels %v: got %+v, want the older 1.10.1", order, got)
+		}
+	}
+	// A pod that names the add-on without a version does not blank it.
+	var ev addOnEvidence
+	ev.addPod("kube-system", map[string]string{"app.kubernetes.io/name": "rke2-ingress-nginx"}, []string{digest})
+	ev.addPod("kube-system", rke2("1.10.1"), []string{digest})
+	want := []inventory.AddOnInstance{{ID: "rke2-ingress-nginx", Version: "1.10.1", Namespaces: []string{"kube-system"}, Source: "image"}}
+	if got, _ := matchAddOns(ev, addons); !reflect.DeepEqual(got, want) {
+		t.Errorf("one pod without a version label: got %+v, want 1.10.1", got)
+	}
+}
+
+// manyLabelledPods is n pods of one namespace running one digest-only
+// (or :latest) add-on image, each labelled with the add-on's name and a
+// version, as a DaemonSet of a digest-pinned add-on is (#301).
+func manyLabelledPods(n int, image string) addOnEvidence {
+	var ev addOnEvidence
+	labels := map[string]string{"app.kubernetes.io/name": "cert-manager", "app.kubernetes.io/version": "v1.12.3"}
+	for range n {
+		ev.addPod("cert-manager", labels, []string{image})
+	}
+	return ev
+}
+
+const manyPodsDigest = "quay.io/jetstack/cert-manager-controller@sha256:3b1ab0b56f1c2f1f9ba0c6a4b9b4b1b4f0b9d2b2b6c9e2e1d0c1b2a3f4e5d6c7"
+
+// Matching is linear in the pods sharing one image. The label version of
+// an image without a tag is folded once per (namespace, image, add-on),
+// not rescanned per pod: 2,000 such pods allocated 3.4 GB a tick when
+// each pod scanned them all (measured at 602a9251, 2026-10-10; the time is
+// machine- and load-dependent, so it is not cited). Bytes
+// allocated at three times the pods must stay near three times the bytes
+// (linear), not nine (quadratic): a ratio holds under -race, whose
+// instrumentation inflates absolute figures, and TotalAlloc is cumulative,
+// so neither the collector's timing nor the machine's load moves it.
+func TestMatchAddOnsLabelledPodsOfOneImageAreLinear(t *testing.T) {
+	addons, err := registry.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	allocated := func(image string, pods int) uint64 {
+		ev := manyLabelledPods(pods, image)
+		var before, after goruntime.MemStats
+		goruntime.ReadMemStats(&before)
+		got, _ := matchAddOns(ev, addons)
+		goruntime.ReadMemStats(&after)
+		if len(got) != 1 || got[0].Version != "1.12.3" {
+			t.Fatalf("%s: got %+v, want one cert-manager at 1.12.3", image, got)
+		}
+		return after.TotalAlloc - before.TotalAlloc
+	}
+	for _, image := range []string{manyPodsDigest, "quay.io/jetstack/cert-manager-controller:latest"} {
+		small, large := allocated(image, 1000), allocated(image, 3000)
+		if ratio := float64(large) / float64(small); ratio > 4.5 {
+			t.Errorf("%s: 3x the pods allocated %.1fx the bytes (%d -> %d MiB), want about 3x (linear), not 9x", image, ratio, small>>20, large>>20)
+		}
+	}
+}
+
+func BenchmarkMatchAddOnsLabelledPodsOfOneImage(b *testing.B) {
+	addons, err := registry.Load()
+	if err != nil {
+		b.Fatal(err)
+	}
+	for _, n := range []int{500, 2000, 5000} {
+		ev := manyLabelledPods(n, manyPodsDigest)
+		b.Run(fmt.Sprintf("pods=%d", n), func(b *testing.B) {
+			b.ReportAllocs()
+			for range b.N {
+				matchAddOns(ev, addons)
+			}
+		})
 	}
 }

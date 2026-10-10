@@ -139,10 +139,9 @@ func listCRDUsage(ctx context.Context, meta metadata.Interface, gvr schema.Group
 				u.Count++
 				u.Namespaces[m.Namespace]++
 				if len(u.Objects) < inventory.MaxObjectRefs {
-					u.Objects = append(u.Objects, inventory.ObjectRef{
+					u.Objects = append(u.Objects, withIgnore(inventory.ObjectRef{
 						Namespace: m.Namespace, Name: m.Name, Manager: manager,
-						Ignore: m.Annotations[IgnoreAnnotation], IgnoreReason: m.Annotations[IgnoreReasonAnnotation],
-					})
+					}, m.Annotations))
 				} else {
 					u.ObjectsOmitted++
 				}

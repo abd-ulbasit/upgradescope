@@ -9,11 +9,11 @@ policies:
 resources:
   - ../resources.yaml
 apiCallResponses:
-  - urlPath: /apis/upgradescope.dev/v1alpha1/clusterreadinesses/cluster
+  - urlPath: /apis/upgradescope.basit.engineer/v1alpha1/clusterreadinesses/cluster
     method: GET
     response:
       body:
-        apiVersion: upgradescope.dev/v1alpha1
+        apiVersion: upgradescope.basit.engineer/v1alpha1
         kind: ClusterReadiness
         metadata: {name: cluster}
         status:

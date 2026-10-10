@@ -151,8 +151,8 @@ kind: CronJob
 metadata:
   name: nightly
   annotations:
-    upgradescope.dev/ignore: removed-api
-    upgradescope.dev/ignore-reason: deleted in the next release
+    upgradescope.basit.engineer/ignore: removed-api
+    upgradescope.basit.engineer/ignore-reason: deleted in the next release
 `})
 	out, _, err := execScanFiles(t, "--files", dir)
 	if err != nil {
@@ -160,6 +160,31 @@ metadata:
 	}
 	if !strings.Contains(out, "1 suppressed") || !strings.Contains(out, "reason: deleted in the next release (annotation)") {
 		t.Errorf("table = %s", out)
+	}
+}
+
+// An object still annotated with the pre-v0.2.0 keys is accepted as
+// before, and scan warns that the keys are deprecated, naming the new
+// ones (#68).
+func TestScanFilesLegacyAnnotationSuppressesAndWarns(t *testing.T) {
+	dir := writeFiles(t, map[string]string{"cron.yaml": `apiVersion: batch/v1beta1
+kind: CronJob
+metadata:
+  name: nightly
+  annotations:
+    upgradescope.dev/ignore: removed-api
+    upgradescope.dev/ignore-reason: deleted in the next release
+`})
+	out, stderr, err := execScanFiles(t, "--files", dir)
+	if err != nil {
+		t.Fatalf("err = %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "1 suppressed") || !strings.Contains(out, "reason: deleted in the next release (annotation)") {
+		t.Errorf("table = %s", out)
+	}
+	want := "warning: annotation keys upgradescope.dev/ignore and upgradescope.dev/ignore-reason are deprecated and read only until v0.3.0: rename them to upgradescope.basit.engineer/ignore and upgradescope.basit.engineer/ignore-reason on 1 object: nightly (cron.yaml:1)\n"
+	if !strings.Contains(stderr, want) {
+		t.Errorf("stderr = %q\nwant it to contain %q", stderr, want)
 	}
 }
 

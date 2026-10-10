@@ -6,7 +6,7 @@ The `ClusterReadiness` custom resource, as the agent's embedded CRD manifest def
 
 | | |
 |---|---|
-| API version | `upgradescope.dev/v1alpha1` |
+| API version | `upgradescope.basit.engineer/v1alpha1` |
 | Kind | `ClusterReadiness` |
 | Scope | Cluster |
 | Plural / singular | `clusterreadinesses` / `clusterreadiness` |
@@ -77,7 +77,7 @@ Served: true. Storage version: true.
 | `status.targets[].blockers` | integer | — | required |
 | `status.targets[].warnings` | integer | — | required |
 | `status.targets[].infos` | integer | — | required |
-| `status.targets[].suppressed` | integer | Findings accepted by spec.ignore or upgradescope.dev/ignore annotations; not in blockers, warnings or infos. | — |
+| `status.targets[].suppressed` | integer | Findings accepted by spec.ignore or upgradescope.basit.engineer/ignore annotations; not in blockers, warnings or infos. | — |
 | `status.targets[].byCategory` | map of integer | — | — |
 | `status.targets[].topFindings` | array | — | at most 20 items |
 | `status.targets[].topFindings[]` | object | — | — |

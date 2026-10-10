@@ -295,7 +295,7 @@ their names, namespaces or teams. Concretely:
   matched to its live object, which it is only when the collector listed
   that object; when it is not, the release gets a finding of its own,
   with and without the PR alike, so the cluster's. So does suppression:
-  an object's `upgradescope.dev/ignore` annotation, and a `?config=`
+  an object's `upgradescope.basit.engineer/ignore` annotation, and a `?config=`
   rule that selects objects by namespace, name or file, accept listed
   objects only (a namespace rule also takes a finding that lists no
   object whole, when it matches every namespace the finding names), and

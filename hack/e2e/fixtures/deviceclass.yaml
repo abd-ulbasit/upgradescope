@@ -5,8 +5,8 @@ kind: DeviceClass
 metadata:
   name: upgradescope-e2e-deprecated
   labels:
-    e2e.upgradescope.dev/applied-via: __APPLIED_VIA__
+    e2e.upgradescope.basit.engineer/applied-via: __APPLIED_VIA__
 spec:
   selectors:
     - cel:
-        expression: 'device.driver == "e2e.upgradescope.dev"'
+        expression: 'device.driver == "e2e.upgradescope.basit.engineer"'

@@ -22,7 +22,16 @@ Two things stay, by design:
 To remove both:
 
 ```sh
-kubectl delete crd clusterreadinesses.upgradescope.dev   # deletes every ClusterReadiness too
+kubectl delete crd clusterreadinesses.upgradescope.basit.engineer   # deletes every ClusterReadiness too
+```
+
+A cluster that ran v0.1.x or a v0.2.0 release candidate may also still
+have the CRD of the old API group
+([The API group moved](upgrade.md#the-api-group-moved)). Nothing uses
+it; delete it too:
+
+```sh
+kubectl delete crd clusterreadinesses.upgradescope.dev --ignore-not-found
 ```
 
 Nothing else in the cluster changed because of upgradescope: the agent

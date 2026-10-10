@@ -1,5 +1,5 @@
 # Applies the template to the kinds that carry an upgrade request. Edit
-# match.kinds for what carries the upgradescope.dev/upgrade-target annotation
+# match.kinds for what carries the upgradescope.basit.engineer/upgrade-target annotation
 # in your cluster (a Cluster API Cluster, a system-upgrade-controller Plan, your
 # own runbook Job).
 #

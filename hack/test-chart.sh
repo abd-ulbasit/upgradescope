@@ -63,10 +63,10 @@ echo "== helm lint"
 helm lint --strict "$CHART"
 
 echo "== crds/ copy in sync with internal/crd/manifest.yaml"
-if diff -u "$ROOT/internal/crd/manifest.yaml" "$CHART/crds/clusterreadinesses.upgradescope.dev.yaml"; then
+if diff -u "$ROOT/internal/crd/manifest.yaml" "$CHART/crds/clusterreadinesses.upgradescope.basit.engineer.yaml"; then
   pass "CRD copy in sync"
 else
-  fail "CRD copy out of sync — run: cp internal/crd/manifest.yaml deploy/chart/crds/clusterreadinesses.upgradescope.dev.yaml"
+  fail "CRD copy out of sync — run: cp internal/crd/manifest.yaml deploy/chart/crds/clusterreadinesses.upgradescope.basit.engineer.yaml"
 fi
 
 echo "== Chart.yaml version and appVersion agree"
@@ -108,7 +108,8 @@ assert_line "$TMP/default.yaml" 'kind: ClusterRoleBinding' "ClusterRoleBinding r
 assert_line "$TMP/default.yaml" 'kind: Deployment'         "agent Deployment rendered"
 assert_contains "$TMP/default.yaml" 'nonResourceURLs: ["/version", "/metrics"]' "version+metrics nonResourceURLs"
 assert_contains "$TMP/default.yaml" 'clusterreadinesses/status'              "status subresource rule"
-assert_contains "$TMP/default.yaml" 'resourceNames: ["clusterreadinesses.upgradescope.dev"]' "CRD writes scoped to our CRD"
+assert_contains "$TMP/default.yaml" 'resourceNames: ["clusterreadinesses.upgradescope.basit.engineer"]' "CRD writes scoped to our CRD"
+assert_contains "$TMP/default.yaml" 'apiGroups: ["upgradescope.basit.engineer"]' "CR rules name the upgradescope.basit.engineer group"
 assert_contains "$TMP/default.yaml" 'resourceNames: ["cluster"]' "CR writes scoped to agent.crName"
 assert_contains "$TMP/default.yaml" 'resources: ["secrets"]' "Helm Secret read on by default (rbac.helmSecrets)"
 assert_contains "$TMP/default.yaml" '--manage-crd=true' "agent manages the CRD schema by default"
@@ -129,7 +130,7 @@ assert_not_contains "$TMP/nosecrets.yaml" '"secrets"' "no Secret rule without he
 echo "== RBAC: agent.manageCRD=false drops all CRD write access"
 helm template upgradescope "$CHART" --namespace upgradescope \
   --set agent.manageCRD=false > "$TMP/nocrd.yaml"
-assert_not_contains "$TMP/nocrd.yaml" 'resourceNames: ["clusterreadinesses.upgradescope.dev"]' "no CRD write rule"
+assert_not_contains "$TMP/nocrd.yaml" 'resourceNames: ["clusterreadinesses.upgradescope.basit.engineer"]' "no CRD write rule"
 assert_contains "$TMP/nocrd.yaml" '--manage-crd=false' "agent told not to touch the CRD"
 
 echo "== RBAC: rendered rules vs collector calls (upstream rbac Covers) and KB sync"

@@ -68,19 +68,19 @@ rules:
   # KB).
   - apiGroups: ["apiextensions.k8s.io"]
     resources: ["customresourcedefinitions"]
-    resourceNames: ["clusterreadinesses.upgradescope.dev"]
+    resourceNames: ["clusterreadinesses.upgradescope.basit.engineer"]
     verbs: ["get", "update", "patch"]
   {{- end }}
   # The ClusterReadiness CR: the agent creates it if missing (create cannot
   # be scoped by name), and writes only the one named agent.crName.
-  - apiGroups: ["upgradescope.dev"]
+  - apiGroups: ["upgradescope.basit.engineer"]
     resources: ["clusterreadinesses"]
     verbs: ["get", "list", "create"]
-  - apiGroups: ["upgradescope.dev"]
+  - apiGroups: ["upgradescope.basit.engineer"]
     resources: ["clusterreadinesses"]
     resourceNames: [{{ .Values.agent.crName | quote }}]
     verbs: ["update", "patch"]
-  - apiGroups: ["upgradescope.dev"]
+  - apiGroups: ["upgradescope.basit.engineer"]
     resources: ["clusterreadinesses/status"]
     resourceNames: [{{ .Values.agent.crName | quote }}]
     verbs: ["get", "update", "patch"]

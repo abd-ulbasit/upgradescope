@@ -12,7 +12,7 @@ A Job, Deployment, StatefulSet or DaemonSet that carries
 ```yaml
 metadata:
   annotations:
-    upgradescope.dev/upgrade-target: "1.37"
+    upgradescope.basit.engineer/upgrade-target: "1.37"
 ```
 
 on `CREATE` or `UPDATE`. The annotation is this example's convention, not
@@ -21,7 +21,7 @@ something upgradescope reads: it marks "this object starts an upgrade to
 Deployment). Edit `match.kinds` to the kinds that carry it in your cluster,
 for example a Cluster API `Cluster` or a system-upgrade-controller `Plan`.
 
-The rule fetches `/apis/upgradescope.dev/v1alpha1/clusterreadinesses/cluster`
+The rule fetches `/apis/upgradescope.basit.engineer/v1alpha1/clusterreadinesses/cluster`
 (`cluster` is the chart's `agent.crName`; change the `urlPath` if you set
 another) and violates when `status.targets[]` has an entry for the requested
 minor with `ready: false`. `ready` is `false` for a `blocked` verdict **and**
@@ -64,7 +64,7 @@ kubectl apply -f upgradescope-ready-target.yaml
 ```
 
 `rbac.yaml` is a read-only `ClusterRole` (`get`, `list`, `watch` on
-`clusterreadinesses.upgradescope.dev`) that Kyverno's admission and
+`clusterreadinesses.upgradescope.basit.engineer`) that Kyverno's admission and
 background controllers aggregate. The upgradescope chart grants those verbs
 to the agent only.
 

@@ -96,10 +96,27 @@ const (
 // CurrentCollectorSchema is the generation of field meanings this
 // package's collectors fill an Inventory with, stamped as
 // Inventory.CollectorSchema. 1 is v0.2.0's: api-usage counts the objects
-// written through a deprecated version and names them in Objects, and a
-// chart-found add-on's Version is its app version. Bump it when a field's
-// meaning changes without a schemaVersion bump.
+// written through a deprecated version and names them in Objects, a
+// chart-found add-on's Version is its app version, and an add-on image
+// that names no version (a digest, ":latest") takes the version label of
+// its pod (#301). Bump it when a field's meaning changes without a
+// schemaVersion bump.
 const CurrentCollectorSchema = 1
+
+// LabelVersionCollectorSchema is the first CollectorSchema whose
+// collectors take an image's add-on version from its pod's
+// app.kubernetes.io/version label when the image names none (#301). An
+// inventory below it (0: v0.1.x and v0.2.0's release candidates, which
+// predate the stamp) never consulted that label for such an image, so what
+// a finding says is missing from it must not say the label was unreadable.
+// It equals CurrentCollectorSchema because v0.2.0 has not been released:
+// no released agent stamps 1 without it, and the stamp and the label rule
+// ship together. Unreleased builds of main between the stamp and the label
+// rule (agentVersion "dev" or a pseudo-version) are the exception: they
+// stamp 1 without reading the label, so their inventories read as having
+// consulted it. Raise CurrentCollectorSchema past it for a later change;
+// do not move this one.
+const LabelVersionCollectorSchema = 1
 
 // Provider is the managed Kubernetes service a cluster's control plane is
 // bought from, inferred by the collector from signals only that service
@@ -282,9 +299,13 @@ const MaxObjectRefs = 100
 // written through the deprecated group/version: the metadata.managedFields
 // manager that wrote it, or "kubectl last-applied" when only the
 // kubectl.kubernetes.io/last-applied-configuration annotation names it.
-// Ignore and IgnoreReason are the object's upgradescope.dev/ignore and
-// upgradescope.dev/ignore-reason annotation values, verbatim (see
-// internal/suppress).
+// Ignore and IgnoreReason are the object's ignore and ignore-reason
+// annotation values (apigroup.IgnoreAnnotation, IgnoreReasonAnnotation),
+// verbatim (see internal/suppress). IgnoreLegacyKey and
+// IgnoreReasonLegacyKey mark the ignore and the ignore-reason value as read
+// from a pre-v0.2.0 key (apigroup.ReadIgnore), each apart, for suppress's
+// deprecation warning; they never leave the process (json "-"), so the
+// wire format and the report keep no field that v0.3.0 drops.
 type ObjectRef struct {
 	Namespace    string `json:"namespace,omitempty"`
 	Name         string `json:"name,omitempty"`
@@ -294,7 +315,14 @@ type ObjectRef struct {
 	Manager      string `json:"manager,omitempty"`
 	Ignore       string `json:"ignore,omitempty"`
 	IgnoreReason string `json:"ignoreReason,omitempty"`
+
+	IgnoreLegacyKey       bool `json:"-"`
+	IgnoreReasonLegacyKey bool `json:"-"`
 }
+
+// LegacyIgnore reports that either ignore annotation came from a
+// pre-v0.2.0 key.
+func (r ObjectRef) LegacyIgnore() bool { return r.IgnoreLegacyKey || r.IgnoreReasonLegacyKey }
 
 type DeprecatedCall struct { // one row of apiserver_requested_deprecated_apis
 	Group          string `json:"group"`

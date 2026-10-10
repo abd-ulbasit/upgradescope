@@ -607,6 +607,11 @@ func (r *runner) writeStatus(ctx context.Context, ph tickPhases, inv inventory.I
 	spec, gen, obj, err := crd.ReadSpecObject(ctx, r.dyn, r.cfg.CRName)
 	if err == nil && obj == nil {
 		if cerr := crd.EnsureObject(ctx, r.dyn, r.cfg.CRName, r.cfg.Targets); cerr != nil {
+			if errors.Is(cerr, crd.ErrCRDNotInstalled) {
+				// --manage-crd=false, or the CRD vanished: say the fix where
+				// /readyz and the tick log will carry it.
+				cerr = fmt.Errorf("%w; %s", cerr, crd.InstallHint(AgentVersion))
+			}
 			errs = append(errs, cerr)
 		}
 		spec, gen, obj, err = crd.ReadSpecObject(ctx, r.dyn, r.cfg.CRName)
@@ -649,24 +654,30 @@ func (r *runner) writeStatus(ctx context.Context, ph tickPhases, inv inventory.I
 		errs = append(errs, terr)
 	} else {
 		// spec.ignore and object annotations apply per report; their
-		// warnings (expired or invalid rules, reason-less annotations) are
-		// the same for every target, so each is noted once.
+		// warnings (expired or invalid rules, deprecated annotation keys,
+		// reason-less annotations) are mostly the same for every target,
+		// so each is noted once.
 		reports := make([]engine.Report, 0, len(targets))
+		var ignoreNotes []string
 		for _, target := range targets {
 			report, warnings := suppress.Apply(engine.Evaluate(inv, r.kb, target, r.now()), spec.Ignore,
 				suppress.Options{Now: r.now(), Source: ignoreSource})
 			for _, w := range warnings {
-				if !slices.Contains(notes, w) {
-					notes = append(notes, w)
+				if !slices.Contains(ignoreNotes, w) {
+					ignoreNotes = append(ignoreNotes, w)
 				}
 			}
 			reports = append(reports, report)
 		}
 		st = crd.StatusFromReports(reports, inv.ServerVersion, AgentVersion, r.now())
-		// Target-selection notes lead: WriteStatus keeps only the first
-		// maxNotAssessed entries, and "N targets not assessed" must not be
-		// the one folded into "… and N more".
-		st.NotAssessed = append(notes, st.NotAssessed...)
+		// WriteStatus keeps only the first maxNotAssessed entries, so
+		// order is priority. Target-selection notes lead: "N targets not
+		// assessed" must not be the one folded into "… and N more". The
+		// report's capability gaps follow, which the Ready condition
+		// sends readers here for. The ignore warnings come last: there
+		// can be one per annotated object (a cluster moving from v0.1.x
+		// has many), and they must not push a gap out of the list (#68).
+		st.NotAssessed = slices.Concat(notes, st.NotAssessed, ignoreNotes)
 		r.last.reports = reports
 	}
 
@@ -954,11 +965,30 @@ func Run(ctx context.Context, clients collect.Clients, dyn dynamic.Interface, ap
 		// first tick back. A check that times out is retried every tick.
 		sctx, scancel := context.WithTimeout(ctx, startupCRDTimeout)
 		err := ensure(sctx)
+		// The group moved (#68): look for the old CRD, which only reads.
+		// The check shares the startup bound.
+		legacy, lerr := crd.LegacyCRDInstalled(sctx, apiext)
 		scancel()
-		if err != nil {
-			if errors.Is(err, crd.ErrCRDNotInstalled) {
-				return err // every tick would 404; say why once, clearly
+		if lerr != nil {
+			log.Info("could not check for the pre-v0.2.0 ClusterReadiness CRD", "crd", crd.LegacyCRDName, "err", lerr)
+		}
+		if errors.Is(err, crd.ErrCRDNotInstalled) {
+			// Every tick would 404; say why once, clearly. With only the
+			// old CRD installed, the cause is a chart upgraded across the
+			// group move: Helm does not install crds/ on upgrade.
+			if legacy {
+				return fmt.Errorf("%w; only %s, on the old group, is installed: the API group moved to %s and helm upgrade does not install the new CRD, so %s (the other steps: %s)",
+					err, crd.LegacyCRDName, crd.Group, crd.InstallHint(AgentVersion), crd.UpgradeGuideURL)
 			}
+			return fmt.Errorf("%w; Helm installs crds/ on first install only, so %s", err, crd.InstallHint(AgentVersion))
+		}
+		if legacy {
+			// Say once that the old CRD can go, now that the new one is
+			// in place. Its objects are the owner's to delete, so the
+			// agent never does.
+			log.Warn(msgLegacyCRD, "crd", crd.LegacyCRDName, "group", crd.Group, "cleanup", crd.LegacyCRDCleanup)
+		}
+		if err != nil {
 			// Non-fatal otherwise: the CRD exists, the schema upgrade did
 			// not land (a transient fault, or a narrower custom role that
 			// denies patch). Every tick tries again until it succeeds.

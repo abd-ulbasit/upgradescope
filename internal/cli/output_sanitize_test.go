@@ -184,8 +184,8 @@ kind: Ingress
 metadata:
   name: annotated
   annotations:
-    upgradescope.dev/ignore: removed-api
-    upgradescope.dev/ignore-reason: %q
+    upgradescope.basit.engineer/ignore: removed-api
+    upgradescope.basit.engineer/ignore-reason: %q
 ---
 apiVersion: networking.k8s.io/v1beta1
 kind: Ingress
@@ -193,7 +193,7 @@ metadata:
   name: %q
   namespace: %q
   annotations:
-    upgradescope.dev/ignore: removed-api
+    upgradescope.basit.engineer/ignore: removed-api
 `, name, ns, "why\x1b[2J\r\u202e", name, ns)
 	cfg := fmt.Sprintf("ignore:\n  - category: eol-addon\n    reason: %q\n    expires: 2000-01-01\n", "cfg\x1b[2J\u202e")
 	dir := writeFiles(t, map[string]string{

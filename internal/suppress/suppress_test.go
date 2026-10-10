@@ -1,6 +1,7 @@
 package suppress
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -8,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/abd-ulbasit/upgradescope/internal/crd/apigroup"
 	"github.com/abd-ulbasit/upgradescope/internal/engine"
 	"github.com/abd-ulbasit/upgradescope/internal/inventory"
 	"github.com/abd-ulbasit/upgradescope/internal/kb"
@@ -216,6 +218,83 @@ func TestApplyAnnotations(t *testing.T) {
 	}
 	if len(warnings) != 1 || !strings.Contains(warnings[0], "internal/api") || !strings.Contains(warnings[0], "ignore-reason") {
 		t.Errorf("warnings = %v", warnings)
+	}
+}
+
+// An object annotated under the pre-v0.2.0 keys is still accepted, and
+// one warning names the old keys as deprecated, the new ones to use and
+// the objects, each once however many findings it is in. A reason-less
+// one is still refused, and is named in both warnings. The deprecation
+// comes before the per-object warnings, and after the rule ones.
+func TestApplyLegacyAnnotationsWarnDeprecated(t *testing.T) {
+	accepted := shopWeb
+	accepted.Ignore, accepted.IgnoreReason, accepted.IgnoreLegacyKey, accepted.IgnoreReasonLegacyKey = "removed-api, kb-stale", "replaced by HTTPRoute", true, true
+	noReason := internal
+	noReason.Ignore, noReason.IgnoreLegacyKey = "removed-api", true
+
+	stale := staleKB()
+	stale.Objects = []inventory.ObjectRef{accepted}
+	got, warnings := Apply(report(removedIngress(accepted, noReason), stale), []Rule{{Category: "kb-stale", Namespace: "nowhere", Reason: "r", Expires: "2020-01-01"}}, Options{Now: now})
+	if len(got.Suppressed) != 2 || got.Suppressed[0].Reason != "replaced by HTTPRoute" ||
+		!reflect.DeepEqual(got.Suppressed[0].Objects, []inventory.ObjectRef{accepted}) {
+		t.Errorf("suppressed = %+v", got.Suppressed)
+	}
+	want := []string{
+		": ignore[0] (category kb-stale) expired on 2020-01-01 and no longer applies",
+		apigroup.LegacyIgnoreWarning([]string{"shop/web (app.yaml:3)", "internal/api (app.yaml:9)"}),
+		// Names the keys the object carries, not the new ones it was never given.
+		"object internal/api (app.yaml:9): " + apigroup.LegacyIgnoreAnnotation + " annotation without " + apigroup.LegacyIgnoreReasonAnnotation + " is not applied",
+	}
+	if !reflect.DeepEqual(warnings, want) {
+		t.Errorf("warnings =\n%s\nwant\n%s", strings.Join(warnings, "\n"), strings.Join(want, "\n"))
+	}
+	if len(warnings) < 2 || !strings.Contains(warnings[1], "deprecated") || !strings.Contains(warnings[1], apigroup.IgnoreAnnotation) {
+		t.Errorf("the deprecation warning does not say deprecated and name the new key: %v", warnings)
+	}
+}
+
+// An object that mixes the generations of keys is refused by name: each
+// warning names the key the object carries, the new ignore with the old
+// (empty) ignore-reason, or the old ignore with a new but blank reason.
+// Both objects are still named by the one deprecation notice, since one
+// of their keys is old.
+func TestApplyMixedKeysNameEachKeyExactly(t *testing.T) {
+	newIgnoreOldReason := shopWeb
+	newIgnoreOldReason.Ignore, newIgnoreOldReason.IgnoreReasonLegacyKey = "removed-api", true
+	oldIgnoreNewReason := internal
+	oldIgnoreNewReason.Ignore, oldIgnoreNewReason.IgnoreReason, oldIgnoreNewReason.IgnoreLegacyKey = "removed-api", "  ", true
+
+	_, warnings := Apply(report(removedIngress(newIgnoreOldReason, oldIgnoreNewReason)), nil, Options{Now: now})
+	want := []string{
+		apigroup.LegacyIgnoreWarning([]string{"shop/web (app.yaml:3)", "internal/api (app.yaml:9)"}),
+		"object shop/web (app.yaml:3): " + apigroup.IgnoreAnnotation + " annotation without " + apigroup.LegacyIgnoreReasonAnnotation + " is not applied",
+		"object internal/api (app.yaml:9): " + apigroup.LegacyIgnoreAnnotation + " annotation without " + apigroup.IgnoreReasonAnnotation + " is not applied",
+	}
+	if !reflect.DeepEqual(warnings, want) {
+		t.Errorf("warnings =\n%s\nwant\n%s", strings.Join(warnings, "\n"), strings.Join(want, "\n"))
+	}
+}
+
+// A cluster moving from v0.1.x may have accepted findings on many
+// objects under the old keys. They all stay accepted, and the warnings
+// hold one deprecation line for all of them, not one per object: a
+// bounded consumer (the agent's status.notAssessed) must not lose its
+// other lines to them.
+func TestApplyManyLegacyAnnotationsWarnOnce(t *testing.T) {
+	var objs []inventory.ObjectRef
+	for i := range 40 {
+		o := inventory.ObjectRef{Namespace: "shop", Name: fmt.Sprintf("web-%02d", i), Ignore: "removed-api", IgnoreReason: "replaced by HTTPRoute", IgnoreLegacyKey: true}
+		objs = append(objs, o)
+	}
+	got, warnings := Apply(report(removedIngress(objs...), staleKB()), nil, Options{Now: now})
+	if len(got.Suppressed) != 1 || len(got.Suppressed[0].Objects) != 40 {
+		t.Fatalf("suppressed = %+v, want the 40 objects accepted", got.Suppressed)
+	}
+	if len(warnings) != 1 {
+		t.Fatalf("got %d warnings, want 1:\n%s", len(warnings), strings.Join(warnings, "\n"))
+	}
+	if w := warnings[0]; !strings.Contains(w, "on 40 objects: shop/web-00, shop/web-01, ") || !strings.HasSuffix(w, " and 35 more") {
+		t.Errorf("warning = %q, want it to count 40 objects, name the first and count the rest", w)
 	}
 }
 

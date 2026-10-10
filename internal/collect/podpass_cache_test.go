@@ -580,3 +580,27 @@ func TestPodPassGitOpsChartChangeForcesAFullPass(t *testing.T) {
 		clk.t = clk.t.Add(10 * time.Minute)
 	}
 }
+
+// The label-derived version of an image that names none (#301) is part of
+// the evidence a reused pass carries: a collection between full passes
+// reports the same version, not "unknown".
+func TestPodPassReusedEvidenceCarriesTheLabelVersion(t *testing.T) {
+	cs, disc := podFixture()
+	cm := appPod("cm-1", "quay.io/jetstack/cert-manager-controller@sha256:3b1ab0b56f1c2f1f9ba0c6a4b9b4b1b4f0b9d2b2b6c9e2e1d0c1b2a3f4e5d6c7")
+	cm.Namespace = "cert-manager"
+	cm.Labels = map[string]string{"app.kubernetes.io/name": "cert-manager", "app.kubernetes.io/version": "v1.12.3"}
+	servePods(cs, append(tickPods(), cm)...)
+	k := loadKB(t)
+	pass, clk := newPassCache(3, time.Hour)
+	clients := Clients{Kube: cs, Discovery: disc}
+	for tick := 1; tick <= 3; tick++ {
+		inv := Collect(context.Background(), clients, k, Options{PodPass: pass})
+		if (tick == 1) != (inv.AddOnEvidenceAgeSeconds == 0) {
+			t.Errorf("tick %d: evidence age %ds, want a full pass only on tick 1", tick, inv.AddOnEvidenceAgeSeconds)
+		}
+		if v := addOnVersions(inv)["cert-manager"]; v != "1.12.3" {
+			t.Errorf("tick %d: cert-manager version %q, want 1.12.3 from the pod's label (add-ons %v)", tick, v, addOnVersions(inv))
+		}
+		clk.t = clk.t.Add(10 * time.Minute)
+	}
+}

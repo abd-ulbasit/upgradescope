@@ -60,7 +60,7 @@ for (a what-if) without going back to the cluster.
 | Package | Responsibility | Depends on |
 |---|---|---|
 | `internal/inventory` | The `Inventory` contract (what was observed) and Kubernetes `Version` parsing | nothing |
-| `internal/collect` | Builds an `Inventory` from a live cluster (client-go) or from rendered manifests | `inventory`, `kb`, `registry` |
+| `internal/collect` | Builds an `Inventory` from a live cluster (client-go) or from rendered manifests | `crd/apigroup`, `inventory`, `kb`, `registry` |
 | `registry` | The add-on EOL/compatibility dataset: schema, validator, embedded YAML loader | nothing internal (importable on its own) |
 | `api` | Embeds the published report schema so the MCP server can hand it to clients as a tool output schema | nothing internal |
 | `internal/kb` | Loads the knowledge base: API lifecycle data, the registry, and the version-skew policy | `inventory`, `registry` |
@@ -68,11 +68,12 @@ for (a what-if) without going back to the cluster.
 | `internal/sarif` | Renders a report as SARIF 2.1.0 | `engine`, `inventory` |
 | `internal/junit` | Renders a report as JUnit XML for Jenkins, GitLab and Azure Pipelines | `engine`, `inventory` |
 | `internal/codequality` | Renders a report as a GitLab Code Quality report | `engine`, `inventory` |
-| `internal/suppress` | Applies ignore rules, annotations and a baseline to a report | `engine`, `inventory` |
+| `internal/suppress` | Applies ignore rules, annotations and a baseline to a report | `crd/apigroup`, `engine`, `inventory` |
 | `internal/secretfile` | Reads a token or URL from a mounted file and re-reads it when the file changes | nothing internal |
 | `internal/textsafe` | Makes text a manifest or cluster controls safe to print to a terminal or a CI log | nothing internal |
 | `internal/mcp` | The MCP server behind `upgradescope mcp`: tools, schemas and the stdio and HTTP transports; what a scan does stays in the CLI's code, handed in through its config | `engine`, `registry`, `api` |
-| `internal/crd` | `ClusterReadiness` types, the embedded CRD manifest, and status projection and writes | `engine`, `suppress`, client-go |
+| `internal/crd` | `ClusterReadiness` types, the embedded CRD manifest, and status projection and writes | `crd/apigroup`, `engine`, `suppress`, client-go |
+| `internal/crd/apigroup` | The one place the API group and the annotation keys are spelled, with the read path for the pre-v0.2.0 keys | nothing internal |
 | `internal/agent` | The in-cluster loop and the snapshot push client | `collect`, `crd`, `engine`, `inventory`, `kb`, `secretfile`, `suppress` |
 | `internal/server` | Ingest, read API, what-if, gate, exports, team mapping, delta notifications, SPA serving | `codequality`, `collect` (manifests only), `engine`, `inventory`, `junit`, `kb`, `registry`, `sarif`, `secretfile`, `server/notify`, `server/store`, `suppress` |
 | `internal/server/store` | The `Store` interface and its SQLite and Postgres implementations, with embedded migrations | `engine` |
@@ -127,7 +128,7 @@ sha256(canonical inventory) changed, or --force-sync-every elapsed?
 The CRD status is written on every tick, even when the server is
 unreachable; only a spec the tick could not read, or `spec.targets` it
 could not set to `--targets`, stops the write, and the object is then
-marked stale (`upgradescope.dev/status-error`) instead. Collection gets the
+marked stale (`upgradescope.basit.engineer/status-error`) instead. Collection gets the
 tick deadline minus a reserve (30s, or half the deadline under a minute)
 that the status write, the stale marker and the push keep
 ([observability](observability.md#agent-logs)). The agent's local value never depends on the server. Pushes
@@ -178,7 +179,7 @@ ones after it. client-go's `rest.Config.Timeout` (`--request-timeout`, default
 | `versions` | `/version`, nodes (kubelet versions), namespaces (team label), kube-system control-plane pods (image tags) | The cluster ID is the `kube-system` namespace UID. Managed control planes expose no control-plane pods, so that list is empty there. |
 | `helm` | Helm v3 release storage: Secrets of type `helm.sh/release.v1` (the `secrets` driver, Helm's default) and ConfigMaps labelled `owner=helm` (the `configmaps` driver), listed metadata-only; the sql driver is not read | Decodes base64, gunzip and JSON into a minimal struct, for the installed revision of each release only: the newest revision, except that after an uninstall (`--keep-history`) there is none, and after a failed revision it is the newest `deployed` revision, else the newest `superseded` one. A release whose history holds failed revisions only (a failed install) has no revision to judge and makes the capability partial, naming the release (#239). No Helm SDK. The releases not yet decoded are fetched 8 at a time and decoded one at a time, in order (see [API cost per tick](#api-cost-per-tick)). |
 | `deprecated-calls` | apiserver `/metrics`, `apiserver_requested_deprecated_apis` | The runtime-caller signal: which deprecated APIs some client requested since the apiserver started, which manifest scanners cannot see. It does not say which client (audit logs do). The gauge resets when the apiserver restarts, HA apiservers report independently, and managed planes often deny access. |
-| `addons` | pod container and init-container images and labels (the `kube-system` pods from the `versions` step's read, the other namespaces from its own list), `networking.k8s.io/v1` IngressClasses, plus the Helm releases from the `helm` step | Matches registry matchers. An image matcher of two or more segments is a repository-path suffix on whole segments of the normalised reference (a one-segment matcher is that repository exactly, unless an entry writes it `"*/name"` to match under any registry prefix, which only a distinctive name may), so mirrors and pull-through caches match; provider builds (GKE, AKS) match only entries written for them. A chart matcher names a Helm release's chart or a pod's `helm.sh/chart` label. A pod running an image no matcher claims, whose `app.kubernetes.io/name`, `helm.sh/chart` chart name or `app.kubernetes.io/part-of` names an add-on, is that add-on, at its `app.kubernetes.io/version` when the name label (or, without one, the chart label) named it. An IngressClass with controller `k8s.io/ingress-nginx` is ingress-nginx, without a version, unless ingress-nginx, a vendor build of it or Traefik (which can serve that class) was found otherwise. Each namespace is its own install: a Helm release's `appVersion` wins there over image tags and labels on its release line (major.minor), and otherwise the oldest version its image tags and labels give; image tags and labels on another line than every release in the namespace are a second install there, at their oldest version, so an older canary revision beside a newer release is judged (#165). Image repositories no image matcher claims go to `unrecognizedImages` and never become findings. In files mode the same matcher runs over manifest pod templates and IngressClasses. |
+| `addons` | pod container and init-container images and labels (the `kube-system` pods from the `versions` step's read, the other namespaces from its own list), `networking.k8s.io/v1` IngressClasses, plus the Helm releases from the `helm` step | Matches registry matchers. An image matcher of two or more segments is a repository-path suffix on whole segments of the normalised reference (a one-segment matcher is that repository exactly, unless an entry writes it `"*/name"` to match under any registry prefix, which only a distinctive name may), so mirrors and pull-through caches match; provider builds (GKE, AKS) match only entries written for them. A chart matcher names a Helm release's chart or a pod's `helm.sh/chart` label. A pod running an image no matcher claims, whose `app.kubernetes.io/name`, `helm.sh/chart` chart name or `app.kubernetes.io/part-of` names an add-on, is that add-on, at its `app.kubernetes.io/version` when the name label (or, without one, the chart label) named it. An image an entry claims but that names no version (a digest, `:latest`) takes the same label version of its pod when the labels name the same add-on; a tag that names a version is never overridden (#301). An IngressClass with controller `k8s.io/ingress-nginx` is ingress-nginx, without a version, unless ingress-nginx, a vendor build of it or Traefik (which can serve that class) was found otherwise. Each namespace is its own install: a Helm release's `appVersion` wins there over image tags and labels on its release line (major.minor), and otherwise the oldest version its image tags and labels give; image tags and labels on another line than every release in the namespace are a second install there, at their oldest version, so an older canary revision beside a newer release is judged (#165). Image repositories no image matcher claims go to `unrecognizedImages` and never become findings. In files mode the same matcher runs over manifest pod templates and IngressClasses. |
 | `api-usage` | discovery, then one **metadata-only, paged** list per resource that still serves a version the knowledge base flags, at a non-deprecated version | Detects *authorship*, not servability. See below. |
 | `crds` | `apiextensions.k8s.io/v1` CustomResourceDefinitions, then, for each CRD with a deprecated or unserved version, one **metadata-only, paged** list of its custom resources at a served version that is not deprecated | Records `spec.versions` and `status.storedVersions`, and the custom resources a field manager still writes through a deprecated or unserved version (the same authorship rules as `api-usage`). A forbidden custom-resource list (the agent is granted none) makes it partial. In files mode, CRD manifests give the versions and every custom resource in the files counts; one without its CRD in the files makes it partial. See [CRD versions](concepts/api-usage-detection.md#crd-versions). |
 
@@ -485,7 +486,9 @@ Rules for changing it:
   v0.2.0). An inventory without it comes from a v0.1.x agent or a v0.2.0
   release candidate, which the server tells apart by `agentVersion`, and
   judges a v0.1.x agent's by what its collectors then meant (see
-  [Running the server](operations.md)). A server refuses with 422 a
+  [Running the server](operations.md)); it also words an add-on's
+  `addon-no-data` detail for what such an agent did not read (a pod's
+  version label for an image without a tag, #301). A server refuses with 422 a
   generation it does not know, whose meanings it would misread.
 
 ## Evaluation rules
@@ -673,7 +676,7 @@ knowledge base would produce silently green scans.
 
 ## The ClusterReadiness CRD
 
-`ClusterReadiness` (`upgradescope.dev/v1alpha1`, cluster-scoped, short name
+`ClusterReadiness` (`upgradescope.basit.engineer/v1alpha1`, cluster-scoped, short name
 `ucr`) is the per-cluster projection, for `kubectl get ucr`, GitOps health
 checks and policy engines that should not need to reach the server.
 
@@ -684,7 +687,7 @@ Kyverno policy, a Gatekeeper constraint and a Renovate preset; they are
 checked offline with the Kyverno CLI and gator, not on a live cluster, and
 cover in-cluster operations only. A policy
 engine reads the object with its own service account, so that account needs
-`get` and `list` on `clusterreadinesses` in the `upgradescope.dev` group. The
+`get` and `list` on `clusterreadinesses` in the `upgradescope.basit.engineer` group. The
 chart grants those verbs to the agent only, as the `clusterreadinesses` rows
 of the [agent's ClusterRole](operations/security-model-and-rbac.md#the-agents-clusterrole)
 show, and ships no read role for anything else; the examples carry the
@@ -756,7 +759,7 @@ if it is deleted, and writes status with conflict retry.
   manifests introduce count toward the verdict. Without `?cluster=`, the
   manifests are judged on their own (API usage, add-ons, and custom
   resources against the CRDs in the stream) as `scan --files` judges them.
-  Either way, `upgradescope.dev/ignore` annotations and the ignore rules of
+  Either way, `upgradescope.basit.engineer/ignore` annotations and the ignore rules of
   a `.upgradescope.yaml` sent in `?config=` are applied with `scan`'s code.
   The gate stores nothing; it answers JSON (leading with `schemaVersion`
   and `toolVersion`, like the server's other report responses), SARIF,

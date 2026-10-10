@@ -24,6 +24,7 @@ import (
 	"k8s.io/component-helpers/auth/rbac/validation"
 	"sigs.k8s.io/yaml"
 
+	"github.com/abd-ulbasit/upgradescope/internal/crd"
 	"github.com/abd-ulbasit/upgradescope/internal/kb"
 )
 
@@ -272,7 +273,7 @@ func assertDenied(t *testing.T, rules []rbacv1.PolicyRule, deny ...rbacv1.Policy
 	}
 }
 
-const ourCRD = "clusterreadinesses.upgradescope.dev"
+const ourCRD = "clusterreadinesses.upgradescope.basit.engineer"
 
 // collectorCalls are the requests the agent's collectors and CR writer make.
 func collectorCalls(t *testing.T) []rbacv1.PolicyRule {
@@ -293,9 +294,9 @@ func collectorCalls(t *testing.T) []rbacv1.PolicyRule {
 		// granted (no wildcards): the agent reports crds partial for CRDs
 		// with a deprecated or unserved version.
 		res("apiextensions.k8s.io", "customresourcedefinitions", "list"),
-		res("upgradescope.dev", "clusterreadinesses", "get", "create"),
-		named(res("upgradescope.dev", "clusterreadinesses", "update", "patch"), "cluster"), // spec.targets, and the status-error annotation
-		named(res("upgradescope.dev", "clusterreadinesses/status", "get", "update"), "cluster"),
+		res("upgradescope.basit.engineer", "clusterreadinesses", "get", "create"),
+		named(res("upgradescope.basit.engineer", "clusterreadinesses", "update", "patch"), "cluster"), // spec.targets, and the status-error annotation
+		named(res("upgradescope.basit.engineer", "clusterreadinesses/status", "get", "update"), "cluster"),
 	}
 	for g, rs := range kbGroupResources(t) {
 		for _, r := range rs {
@@ -318,8 +319,8 @@ var neverAllowed = []rbacv1.PolicyRule{
 	res("", "pods", "watch", "create", "delete", "patch"),
 	res("apiextensions.k8s.io", "customresourcedefinitions", "create", "delete"),
 	named(res("apiextensions.k8s.io", "customresourcedefinitions", "update", "patch"), "certificates.cert-manager.io"),
-	named(res("upgradescope.dev", "clusterreadinesses", "update", "patch", "delete"), "someone-else"),
-	res("upgradescope.dev", "clusterreadinesses", "delete", "deletecollection", "watch"),
+	named(res("upgradescope.basit.engineer", "clusterreadinesses", "update", "patch", "delete"), "someone-else"),
+	res("upgradescope.basit.engineer", "clusterreadinesses", "delete", "deletecollection", "watch"),
 	res("rbac.authorization.k8s.io", "clusterroles", "escalate", "bind", "create"),
 	url("/logs"),
 	url("/debug/pprof"),
@@ -349,6 +350,11 @@ func TestRenderedRBACDefault(t *testing.T) {
 		res("", "secrets", "get", "list"),    // rbac.helmSecrets defaults on: Helm secrets driver
 		res("", "configmaps", "get", "list"), // and configmaps driver
 		named(res("apiextensions.k8s.io", "customresourcedefinitions", "get", "update", "patch"), ourCRD),
+		// agent.manageCRD defaults on: the agent looks up the pre-v0.2.0
+		// CRD to say it can be deleted (#68). Granted by the KB rules'
+		// get/list on all CRDs, pinned here so a KB change cannot turn
+		// the check into a silent "could not check".
+		named(res("apiextensions.k8s.io", "customresourcedefinitions", "get"), crd.LegacyCRDName),
 	)
 	assertDenied(t, rules, neverAllowed...)
 	assertDenied(t, rules, res("", "secrets", "watch", "create", "update"))
@@ -434,12 +440,12 @@ func TestRenderedRBACManageCRDOff(t *testing.T) {
 func TestRenderedRBACCustomCRName(t *testing.T) {
 	rules := renderClusterRole(t, "agent.crName=prod")
 	assertAllowed(t, rules,
-		named(res("upgradescope.dev", "clusterreadinesses", "update", "patch"), "prod"),
-		named(res("upgradescope.dev", "clusterreadinesses/status", "get", "update", "patch"), "prod"),
+		named(res("upgradescope.basit.engineer", "clusterreadinesses", "update", "patch"), "prod"),
+		named(res("upgradescope.basit.engineer", "clusterreadinesses/status", "get", "update", "patch"), "prod"),
 	)
 	assertDenied(t, rules,
-		named(res("upgradescope.dev", "clusterreadinesses", "update", "patch"), "cluster"),
-		named(res("upgradescope.dev", "clusterreadinesses/status", "update"), "cluster"),
+		named(res("upgradescope.basit.engineer", "clusterreadinesses", "update", "patch"), "cluster"),
+		named(res("upgradescope.basit.engineer", "clusterreadinesses/status", "update"), "cluster"),
 	)
 }
 

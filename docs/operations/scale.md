@@ -179,6 +179,8 @@ quote them.
 | upgradescope, #228 (pod pass) | `0b6fec28` (this branch on main `f121698a`, which has #251, #262, #271, #279 and #286), the benchmark's `TestBenchAgentTick` cross-compiled for `linux/amd64` and run on the ThinkPad beside the apiserver (`BENCH_RUN_ON`, outside a CPU quota), 10 October 2026, 02:56 to 03:12 UTC, under the measurement lock, on lab A (`us-lab-137`, reset first, filled by `BENCH_STEPS=1`, settled 150 s, Kubernetes 1.37.0), no Argo CD or Flux objects. Run 1: `BENCH_TICKS=8`, the default `--pod-pass-every=3`; run 2, on the same fill: `BENCH_TICKS=5 BENCH_POD_PASS_EVERY=1`. The lab was reset afterwards ([the run](#the-pod-pass-every-nth-tick-228)) |
 | Also running, #228 (pod pass) | lab B (`us-lab-137b`) up and idle, with no fill: its control plane at 11.6 to 21.9% of a core and 569 to 749 MiB in the five `docker stats` taken (before the reset, before each run's ticks, after run 1 and after run 2), and `bookstore` at 10.8 to 19.9% of a core and 567 to 617 MiB; lab A's own control plane at 185 to 315% of a core and 3.2 GiB (KWOK's heartbeats) when sampled at the fill. The ThinkPad's 1-minute load average was 0.45 before the reset, 8.5 to 11.9 around run 1 and 9.4 to 22.5 around run 2 (4 threads) |
 | Also running, #247 (the cause) | `bookstore` and lab `us-lab-137`, idle (10 to 17% of a core each; `us-lab-137` at 575 to 680 MiB, no fill; `docker stats` at the start and end of each run and around the decode runs); the lab's own control plane at 125 to 325% of a core from KWOK's heartbeats; the host's 1-minute load average 3.1 to 11.2 in the spot samples between 21:48 and 23:05 UTC (1.25 before the fill, at 21:40). The two decode runs below (the collector's `TestHelmDecodeCostByRelease`, outside a quota, the lab's agent uninstalled) ran on the ThinkPad at 23:08 UTC at a load of 4.6 and 7.2; an earlier one at 22:36 UTC (pod idle, load 7.3 to 10.7, before the test reported 43, 51 and 83) gave 12.7 s for all 1,000 and 5.40 s for the last 50 |
+| upgradescope, #285 | before: main `4b1c2893`; after: `a14f737c`, where the final version's figures of #285 below were measured. The branch's production code has changed since in two commits, and neither was re-measured: `82927f11` makes the converter decline a document that holds U+0085, U+2028 or U+2029, which goes to kubectl's decoder as before (the lab's payloads hold none: the seed that generated them, `hack/bench/seed`, has no non-ASCII byte in its source, which was checked from the seed's source, not by reading the payloads again), and `f1f2af12` is a refactor of `decoded` and `settle` that does not change what runs. The commits after those change tests, `hack/test-heap.sh` and docs only. `TestHelmDecodeCostByRelease` cross-compiled for `linux/amd64` (`GOOS=linux GOARCH=amd64 go test -c ./internal/collect`) and run on the ThinkPad, outside a CPU quota, 10 October 2026, 11:34 to 11:37 UTC, under the measurement lock: four runs of each binary, alternating, each the test's own mean of 3 passes over the 1,000 payloads. Two earlier versions of the change were measured the same way: `db5b0845` (09:55 to 10:00 UTC) and `572f0e47` (10:13 to 10:18 UTC, 9.175 s before and 6.530 s after, 28.8% less), which asked kubectl's decoder about number-like scalars one by one ([below](#a-manifest-document-parsed-once-285)). The payloads are the bench fill's Helm Secrets, read from lab A (`us-lab-137`, kind 1.37.0) after `hack/bench/seed` created only them (`--nodes 0 --pods 0 --configmaps 0 --deployments 0 --helm-releases 1000 --wait 0`, seed 1, 09:20 UTC; 22,841,288 bytes stored and 106,874,938 decompressed, 800 small, 150 medium and 50 large, the totals [given above](#what-is-simulated)); the lab was reset right after they were read, and before and after the 11:29 to 11:41 UTC run (which does not use it). The heap figures are the same tests run on the Mac, at a load average of 21 to 73 ([the runs](#a-manifest-document-parsed-once-285)); the worst-case figures were measured on the ThinkPad again at 12:03 to 12:10 UTC, with a binary built from `b3eba1cc` (production code as `a14f737c`) |
+| Also running, #285 | lab B (`us-lab-137b`) was not queried (another agent's); the work package said it was idle. The ThinkPad's 1-minute load average was 1.45 to 2.66 at the start of each of the eight timed runs of 11:34 to 11:37 UTC (each run is itself one busy thread of the four), 1.99 to 3.82 at the start of the three worst-case runs of 12:06 to 12:08 UTC, and 1.81 to 2.32 at the start of the earlier worst-case runs, and the busiest processes were k3s and the apiservers at 3 to 11% of a thread each: a fill would have shown 2.4 to 3.6 threads on top. |
 
 ### What is simulated
 
@@ -1028,7 +1030,9 @@ no CPU to remove from that tick without making a release cheaper to decode,
 which is another change (the manifest of a large release is parsed twice,
 by the walk that locates each object and by kubectl's own decoder, which
 the walk is checked against: 4.49 of the 5.64 s are the manifest, 2.73 of
-them kubectl's decoder) and was not made here. At
+them kubectl's decoder) and was not made here; it was made afterwards, for
+[#285](https://github.com/abd-ulbasit/upgradescope/issues/285), and [is
+measured below](#a-manifest-document-parsed-once-285). At
 a mean cost the unread cost less than they did here; on a cluster whose
 largest releases do not sort last, the tick after a partial step costs about
 the unread count times the mean (12.4 ms, the mean of the two harness runs,
@@ -1096,12 +1100,262 @@ at all:
   has the core to itself. The step's ceiling of about 1,900 releases above
   is computed for the sequential fetch, so it is a lower estimate for #226's.
 
+#### A manifest document parsed once (#285)
+
+[#285](https://github.com/abd-ulbasit/upgradescope/issues/285) found that a
+release's stored manifest was parsed twice, once by the walk that locates
+each object (yaml.v3, which gives every object its line) and again by
+kubectl's own decoder (go-yaml v2, then JSON, then the unstructured scheme),
+which the walk is checked against. The second parse is gone: a YAML document
+is read once, by yaml.v3, and kubectl's decoder is given the JSON made from
+the nodes that read produced (`treeJSONConverter`, `internal/collect/yamljson.go`).
+The rest of kubectl's decoder, JSON to objects, still runs on every
+document, so the cross-check stays what it was. It is not that the walk's
+objects are reused: the walk and kubectl's decoder disagree on purpose
+where YAML 1.1 and yaml.v3 do, and the check exists to catch that.
+
+The JSON has to be the one kubectl's own decoder would make, so the
+converter answers only for text where yaml.v3's tree cannot differ from
+go-yaml v2's reading, and the document goes to kubectl's decoder, as before,
+for anything else: an anchor, alias or tag, a merge key, a key that is not a
+string, a duplicate key, `.nan` and `.inf` (JSON cannot hold them, so
+kubectl's decoder fails on them and the document goes to it to fail the
+same way), and text its line-by-line reader changes (no final newline, a
+carriage return, a UTF-16 mark, a `!` that starts a node) or that go-yaml
+reads differently from how the `!` scan counts lines (U+0085, U+2028 and
+U+2029, which it takes as line breaks). A plain scalar
+that starts like a number (a decimal, a dotted version, hex, underscores, an
+exponent, a date) is typed by the converter itself, as go-yaml v2's
+`resolve` types it (`v2Number`, a copy of its rules, held to
+`sigs.k8s.io/yaml` over generated scalars; below). The reader is the one
+`scan -f` and `CollectManifests` use too, so those are parsed once as well,
+with the findings the same tests hold. **How often it answers** depends on
+the manifest: all 33,620 documents of the lab's 1,000 releases (counted at
+`a14f737c`; `82927f11` declines only a document with U+0085, U+2028 or U+2029,
+which the seed cannot generate, so the count is the same there by the seed's
+source, not counted again), and all 58 documents in total of five files: Flux's
+install manifest (645 KiB, 38 documents, with its CRDs; helm-controller
+v1.2.0), the Kubernetes Dashboard's (6), this chart's render (4, and 9 with
+`server.enabled`) and a cert-manager CRD (1)
+(`UPGRADESCOPE_PARSE_ONCE_FILES`, below). In an earlier run over two later
+Flux install manifests, since deleted from the scratch directory, 2 of 81
+documents went to kubectl's decoder: CRDs whose CEL rule continues on a line
+that starts with `!=`, which reads like a tag. The first version of the
+change declined 42% to 49% of the documents of three Flux install manifests
+(the CRDs, which cost the most) on flags (`--events-addr=http://...`),
+JSONPaths and `&& !has(...)` rules; it was changed before the timed runs
+below.
+
+**Why a number is not asked for.** The two versions before the final one
+put each plain scalar that starts like a number but is not a short decimal
+integer (`1.5`, `1.2.3`, `0x1F`) to kubectl's decoder on its own
+(`sigs.k8s.io/yaml` on the scalar alone, at most 256 distinct ones a
+document, and the whole document went to kubectl's decoder past that). The
+review of `a99bc88a` found that this cost more than the parse it saved on a
+manifest dense in distinct numbers, whether the document was answered or
+declined, and the worst-case table below reproduces it: 1.08 to 2.01 times
+the CPU of parsing twice, on six of the eight manifests tried. A question
+per scalar is a call of the whole decoder for one scalar, so a document with
+hundreds paid for hundreds of calls to save one parse. The converter now
+types those scalars itself, so none is asked and the bound on questions is
+gone.
+**Same findings.** The HE-04 bounds are not touched (runs of at most 1 MiB
+and 64Ki YAML nodes, a document over 2 MiB not parsed). The findings are
+held to the same code run with kubectl's decoder reading the text, as it did
+before (`reparseDocuments`, a variable only tests set, makes
+`parseManifestStream`, `manifestAPIs` and `decodeHelmEntry` do that), by `TestParseOnce_CorpusStreamsMatchTwoParses` (every
+manifest of the collector's test data, objects, evidence and problems),
+`TestParseOnce_EveryHelmDocumentMatchesTwoParses` and
+`TestParseOnce_ReleasesHaveTheSameFindings` (a table of releases: ingresses
+and lists, a CRD, anchors, duplicate and merge keys, tags, JSON, comments,
+unrendered templates), `TestParseOnce_RandomManifestsMatchTwoParses` (300
+manifests of random documents, some past a run's size; 10 under `-race`,
+where the 60 of an earlier version took 257 s) and
+`TestParseOnce_BoundsAreUnchanged`; that the saving is wired in at all (a
+test that fails if a rendered document is not answered from the tree, which
+no equivalence test notices, since a stream parsed twice is equal to
+itself) by `TestParseOnce_ShortcutIsWired`; and the JSON is held byte for
+byte to kubectl's by `TestTreeJSON_MatchesKubectl` (every scalar YAML 1.1 has an
+opinion on, as value, key, item and in flow collections),
+`TestTreeJSON_Documents`, `TestTreeJSON_RandomDocuments` (20,000 documents)
+`FuzzTreeJSONMatchesKubectl` (the fuzz target ran 917,000 and 851,000
+executions on the first two versions of the converter and 798,359 on the
+final one, 150 s, without a difference; while the converter was written it,
+and the random documents, found a bare `!` tag, a text with no final
+newline, a UTF-16 mark and a line starting `---`, each now a case of the
+tables and a reason in `readsTheSame`; review of the branch then found a
+`!` after U+0085, U+2028 or U+2029, which go-yaml takes as line breaks, that
+neither fuzz target had reached, and the three are declined and seeded in
+both targets; with that fix, 90 s each on the Mac, 10 October 2026, at a load
+average of 151 at the end (15 minutes: 83): 41,516 and 35,904 executions without a difference) and `FuzzParseOnceMatchesTwoParses`
+(a whole stream, once and twice: 188,071 executions in 90 s without a
+difference). The scalar typing `v2Number` copies go-yaml v2's `resolve`,
+so `TestV2Number_MatchesKubectl` holds it to `sigs.k8s.io/yaml` over every
+scalar of up to four bytes from the number syntaxes' alphabet, 100,000
+random longer ones and dates (154,000 in all), and `TestV2Number_TracksV2Version`
+fails when `go.mod` selects a go-yaml v2 other than the v2.4.4 it was read
+against. With
+`UPGRADESCOPE_HELM_PAYLOADS`, `TestParseOnce_PayloadsDecodeToTheSameEntries`
+decodes the lab's 1,000 payloads both ways: the 1,000 entries are equal
+(20 of them with flagged APIs). With `UPGRADESCOPE_PARSE_ONCE_FILES`,
+`TestParseOnce_FilesMatchTwoParses` does the same for manifest files you
+name and says how many of their documents the converter answered.
+
+**Which code was measured.** The final version's decode CPU, heap figures
+and worst-case column below were measured at `a14f737c` (the worst case with
+a binary built from `b3eba1cc`, which has `a14f737c`'s production code). Two
+later commits change production code and were **not re-measured**:
+`82927f11` makes the converter decline a document that holds U+0085, U+2028
+or U+2029, so that it goes to kubectl's decoder as before; the lab's payloads
+hold none of the three (the seed generator in `hack/bench/seed` has no
+non-ASCII byte in its source: checked from the seed, not by reading the
+payloads), so for them the code that runs is `a14f737c`'s, but the figures
+are `a14f737c`'s and not measured at `82927f11`. `f1f2af12` is a refactor of
+`streamParser.decoded` and `settle` (the reparse reference left a signature)
+that does not change what runs. The commits since change tests,
+`hack/test-heap.sh` and docs only.
+
+**Decode CPU.** `TestHelmDecodeCostByRelease` on the lab's 1,000 payloads,
+before (`4b1c2893`) and after (`a14f737c`), four runs of each, alternating,
+on the ThinkPad as above (10 October 2026, 11:34 to 11:37 UTC). Each cell is
+the mean of the four runs, with the lowest and highest in brackets, to the
+millisecond (rounded half up). "Less" is the
+difference of the two figures shown, and its percentage is taken from the
+unrounded means:
+
+| | Before | After | Less |
+|---|---|---|---|
+| all 1,000 releases | 9.160 s (9.103 to 9.205) | 6.186 s (6.153 to 6.207) | 2.974 s, **32.5%** |
+| the last 43 releases | 3.301 s (3.271 to 3.334) | 2.182 s (2.162 to 2.202) | 1.119 s, 33.9% |
+| the last 50 (the large ones) | 3.834 s (3.798 to 3.872) | 2.538 s (2.522 to 2.552) | 1.296 s, 33.8% |
+| the last 51 | 3.850 s (3.813 to 3.888) | 2.548 s (2.531 to 2.563) | 1.302 s, 33.8% |
+| the last 83 | 4.352 s (4.319 to 4.382) | 2.878 s (2.849 to 2.901) | 1.474 s, 33.9% |
+| share of the CPU in the last twentieth | 42% | 41% | |
+
+The runs agree within 0.11 s of each other (0.06 s after) and the ranges of
+before and after do not touch. The gain is the same in every part of the
+order, so the large releases' share of the cost did not change (42%, then
+41%): they save what the others do, in proportion. The version before this
+one (`572f0e47`, which asked kubectl's decoder about number-like scalars)
+measured 6.530 s against a before of 9.175 s in the same way; the 0.344 s
+between that and 6.186 s is, computed, the cost of its questions for these
+releases' documents, the only code that differs. **These absolute figures are not those of
+[#247's two runs](#the-tick-after-a-partial-helm-step-247)** on the same
+code (12.5 and 12.3 s for all 1,000, 4.37 and 4.56 s for the last 43,
+at a host load of 4.6 and 7.2): this host was quieter (1.45 to 2.66 here), and
+only a before and an after run back to back, as here, compare. The decode is
+gzip and JSON of the release as well as its manifest, which this change does
+not touch, so the manifest's own share fell by more than the 32.5%: in CPU
+profiles on the Mac (a load average of about 50, so the
+shares only), the manifest was 4.0 of 4.9 CPU-seconds of decoding before and
+2.3 of 3.4 after, the yaml.v3 read of it 1.2 s in both, and the release's own
+gzip and JSON 0.9 and 1.0 s (profiles of the test before and after the first
+version of the change, three passes each).
+
+On the manifests of real charts the gain is larger than the lab's, because
+their CRDs, which the generated releases lack, are most of their text. The
+Flux install manifest (645 KiB, 38 documents) takes 42, 40 and 42 ms of CPU
+to read once and 72, 63 and 67 ms twice (`TestParseOnce_FilesMatchTwoParses`
+at the production code of `a14f737c` (the code of that day, before `82927f11` and `f1f2af12`), three runs of the test, each the mean of 3 readings, on
+the Mac at a load average of 21 to 24: 38.6% less over the three, with that
+noise; 42, 43 and 46 ms against 68, 69 and 69 ms for the version before,
+at a load of 71 to 72). That is one file, not several. No release of a real
+cluster was timed.
+
+**Heap.** The Helm heap tests (`UPGRADESCOPE_HEAP=1`, no `-race`, as
+`make test-heap` runs them), before (main `4b1c2893`, test binary built from
+it) and after, on the Mac at a load average of 31 to 68 for the first pairs
+and 21 to 73 for `make test-heap` (so the readings are noisy: the harness
+reads the live heap after back-to-back collections, and a busy host adds to
+it). The bound is 64 MiB. Peak live heap above the baseline, MiB, per case
+of `TestCollectHelmManifestParsingIsBounded`. "First version" is `db5b0845`,
+whose two runs alternated with the two before runs; "final" is `a14f737c`
+(not `82927f11` or `f1f2af12`, which came after and were not re-measured),
+two runs of the heap step of `make test-heap` (10 October 2026):
+
+| Case | Before, run 1 | Before, run 2 | First version, run 1 | First version, run 2 | Final, run 1 | Final, run 2 |
+|---|---|---|---|---|---|---|
+| newlines | 16.1 | 24.1 | 24.1 | 32.1 | 24.1 | 16.1 |
+| tiny flagged objects | 30.8 | 18.2 | 32.1 | 32.1 | 16.1 | 32.1 |
+| documents that are not objects | 34.3 | 44.1 | 16.1 | 32.1 | 28.1 | 44.1 |
+| objects of newlines at the size bound | 24.1 | 24.1 | 32.1 | 16.1 | 24.1 | 40.1 |
+| objects at the node bound | 38.9 | 29.7 | 31.5 | 19.4 | 20.7 | 22.0 |
+
+Before and after read in the same range (16.1 to 44.1 MiB both), and none
+comes near the 64 MiB bound: no change in the heap is measured, in either
+direction, and these tests could not resolve a small one. What the code
+gives is that the nodes the walk built are the ones the JSON is made from,
+and the maps built from them replace the ones go-yaml v2 built, so no more
+is held at once than before.
+`TestCollectHelmPeakHeapIsBoundedByOneRelease` read 18.0 to 20.0 MiB before
+and 16.0 to 21.9 after (20.0 and 17.5, then 20.7 and 16.0, in the two final
+runs); `TestCollectHelmGzipBombIsBounded` read the same in every run, to
+0.1 MiB (16.7, 0.7, 0.7, 0.1 and 16.1 MiB). The CI runner's figures for HE-04 (32 to 46 MiB)
+are from before this change and were not re-measured there.
+
+**The worst case.** What the converter costs is the walk of a document's
+tree and the typing of its scalars, where the versions before it asked.
+`TestParseOnce_WorstCaseCost` (`UPGRADESCOPE_PARSE_ONCE_WORST=1`) parses one
+1 MiB manifest through `manifestAPIs`, as a release's is, once and twice,
+alternated, the CPU of the process, the mean of 3 readings each. The
+documents of a manifest hold distinct scalars that start like numbers
+(none repeats from one document to the next), and every document is an old
+Ingress, or a Deployment (the rendered one of the tests) with dotted
+versions among its annotations. On the ThinkPad, 10 October 2026, under the
+lock: `a99bc88a`, which asked, twice (11:37 and 11:39 UTC), and the final
+version three times (12:06, 12:07 and 12:08 UTC, a test binary built from
+`b3eba1cc`, whose production code is `a14f737c`'s, not that of `82927f11`
+or `f1f2af12`). The "twice" column is
+the old path in the final binary's own runs (the one in `a99bc88a`'s runs
+reads within 5% of it). CPU in ms, each run listed, with once divided by
+twice (the same binary's own), rounded to two places:
+
+| 1 MiB of documents with | Parsed twice | `a99bc88a`, once | Final, once |
+|---|---|---|---|
+| 300 distinct floats each (`7.123`) | 786, 792, 794 | 1,539 and 1,520 (1.91, 1.86) | 506, 519, 528 (0.64, 0.66, 0.66) |
+| 250 distinct floats each | 829, 828, 836 | 1,322 and 1,315 (1.56, 1.59) | 533, 523, 523 (0.64, 0.63, 0.63) |
+| 16 distinct floats each | 1,133, 1,105, 1,128 | 1,247 and 1,252 (1.11, 1.08) | 694, 668, 683 (0.61, 0.60, 0.61) |
+| 300 distinct dotted versions each (`3.45.678`) | 708, 725, 730 | 1,433 and 1,451 (1.93, 1.96) | 476, 451, 460 (0.67, 0.62, 0.63) |
+| 300 hex, underscored, exponent and negative numbers each | 726, 731, 715 | 1,460 and 1,404 (2.01, 1.97) | 460, 443, 470 (0.63, 0.61, 0.66) |
+| a Deployment, no dotted versions | 794, 794, 778 | 439 and 440 (0.57, 0.56) | 437, 440, 454 (0.55, 0.55, 0.58) |
+| a Deployment, 16 dotted versions | 807, 825, 800 | 728 and 715 (0.89, 0.88) | 485, 481, 488 (0.60, 0.58, 0.61) |
+| a Deployment, 64 dotted versions | 792, 787, 784 | 962 and 999 (1.23, 1.26) | 483, 489, 488 (0.61, 0.62, 0.62) |
+| 300 distinct floats and a final `.inf` each, so each document is walked to the end and then declined | 694, 684, 732 | not measured | 800, 834, 852 (1.15, 1.22, 1.16) |
+
+`a99bc88a` took 1.08 to 2.01 times the CPU of parsing twice on six of the
+eight manifests it was run on, and half of it (0.56) on the one it was made
+for. The final version takes 0.55 to 0.67 on all eight, so the saving does
+not depend on how many numbers the manifest holds; the answered documents
+numbered 206, 246, 3,212, 185, 194, 1,366, 1,013 and 556 and none was left
+to kubectl's decoder. The last row is the cost of a wasted attempt: the walk
+of a 300-value document and the maps made of it, then kubectl's decoder as
+before, 1.15 to 1.22 times the old path. It is the worst declined case
+measured, not a bound: a document with more scalars to type before its
+decline would cost proportionally more of the same.
+
+**What is not claimed.** The CPU of a pod's tick after a partial Helm step
+was not re-measured: no pod ran this code. Its 5.64 CPU-seconds of decoding
+for 51 releases ([above](#the-tick-after-a-partial-helm-step-247)) would be
+about 32% less if it follows the harness (about 3.8, computed: 5.64 × (1 − 0.325)). A first tick
+at 200m would most likely still give up its Helm step (computed: the 19 to
+20.5 CPU-seconds [above](#cpu-and-the-chart-limit) that decoding the 1,000
+takes, less 32.5%, is 12.8 to 13.8, against the 11.8 that 200m gives the
+step's 59 s). A document that goes to kubectl's decoder costs what it did
+and the attempt before it: 1.15 to 1.22 times the old path for one walked
+to its last value (the worst case above, measured for that one case; a
+document declined at its first node was not timed on its own). The JSON the
+converter makes is read
+again by the unstructured scheme (0.5 of the 3.4 CPU-seconds in the profile
+above); skipping that would copy the walk's list and item rules a third
+time, for the gain of a sixth of the decode, and was not done.
+
 ### Hotspots
 
 | What | Found | Status |
 |---|---|---|
 | One GET per Helm release on every tick: 1,000 of 1,061 requests, 90 MiB, 33 s and 23.5 CPU-seconds at full size | The only cost that grew with releases, not pages | **Fixed**: the agent keeps what it decoded, keyed by the storage object's UID and resourceVersion; a steady tick makes none (61 requests then, 53 on `735751d` and 31 after #228). `TestHelmCache…` and `TestTicksFetchHelmReleasesOnlyWhenTheyChange` |
 | The same 1,000 GETs on the first tick after a start, and on every one-shot `scan` | Sequential, 36.1 to 36.7 s and 23.1 to 23.5 CPU-seconds here; at a 60 ms round trip the first tick reached the Helm step's deadline with 231 releases unread; as a pod at the old 200m default it reached it with 132 unread (measured, [above](#cpu-and-the-chart-limit)) | **Fixed** for the round trip ([#226](https://github.com/abd-ulbasit/upgradescope/issues/226)): 8 GETs in flight, decoded one at a time in order; 42.4 s here at `9810fb6`, on a host whose load rose to 15 (27.1 s at the draft `59d8561`, at a load of 7 to 12), and at 60 ms 30.4 s at `06cdf7a` and 29.6 s at `5da764e`, with every release read. Decoding (22 CPU-seconds) and the client's rate limit (14 s for 1,000) are the bounds now, so under a CPU quota #226 was not expected to help at 200m and saves at most the 13.4 s the GETs waited at 1 CPU (computed, [above](#cpu-and-the-chart-limit)); measured at 200m at `da90a86e` (with #226 and #228, 9 October 2026), the first tick still gave up at the Helm step's deadline, with 43 of 1,001 unread where `735751d` left 132 ([above](#the-tick-after-a-partial-helm-step-247)); the runs differ in more than #226 and in host load, so the share that is #226's is not known; the chart's default limit is now 1 CPU, at which main's first tick read all 1,000. `TestCollectHelmConcurrentMatchesSequential` |
+| A Helm release's manifest is parsed twice per YAML document: by the walk and by kubectl's decoder ([#285](https://github.com/abd-ulbasit/upgradescope/issues/285)) | 4.49 of the 5.64 CPU-seconds of decoding 51 releases in the pod, 2.73 of them kubectl's decoder ([above](#the-tick-after-a-partial-helm-step-247)); the lab's 1,000 releases cost 9.160 s of CPU to decode (mean of four runs, the ThinkPad, `4b1c2893`) | **Fixed**: the second parse is gone where it can be shown to give the same JSON: 6.186 s (32.5% less) for the 1,000, 33.8% less for the large ones, measured at `a14f737c`, 10 October 2026 (`82927f11` and `f1f2af12` changed production code after it and were not re-measured: [above](#a-manifest-document-parsed-once-285)); 38.6% less to read Flux's real install manifest (Mac, noisy); 33% to 45% less on eight 1 MiB manifests (five dense in number-like scalars, three Deployments with 0 to 64 dotted versions), and 15% to 22% more for a document walked to its end and then declined (ThinkPad, `b3eba1cc`); same findings and heap ([above](#a-manifest-document-parsed-once-285)). `TestParseOnce…`, `TestTreeJSON…`, `TestV2Number…` |
 | `kube-system` pods are listed in full twice a tick: by the control-plane version check, then again by the all-pods list | 4,009 pods here; the second listing is not a separate 9 requests but 9 extra ones (those pods already fall inside the 29 pages of the all-pods list) and about 4,000 pods decoded twice; grows with nodes (every node adds a `kube-proxy` and a CNI pod) | **Fixed** ([#227](https://github.com/abd-ulbasit/upgradescope/issues/227), #232): the add-ons take them from the version check's list; 30 pod list requests a tick instead of 38 in the runs on `735751d` |
 | Argo CD Applications, Flux HelmReleases and the OCIRepositories their chartRefs name are listed whole (page size 50) every tick (#218; the OCIRepositories since #248, a GET each before) | **Measured** (`BENCH_GITOPS=1`, at 1,000 Applications and 1,000 HelmReleases with 500 chartRefs): at `da90a86e` 50 of the 81 requests of a steady tick (20 + 20 + 10 lists), 9.0 MiB of 59.8, every chart resolved ([above](#the-ocirepositories-listed-248)); on main `735751d`, before #248, 540 of 596, 500 of them sequential OCIRepository GETs, 12 MiB of 63, 8.7 more seconds and 3.2 more CPU-seconds, under host noise ([above](#re-measured-on-main-with-and-without-argo-cd-and-flux)) | Fixed by [#248](https://github.com/abd-ulbasit/upgradescope/issues/248): a list instead of a GET per OCIRepository, a GET by name only where the list is forbidden; the rest grows by one request per 50 objects |
 | The all-pods list is the steady tick's largest cost | 38 of 61 requests (30 of 53 after #232), 79% of the bytes; whole pod objects are needed for their images, and the agent keeps no watch | **Requests fixed** ([#228](https://github.com/abd-ulbasit/upgradescope/issues/228)): pod and node pages sized by their largest object (at most 1,000), discovery kept between ticks, the agent's object read once: 53 to 31 requests, short of the target of under 25. The bytes (50 MiB) and CPU (3 s) are unchanged on a tick that lists every pod; reading the pods less often (#228's option b, the default since, PF-18) makes the ticks that reuse the pass cost 20 requests, 27.8 MiB and 1.8 CPU-seconds (measured at `0b6fec28`, 10 October 2026), and a cycle of 3 averages 23.7 requests (computed), while the tick that lists every pod still makes 31 |

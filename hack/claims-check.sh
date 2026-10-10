@@ -72,12 +72,29 @@ row_ids() {
   done < <(tr ',' '\n' <<<"$1")
 }
 
-rows=0 refs=0 bad=0 seen=""
+rows=0 refs=0 bad=0 seen="" n=0 in_table=0
 while IFS= read -r line; do
-  [[ "$line" == '|'* ]] || continue
+  n=$((n + 1))
+  # Inside a table every non-blank line must be a row: text that lands on a
+  # line of its own (a split row, or a sentence pasted in front of one)
+  # would otherwise be skipped, and so would the claim it carries.
+  if [[ "$line" != '|'* ]]; then
+    if [ "$in_table" = 1 ] && [ -n "${line//[[:space:]]/}" ]; then
+      echo "claims-check: $file:$n: a line inside a claims table does not start with '|': ${line:0:80}" >&2
+      bad=$((bad + 1))
+    fi
+    in_table=0
+    continue
+  fi
+  in_table=1
   [[ "$line" =~ ^\|[-:\ \|]+$ ]] && continue # header separator
   id=$(cut -d'|' -f2 <<<"$line" | xargs)
   [ "$id" != ID ] || continue # header
+  if [ -z "$id" ]; then
+    echo "claims-check: $file:$n: a claim row with no ID: ${line:0:80}" >&2
+    bad=$((bad + 1))
+    continue
+  fi
   rows=$((rows + 1))
   while IFS= read -r one; do
     if grep -qxF -- "$one" <<<"$seen"; then
