@@ -2,15 +2,27 @@
 # minors kind's node images do not cover (hack/kind-node-images.txt starts at
 # 1.29), each tested against a real kube-apiserver and etcd (#135, #69).
 #
-#   minor  version of the kube-apiserver + etcd bundle setup-envtest downloads
+#   minor  version of the kube-apiserver + etcd bundle setup-envtest downloads  pr|weekly
+#
+# pr      every pull request and push to main (plus weekly)
+# weekly  the scheduled run and workflow_dispatch only
+#
+# The same convention as hack/kind-node-images.txt, and hack/kind-images.sh
+# set picks the set for a run. PRs run the ends of the range (1.24, the
+# oldest claimed, and 1.28, the newest below the kind matrix); the weekly run
+# covers every minor. The one assertion that needs a middle minor, the
+# FlowSchema v1beta2 warning one minor before its removal, is made only on
+# 1.27 (internal/collect/envtest_matrix_test.go), so it runs weekly, not on
+# a PR.
 #
 # The bundle is pinned to one exact patch release, not "1.24.x": a patch
 # release that lands upstream must not change what a PR is tested against.
 # Every minor must be a key of envtestBetas in
-# internal/collect/envtest_matrix_test.go and a row of ci.yml's envtest
-# matrix; hack/envtest_test.sh checks both.
-1.24 1.24.2
-1.25 1.25.0
-1.26 1.26.1
-1.27 1.27.1
-1.28 1.28.3
+# internal/collect/envtest_matrix_test.go; ci.yml's envtest job reads this
+# file for its matrix (hack/envtest.sh matrix), and hack/envtest_test.sh
+# checks the rest.
+1.24 1.24.2 pr
+1.25 1.25.0 weekly
+1.26 1.26.1 weekly
+1.27 1.27.1 weekly
+1.28 1.28.3 pr

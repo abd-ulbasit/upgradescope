@@ -58,7 +58,8 @@ it:
 # CI's envtest job (#135, #69): the live collector and engine against a real
 # kube-apiserver and etcd for each Kubernetes minor kind has no node image
 # for, 1.24 to 1.28 (hack/envtest-versions.txt). `make envtest` runs them
-# all, `make envtest ENVTEST_MINOR=1.24` one. It starts the apiserver on a
+# all (CI runs 1.24 and 1.28 on a PR, every minor weekly), `make envtest
+# ENVTEST_MINOR=1.24` one. It starts the apiserver on a
 # loopback port itself: no Docker, and no kubeconfig or context is read.
 # Needs Go and, on the first run, network (setup-envtest and the bundle).
 .PHONY: envtest
