@@ -313,3 +313,30 @@ describe("Fleet summary", () => {
     expect(screen.queryByRole("status", { name: "Refreshing" })).toBeNull();
   });
 });
+
+describe("Fleet empty state", () => {
+  it("keeps Refresh and the stamp, and picks up a snapshot pushed after load", async () => {
+    let current: FleetResponse = { targets: [], clusters: [] };
+    mockApi({
+      "api/v1/fleet": () =>
+        new Response(JSON.stringify(current), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+    });
+    navigate("#/");
+    render(<App />);
+    await screen.findByText("No clusters yet");
+    expect(screen.getByRole("heading", { level: 1, name: "Fleet" })).toBeTruthy();
+    expect(screen.getByText(/^updated \d\d:\d\d:\d\d$/)).toBeTruthy();
+    expect(bodyRows()).toHaveLength(0);
+
+    current = {
+      targets: ["1.37"],
+      clusters: [{ clusterId: 1, name: "first-pushed", stale: false, cells: { "1.37": cell(100, "ready") } } as FleetRow],
+    };
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    await waitFor(() => expect(names()).toEqual(["first-pushed"]));
+    expect(screen.queryByText("No clusters yet")).toBeNull();
+  });
+});

@@ -43,15 +43,6 @@ export function Fleet() {
   if (fleet.error && !fleet.data) return <ErrorState error={fleet.error} onRetry={fleet.reload} />;
   const data = fleet.data!;
 
-  if (data.clusters.length === 0) {
-    return (
-      <Empty
-        title="No clusters yet"
-        hint="Deploy the agent (upgradescope agent) or push a snapshot to POST /api/v1/snapshots and the fleet matrix will appear here."
-      />
-    );
-  }
-
   return (
     <section>
       <header className="page-head">
@@ -64,10 +55,12 @@ export function Fleet() {
             onRefresh={fleet.reload}
           />
         </div>
-        <p className="muted">
-          Readiness score per cluster and upgrade target — latest stored
-          evaluations only. An empty cell opens a what-if for that target.
-        </p>
+        {data.clusters.length > 0 && (
+          <p className="muted">
+            Readiness score per cluster and upgrade target — latest stored
+            evaluations only. An empty cell opens a what-if for that target.
+          </p>
+        )}
         {data.targetsOmitted ? (
           <p className="muted" role="note">
             {data.targetsOmitted} more target{data.targetsOmitted > 1 ? "s" : ""} not
@@ -76,13 +69,20 @@ export function Fleet() {
           </p>
         ) : null}
       </header>
-      <FleetBody
-        fleet={data}
-        q={query.get("q") ?? ""}
-        filter={parseFilter(query.get("filter"))}
-        sort={parseSort(query.get("sort"))}
-        target={query.get("target") ?? undefined}
-      />
+      {data.clusters.length === 0 ? (
+        <Empty
+          title="No clusters yet"
+          hint="Deploy the agent (upgradescope agent) or push a snapshot to POST /api/v1/snapshots, then press Refresh: the fleet matrix will appear here."
+        />
+      ) : (
+        <FleetBody
+          fleet={data}
+          q={query.get("q") ?? ""}
+          filter={parseFilter(query.get("filter"))}
+          sort={parseSort(query.get("sort"))}
+          target={query.get("target") ?? undefined}
+        />
+      )}
     </section>
   );
 }
