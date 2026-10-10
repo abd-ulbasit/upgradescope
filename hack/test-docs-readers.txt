@@ -1,0 +1,27 @@
+# The packages whose tests read documentation, for hack/test.sh
+# --docs-readers: what a pull request that changes docs/**, Markdown or
+# mkdocs.yml and no code still has to run, because these tests fail on a
+# stale page (the CLI's flags, the metrics reference, the chart's upgrade
+# notes, the support-lifecycle examples, the claims ledger's references).
+# One "<module dir> <package dir>" per line, the form `hack/test.sh --list`
+# prints.
+#
+# How it was found (2026-10-10, main at 2df4f696): a copy of the tree with
+# docs/, hack/docs/, mkdocs.yml and every *.md deleted, `go test ./...` in
+# the main module. These packages failed, each on a file it could not open:
+# deploy/chart, internal/agent, internal/cli, internal/crd, internal/kb,
+# internal/server, tools/gen-docs. hack/test_test.sh keeps it from going
+# stale: a package that names a docs page or a Markdown file in a string
+# (a path under docs/, a ../ path to a *.md, README.md and the like) must be
+# here, so a new docs-reading test fails hack-test until its package is
+# listed. Listing a package that does not read docs only costs time.
+. deploy/chart
+. internal/agent
+. internal/cli
+. internal/crd
+. internal/kb
+. internal/server
+. internal/server/store
+. registry
+. tools/gen-docs
+tools/gen-kb .

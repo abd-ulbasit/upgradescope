@@ -1,0 +1,50 @@
+# Seconds each package takes in `go test -race`, for hack/test.sh --shard
+# (greedy longest-first, see hack/shard.sh). One line per package:
+# "<module dir> <package dir> <seconds>". A package missing from here counts
+# 10 s, so a new package is placed without a line; a stale line (a package
+# that moved) only costs balance, never a test: every package runs in
+# exactly one shard.
+#
+# Source: the test job of run 38038631216 (pull request, 2026-10-10, main at
+# ee6f526d plus a one-line ci.yml change), the "ok <package> <seconds>" lines
+# of `go test -race -count=1 ./...`, rounded up to whole seconds. Those
+# packages ran in parallel on a 4-vCPU runner, so the figures are relative
+# weights, not what each costs alone. The tools/ modules ran one after the
+# other, after the main module: their figure is the module's seconds from its
+# "== go vet + go test -race" line to the next (vet and compile included).
+# Refresh when a package's cost changes much:
+#   gh run view <run> --log --job <test job id> | grep -E 'ok  \s+github.com'
+. api 1
+. cmd/upgradescope 2
+. deploy/chart 162
+. deploy/examples 2
+. examples 2
+. hack/bench/seed 84
+. internal/agent 29
+. internal/cli 61
+. internal/codequality 2
+. internal/codequality/codequalitytest 1
+. internal/collect 151
+. internal/crd 34
+. internal/engine 37
+. internal/inventory 2
+. internal/junit 2
+. internal/junit/junittest 2
+. internal/kb 6
+. internal/mcp 95
+. internal/sarif 2
+. internal/sarif/sariftest 1
+. internal/secretfile 3
+. internal/server 230
+. internal/server/notify 2
+. internal/server/store 102
+. internal/server/store/storetest 1
+. internal/suppress 5
+. internal/textsafe 2
+. packaging/krew 2
+. registry 2
+. tools/gen-docs 2
+tools/eol-sync . 2
+tools/gen-kb . 43
+tools/gen-kb internal/genimports 2
+tools/promrule-test . 38

@@ -25,10 +25,35 @@
 # UPGRADESCOPE_HEAP=1, which this sets: a plain `go test ./...` passes
 # without them.
 #
-# --list prints "<package dir> <TestName>" per test and runs nothing.
+# Run serially the set took 1209 s on a hosted runner (run 38038631216:
+# internal/server 1050 s, internal/collect 152 s, internal/server/store 7 s),
+# the longest job of a pull request, so CI runs it as four shards in parallel
+# (--shard i/n, the test-heap job's matrix). Each discovered test is assigned to exactly one
+# shard by hack/shard.sh, greedy longest-first from the committed duration
+# table hack/test-heap-durations.txt ("<package dir> <TestName> <seconds>",
+# a test with no entry counts 30 s): a new heap test is picked up and placed
+# without editing anything, and the table only sharpens the balance. With no
+# --shard every test runs, as `make test-heap` does on a laptop.
+#
+# --list prints "<package dir> <TestName>" per test and runs nothing; with
+# --shard it prints that shard's tests.
 set -euo pipefail
 export UPGRADESCOPE_HEAP=1
 cd "$(dirname "$0")/.."
+
+usage() {
+  echo "usage: hack/test-heap.sh [--list] [--shard <i>/<n>]" >&2
+  exit 2
+}
+list=false
+shard=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --list) list=true; shift ;;
+    --shard) [ $# -ge 2 ] || usage; shard=$2; shift 2 ;;
+    *) usage ;;
+  esac
+done
 
 # "<dir> <TestName>" for each test function that mentions raceEnabled.
 discover() {
@@ -47,7 +72,16 @@ if [ -z "$tests" ]; then
   echo "test-heap: no test reads raceEnabled; the discovery is broken" >&2
   exit 1
 fi
-if [ "${1:-}" = --list ]; then
+if [ -n "$shard" ]; then
+  # shard.sh refuses anything but 1 <= i <= n, so a mistyped leg fails here
+  # instead of running nothing.
+  tests=$(hack/shard.sh "$shard" -d hack/test-heap-durations.txt <<<"$tests")
+  if [ -z "$tests" ]; then
+    $list || echo "test-heap: OK (shard $shard has no tests: fewer tests than shards)"
+    exit 0
+  fi
+fi
+if $list; then
   echo "$tests"
   exit 0
 fi
@@ -68,4 +102,4 @@ for dir in $(cut -d' ' -f1 <<<"$tests" | sort -u); do
     exit 1
   fi
 done
-echo "test-heap: OK"
+echo "test-heap: OK${shard:+ (shard $shard)}"
