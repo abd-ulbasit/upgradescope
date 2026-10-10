@@ -36,6 +36,10 @@ type PruneTestHookSetter interface {
 type pruneTuning struct {
 	batchRows int
 	onBatch   func(PruneBatch)
+	// beforeStmt, set by a test in this package (not part of
+	// PruneTestHookSetter), is called just before each batched DELETE
+	// statement is sent, so a test can start work that contends with it.
+	beforeStmt func(table string)
 }
 
 func (t *pruneTuning) tune(batchRows int, onBatch func(PruneBatch)) {
@@ -64,6 +68,23 @@ var (
 	pgDialect     = pruneDialect{ph: func(n int) string { return fmt.Sprintf("$%d", n) }, decided: "ready OR blockers > 0"}
 )
 
+// evaluationDrain is the batched DELETE of old evaluations: $1 the cutoff,
+// $2 the batch size. The inner SELECT orders by (created_at, id), the
+// columns of idx_evaluations_created_at (migration 0010), so the old rows
+// are found from the index in order and the scan stops at the cutoff:
+// a run with nothing to delete, or its last short batch, reads index
+// entries up to the cutoff and no report. Ordering by id alone made SQLite
+// scan every evaluation row, each report's overflow chain included, under
+// the write lock (#297); the index alone did not change that.
+func (d pruneDialect) evaluationDrain() string {
+	return `
+		DELETE FROM evaluations WHERE id IN (
+			SELECT id FROM evaluations WHERE created_at < ` + d.ph(1) + `
+			AND snapshot_id NOT IN (SELECT MAX(id) FROM snapshots GROUP BY cluster_id)
+			AND id NOT IN (SELECT MAX(id) FROM evaluations WHERE ` + d.decided + ` GROUP BY cluster_id, target)
+			ORDER BY created_at, id LIMIT ` + d.ph(2) + `)`
+}
+
 // prune is Prune for both stores. Each step is its own statement and so
 // its own transaction, of at most t.rows() rows (pruneChunk ids for the
 // baselines): evaluations first, then the baselines baselines does not
@@ -88,6 +109,9 @@ func prune(ctx context.Context, d pruneDialect, t pruneTuning, at any, baselines
 	drain := func(table, stmt string) (int64, error) {
 		var total int64
 		for {
+			if t.beforeStmt != nil {
+				t.beforeStmt(table)
+			}
 			r, err := d.db.ExecContext(ctx, stmt, at, batch)
 			if err != nil {
 				return total, fmt.Errorf("prune %s: %w", table, err)
@@ -106,12 +130,7 @@ func prune(ctx context.Context, d pruneDialect, t pruneTuning, at any, baselines
 		}
 	}
 	var err error
-	res.Evaluations, err = drain("evaluations", `
-		DELETE FROM evaluations WHERE id IN (
-			SELECT id FROM evaluations WHERE created_at < `+d.ph(1)+`
-			AND snapshot_id NOT IN (SELECT MAX(id) FROM snapshots GROUP BY cluster_id)
-			AND id NOT IN (SELECT MAX(id) FROM evaluations WHERE `+d.decided+` GROUP BY cluster_id, target)
-			ORDER BY id LIMIT `+d.ph(2)+`)`)
+	res.Evaluations, err = drain("evaluations", d.evaluationDrain())
 	if err != nil {
 		return res, err
 	}

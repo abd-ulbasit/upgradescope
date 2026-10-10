@@ -298,11 +298,25 @@ server:
   # '[{"op":"remove","path":"/data/ingestToken"}]'`. Later versions remove it
   # on upgrade; check with `kubectl get secret ... -o jsonpath='{.data}'`.
   sharedIngestToken: true
-  # -- Optional bearer token for the read API. EMPTY = READ API IS OPEN —
-  # acceptable behind a ClusterIP Service on a private cluster, but set one
-  # before exposing the Service in any way. With existingSecret the value
-  # itself is not used; a non-empty one acts like readTokenFromSecret=true.
+  # -- Optional fleet-wide bearer token for the read API. EMPTY = the chart
+  # closes the read API (serve --require-read-credential): every read is 401
+  # until you mint a read token with `kubectl exec ... upgradescope tokens
+  # create --read --teams '*'` (the install notes print the command), and
+  # a lost or restored database cannot reopen it. Opt into an OPEN read API
+  # with allowAnonymousRead. With existingSecret the value itself is not
+  # used; a non-empty one acts like readTokenFromSecret=true.
   readToken: ""
+  # -- Open the read API when readToken is empty (the chart then passes
+  # serve --allow-anonymous-read): reads need no credential while none
+  # exists, and a lost or restored database, or persistence.enabled=false on every
+  # pod restart, makes the API open again for everyone who can reach the
+  # server. Leave false and mint read tokens unless an authenticating layer
+  # in front is the access control. An open read API answers a request that
+  # names a host (Host header) outside the Service names,
+  # server.ingress.host and server.allowedHosts with 421, and a request that
+  # presents an unknown bearer with 401. With a readToken set this has no
+  # effect. See docs/operations/auth.md.
+  allowAnonymousRead: false
   # -- Bearer token for cluster administration: deleting and renaming clusters
   # (DELETE/PATCH /api/v1/clusters/{id}, `upgradescope clusters delete`
   # and `rename`, with --server). Empty = both are refused. It must differ
@@ -411,17 +425,22 @@ server:
   teamMap: []
   ingress:
     # -- Expose the server (API, dashboard, snapshot ingest) through an
-    # Ingress. Set a read token first. Agents push to https://<host>.
+    # Ingress. Set a read token (or mint one: the read API is closed until
+    # then). Agents push to https://<host>.
     enabled: false
     className: ""
     annotations: {}
     host: ""
     path: /
     pathType: Prefix
-    # -- The render fails when the Ingress would publish a read API with no
-    # read token. Set true only when an authenticating layer (oauth2-proxy
-    # through ingress annotations, an identity-aware proxy) fronts it; see
-    # docs/operations/auth.md.
+    # -- Opts into an OPEN read API through the Ingress, as
+    # server.allowAnonymousRead does (it is the same opt-in, kept from before
+    # that value existed): set true only when an authenticating layer
+    # (oauth2-proxy through ingress annotations, an identity-aware proxy)
+    # fronts it. Do not set it to rely on minted read tokens: that leaves the
+    # read API open whenever the database is lost or restored. The render
+    # fails when server.allowAnonymousRead opens the read API and this is
+    # false. See docs/operations/auth.md.
     allowAnonymousRead: false
     tls:
       # -- TLS for host, from a kubernetes.io/tls Secret (e.g. one cert-manager
@@ -506,6 +525,12 @@ server:
   # need nothing.
   allowedHosts: []
   # -- Extra `upgradescope serve` flags, e.g. ["--max-snapshot-bytes=41943040"].
+  # Not the read-API flags the chart chooses: the render fails on
+  # --allow-anonymous-read (true) while it passes --require-read-credential,
+  # on --require-read-credential (true) while it passes
+  # --allow-anonymous-read, on either set false when it is the one the chart
+  # passes, and on both set true; serve refuses the pair. The other flag set
+  # false is accepted.
   extraArgs: []
   extraEnv: []
   extraVolumes: []

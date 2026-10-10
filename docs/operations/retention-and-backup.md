@@ -70,6 +70,63 @@ test; four runs, 1.21 to 1.47 s) took 1.21 s at best. That is about 20%
 more at best-of, in exchange for transactions of 5,000 rows at most. Not
 measured: a Postgres prune, and the temp space one batch needs.
 
+What one run reads. The evaluation step finds the old rows from an index on
+`evaluations (created_at, id)` (migration 0010, SQLite and Postgres), taking
+them oldest first and stopping at the cutoff, so a run with nothing older
+than the window reads the oldest index entries and no report. The
+subqueries that spare rows (each cluster's latest snapshot, and the newest
+decided evaluation of each cluster and target) run only when the index
+range finds a row older than the cutoff, which in steady state is every
+daily run. The snapshot condition reads a covering index. The decided one
+walks `idx_evaluations_decided` and looks up the row of every decided
+evaluation for its leading columns (the index is partial, its predicate is
+re-checked against the table, so the plan says `USING INDEX`, not
+`USING COVERING INDEX`), never reading its report, so its cost
+follows the number of decided evaluations and not their size. A prune that
+deletes nothing runs neither subquery. Before 0010 the step scanned the
+whole evaluations table, every run, the last short batch of a drain included; `created_at` is stored
+after the report on SQLite, so that read every report's overflow pages, all
+under SQLite's single write lock, which every push and re-evaluation commit
+waits for. The index alone does not change this: the statement has to order
+by `created_at, id` as the index does (with `ORDER BY id` SQLite still
+scans), and the plan is pinned for both stores. The snapshot step still
+walks the snapshots table in id order, which is a scan. It reads `received_at`,
+which comes before the inventory in the row, so it does not read the
+inventories' overflow pages, but it does read the first page of every row, and
+a row with a large inventory fills that page on its own: so its cost follows
+the number of snapshots, and also their size until a page holds several rows
+(measured below; the page explanation is reasoning from SQLite's file format,
+not observed).
+
+Measured on SQLite with 20,000 evaluations of 30 KB reports (a 627 MiB database, 658,018,304 bytes, in
+every run that logged its size; MiB, not MB) all inside the window, so that a prune deletes nothing
+(`TestPruneWithNothingToDeleteIsCheap`), on an arm64 Mac, 10 October 2026,
+load average not recorded for these runs: before the index (commit
+`2f9de7cc`), five runs took 177 to 270 ms, and a push of another cluster
+started with the prune committed after 184 to 337 ms; with it (the code of
+commit `147ac1ef`), five runs took 0.27 to 0.43 ms, the push 0.62 to 1.3
+ms. Those runs started the push together with the prune, which usually took
+the write lock first; the test now starts it 1 ms after the prune's first
+statement is sent, so that it contends if the statement holds the lock. In
+that form, with the index (commit `4098ec98` plus the test change), four
+runs took 0.24 to 0.61 ms for the prune and 0.28 to 0.49 ms for the push, and
+with the statement ordered by `id` again, the one run made took 190 ms and
+the push 239 ms; the test's 50 ms bounds fail on both then, and the push
+bound fails on its own. The snapshot step on 20,000 snapshots (`TestPruneNothingToDeleteTiming`,
+five runs of a prune that deletes nothing, commit `4098ec98` plus that test's
+1 KB case, load average 22 to 25): 28.9 to 30.6 ms with 30 KB inventories (a
+626 MiB database), 9.2 to 10.0 ms with 1 KB inventories (27 MiB). The
+earlier three runs of the 30 KB case, at a load average of about 100, took
+32, 45 and 45 ms. So the step is not independent of the snapshots' size,
+about three times as long at 30 KB as at 1 KB, and it grows with their
+number; the evaluation step, in the same runs, took 0.29 to 0.37 ms.
+The index has a price on a backlog: `TestPruneBacklogTiming` (the 60,000-row
+prune above), five runs of each at load average 64 to 86, took 1.73 to 3.38 s
+before (best 1.73 s, commit `2f9de7cc`) and 1.99 to 2.65 s after (best 1.99
+s, the code of `147ac1ef`), about 15% more at best-of; an earlier three runs
+of each at a load average not recorded gave 1.39 s best before and 1.63 s
+after. A Postgres prune was still not timed.
+
 Sizing: the October 2026 audit measured about 35 KB per changed snapshot
 for a realistic inventory (60 nodes, 250 namespaces, 80 Helm releases),
 plus one report per target. Plan for
@@ -136,14 +193,32 @@ visible
   including the batches a failed run had committed.
 
 The chart's `UpgradescopeRetentionStale` alert (`metrics.prometheusRule`;
-not rendered with `server.retention=0`) fires when the gauge is more than
-2 days old, is absent more than 2 days after the server started, or is
-absent after a prune failed in the last 2 days (the third arm is for a
-server that restarts more often than every 2 days, whose failing startup
-prune would otherwise never let the second arm hold). The prune runs at
-startup and then daily, so the first two are two missed days in a row, and
-the alert waits a further 15 minutes (`for`) after its condition holds.
+not rendered with `server.retention=0`) has three arms, and each covers a
+different restart cadence:
+
+| Arm | Fires when | Covers |
+|---|---|---|
+| 1 | the gauge is more than 2 days old | a server that stayed up more than 2 days after a prune last completed, and whose daily prunes since then fail |
+| 2 | the gauge is absent and the oldest server process is more than 2 days old | a server up more than 2 days that never completed a prune, with or without a failure counted |
+| 3 | the gauge is absent and `upgradescope_retention_prune_failures_total` is above 0 | a server that restarts more often than every 2 days (every few hours, say) and whose startup prune keeps failing, where arm 2 never holds because no process gets 2 days old |
+
+Arm 3 reads the counter's value and not `increase()` of it: the startup
+prune fails within milliseconds, before Prometheus first scrapes the new
+process, so the series is first seen at 1 and `increase()` over it is 0.
+Both series restart with the process, so a process that has failed
+nothing, or a restart after a prune succeeded, stays quiet. What no arm
+sees: a process that restarts before it is scraped once (the pod's restarts
+are the signal then), and, with several Postgres replicas, a replica that
+fails while another has completed a prune, since `absent()` looks at the
+whole job (arm 1 still judges each replica's own gauge). The alert waits a
+further 15 minutes (`for`) after its condition holds, and the prune runs at
+startup and then daily, so arm 1 and arm 2 are two missed days in a row.
 Until a run completes the database keeps growing.
+
+One transient failure at startup (a locked database, say) keeps arm 3
+firing until the next prune completes, which can be up to the retention
+interval (daily) away, since the server does not retry sooner; restarting
+the server runs the startup prune again.
 
 `/readyz` does not change: it pings the database and nothing else. A server
 that cannot prune can still ingest and serve, and restarting it would not
@@ -208,12 +283,31 @@ keeps the exports from the time (`GET /api/v1/clusters/{id}/export`).
 
 The database holds each cluster's registration (name bound to its cluster
 UID), the stored snapshots and evaluations (score history, exports), the
-notification outbox and the hashes of per-cluster ingest tokens. Losing it
-loses history, not the present: every agent pushes its full inventory at
-least hourly (`--force-sync-every`), so the fleet view refills within about
-an hour of a fresh start, and the `ClusterReadiness` objects in each cluster
-are untouched. What does not come back is history, the per-cluster tokens
-(mint and roll out new ones) and the bindings of names to cluster UIDs.
+notification outbox and the hashes of per-cluster ingest tokens and of
+**read tokens**. Losing it loses history, not the present: every agent
+pushes its full inventory at least hourly (`--force-sync-every`), so the
+fleet view refills within about an hour of a fresh start, and the
+`ClusterReadiness` objects in each cluster are untouched. What does not come
+back is history, the per-cluster tokens (mint and roll out new ones), the
+read tokens (mint them again, and give them out again) and the bindings of
+names to cluster UIDs.
+
+**A lost or restored database reopens the read API** unless
+`--require-read-credential` or `--read-token` is set. Whether the read API
+is closed is decided by the read tokens in the database: with none (a lost
+PVC, an emptied volume, `--db-url` pointed at a fresh database, or an older
+backup taken before the first token was minted) and none of those two
+settings, a server that allows an open read API (`--allow-anonymous-read`,
+or a loopback listener) answers the whole fleet, the dashboard's data and
+`/api/v1/gate` to anyone who can reach it, and logs only a `WARN` line at
+startup. A restore of an older backup also makes a token you revoked since
+active again, and forgets tokens minted since. The Helm chart with
+`server.persistence.enabled=false` (an `emptyDir`) does this on every pod
+restart. Run `serve --require-read-credential` (the chart's default when
+`server.readToken` is empty and `server.allowAnonymousRead` is not set) or
+give `--read-token` (`server.readToken`), and after a restore list the
+tokens (`upgradescope tokens list --read`) and mint again what is missing
+([Read access](auth.md#keeping-the-read-api-closed-require-read-credential)).
 
 **SQLite.** The database is one file plus its `-wal` and `-shm` files, in
 WAL mode. Copy it with the server stopped, so the three files are

@@ -19,13 +19,26 @@ import (
 // requests, whatever a server on the victim's loopback answers: the
 // browser connects to the loopback socket but still sends Host:
 // attacker.example. Two kinds of server answer such a request with data
-// that no credential protects: an open read API, which Start allows only
-// on loopback, and the trusted-header mode, which trusts every connection
-// from a --trusted-proxy-cidr address (kubectl port-forward delivers the
-// browser's connections to the pod from 127.0.0.1, Host unchanged). So
-// when the listener is loopback, or the team header is trusted, every
-// request must name a host this server answers for, or it gets 421 before
-// any route, scope or credential is looked at.
+// that no credential protects: an open read API, and the trusted-header
+// mode, which trusts every connection from a --trusted-proxy-cidr address
+// (kubectl port-forward delivers the browser's connections to the pod from
+// 127.0.0.1, Host unchanged). A server that listens on every interface is
+// reached on loopback too, by the same port-forward, so the bind address
+// says nothing about who can send such a request (#309). So a request must
+// name a host this server answers for, or it gets 421 before any route,
+// scope or credential is looked at, when
+//   - the listener is loopback, or the team header is trusted (always,
+//     whatever the request carries: Start and New decide it once); or
+//   - the read API is open (readOpen) and the request presents no bearer:
+//     an anonymous read. This is decided per request, so minting a read
+//     token ends it, and a failing store is read as open. A request that
+//     presents a bearer is not an anonymous read: the credential decides
+//     (an unknown bearer is a 401, readScope), so an agent that pushes
+//     under a name nobody listed keeps its 401 or its 202.
+//
+// A server with a read credential (--read-token, a minted read token, or
+// --require-read-credential) on a routable address, and no trusted header,
+// answers any Host.
 //
 // The names it answers for are the ones rebinding cannot produce:
 //   - an IP literal that is loopback, or the address the request arrived
@@ -46,18 +59,40 @@ import (
 // same-origin, and it exempts GET.
 
 // hostGuardActive reports whether s refuses requests for hosts it does not
-// answer for: always with a trusted team header, and once Start has bound
-// a loopback address.
+// answer for whatever they carry: always with a trusted team header, and
+// once Start has bound a loopback address. (An open read API arms it per
+// request too: hostRefused.)
 func (s *Server) hostGuardActive() bool {
 	return s.hostGuard.Load()
 }
 
-// checkHost wraps next with the Host allow-list while it is active. A
+// hostRefused reports whether r must be refused with 421: its Host is not
+// one s answers for (hostAllowed) and the guard applies to it, either
+// always (hostGuardActive) or because it is an anonymous read of an open
+// read API. The allow-list is checked first: it is memory only, so a
+// probe or a scrape never costs a store query.
+func (s *Server) hostRefused(r *http.Request) bool {
+	if s.hostAllowed(r) {
+		return false
+	}
+	if s.hostGuardActive() {
+		return true
+	}
+	if bearerToken(r) != "" {
+		return false
+	}
+	// A store that cannot say whether the API is open is assumed open: the
+	// guard errs towards refusing a name nobody listed.
+	open, err := s.readOpen(r.Context())
+	return err != nil || open
+}
+
+// checkHost wraps next with the Host allow-list while it applies. A
 // refusal comes before the metrics middleware, so it is counted here, under
 // routeHostRefused, and logged (refusalLog).
 func (s *Server) checkHost(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if s.hostGuardActive() && !s.hostAllowed(r) {
+		if s.hostRefused(r) {
 			start := time.Now()
 			errJSON(w, http.StatusMisdirectedRequest, fmt.Sprintf(
 				"this server does not answer for Host %q (DNS rebinding guard): "+

@@ -12,6 +12,13 @@
 # heap test that skips under -race is picked up without editing this
 # script, and one cannot be cited yet silently never run.
 #
+# Not every test in the set is a heap proof: the criterion is reading
+# raceEnabled, and a timing proof that skips under -race because the
+# detector's slowdown invalidates its bounds reads it too. So
+# TestPruneWithNothingToDeleteIsCheap (internal/server/store, #297) is in the
+# set and is a timing proof (a prune that deletes nothing, and a concurrent
+# push, each under 50 ms), not a heap bound.
+#
 # The server's heap tests take about ten minutes, past go test's default
 # timeout, and the Helm manifest test's live-heap reading is inflated by a
 # machine busy with every other package's tests, so they also skip unless

@@ -323,7 +323,8 @@ func TestNewRefusesInvalidAllowedHosts(t *testing.T) {
 }
 
 // With a read token on a routable address, and without the trusted
-// header, nothing changes: any Host is answered.
+// header, nothing changes: any Host is answered. (An open read API on one
+// is guarded now: see TestWildcardOpenReadAPIRefusesForeignHosts.)
 func TestRoutableServerWithTokenAnswersAnyHost(t *testing.T) {
 	s := newTestServer(t, newFakeStore(), func(c *Config) { c.Listen = "localhost:0"; c.ReadToken = "r" })
 	fakeBind(t, s, "172.17.0.2")
@@ -340,8 +341,13 @@ func TestRoutableServerWithTokenAnswersAnyHost(t *testing.T) {
 	fakeBind(t, s2, "0.0.0.0")
 	startServer(t, s2)
 	_, port2, _ := net.SplitHostPort(s2.Addr())
-	if code, body := hostRequest(t, "127.0.0.1:"+port2, http.MethodGet, "/api/v1/clusters", "anything.example"); code != http.StatusOK {
-		t.Errorf("--allow-anonymous-read on a routable address, Host anything.example = %d %s, want 200", code, body)
+	// An open read API is guarded wherever it listens (#309): it answered
+	// Host anything.example here before.
+	if code, body := hostRequest(t, "127.0.0.1:"+port2, http.MethodGet, "/api/v1/clusters", "anything.example"); code != http.StatusMisdirectedRequest {
+		t.Errorf("--allow-anonymous-read on a routable address, Host anything.example = %d %s, want 421", code, body)
+	}
+	if code, body := hostRequest(t, "127.0.0.1:"+port2, http.MethodGet, "/api/v1/clusters", "localhost:"+port2); code != http.StatusOK {
+		t.Errorf("--allow-anonymous-read on a routable address, Host localhost = %d %s, want 200", code, body)
 	}
 }
 

@@ -152,7 +152,7 @@ func TestMonitoringObjectsOffByDefault(t *testing.T) {
 
 func TestServiceMonitors(t *testing.T) {
 	objs := render(t, "metrics.serviceMonitor.enabled=true", "metrics.serviceMonitor.labels.release=kps",
-		"server.enabled=true", "server.ingestToken=t")
+		"server.enabled=true", "server.ingestToken=t", "server.allowAnonymousRead=true") // open: the monitor has no token to send
 	svc := find(objs, "Service", "upgradescope-agent-metrics")
 	if svc == nil {
 		t.Fatalf("agent metrics Service not rendered (have %v)", kinds(objs))

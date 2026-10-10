@@ -141,6 +141,7 @@
         "ingestToken": { "type": "string" },
         "sharedIngestToken": { "type": "boolean" },
         "readToken": { "type": "string" },
+        "allowAnonymousRead": { "type": "boolean" },
         "existingSecret": { "$ref": "#/definitions/secretName" },
         "readTokenFromSecret": { "type": "boolean" },
         "adminToken": { "type": "string" },

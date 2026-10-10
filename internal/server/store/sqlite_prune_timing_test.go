@@ -58,3 +58,59 @@ func TestPruneBacklogTiming(t *testing.T) {
 	}
 	t.Logf("pruned %+v in %d transactions in %v", res, txs, time.Since(start))
 }
+
+// TestPruneNothingToDeleteTiming times a Prune that deletes nothing on
+// SQLite, with the history inside the window, and logs it; opt-in like
+// TestPruneBacklogTiming (UPGRADESCOPE_PRUNE_TIMING=1). Two stores of
+// 20,000 rows of 30 KB each: evaluations (one snapshot, the shape of
+// TestPruneWithNothingToDeleteIsCheap) and snapshots (each with one tiny
+// evaluation). The evaluation step finds nothing from
+// idx_evaluations_created_at; the snapshot step still walks the snapshots
+// table, whose received_at precedes the inventory in the row, so its
+// cost is the number of snapshots and not their size. The numbers in
+// docs/operations/retention-and-backup.md come from it.
+func TestPruneNothingToDeleteTiming(t *testing.T) {
+	if os.Getenv("UPGRADESCOPE_PRUNE_TIMING") != "1" {
+		t.Skip("set UPGRADESCOPE_PRUNE_TIMING=1 to time a Prune that deletes nothing")
+	}
+	ctx := context.Background()
+	timePrune := func(t *testing.T, s *SQLite, what string) {
+		t.Helper()
+		start := time.Now()
+		res, err := s.Prune(ctx, tBase.Add(-90*24*time.Hour), nil)
+		took := time.Since(start)
+		if err != nil || res != (PruneResult{}) {
+			t.Fatalf("Prune = (%+v, %v), want nothing deleted", res, err)
+		}
+		var size int64
+		if err := s.db.QueryRow(`SELECT (SELECT page_count FROM pragma_page_count) * (SELECT page_size FROM pragma_page_size)`).Scan(&size); err != nil {
+			t.Fatal(err)
+		}
+		t.Logf("%s, database %d bytes (%d MiB): Prune that deletes nothing took %v", what, size, size>>20, took)
+	}
+	t.Run("evaluations", func(t *testing.T) {
+		s := newTestStore(t)
+		seedInWindowEvaluations(t, s, noopPruneEvaluations, noopPruneReportBytes)
+		timePrune(t, s, "20,000 evaluations of 30 KB")
+	})
+	// The snapshot step's cost is the number of snapshots, not their size:
+	// 20,000 snapshots of 30 KB (overflow pages for every inventory) and of
+	// 1 KB (no overflow, the inventory in the row's own page).
+	for _, sz := range []struct {
+		name  string
+		bytes int
+	}{{"snapshots", noopPruneReportBytes}, {"snapshots-small", 1 << 10}} {
+		t.Run(sz.name, func(t *testing.T) {
+			s := newTestStore(t)
+			cid := mustCluster(t, s, "prod")
+			if _, err := s.db.Exec(`
+				WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?)
+				INSERT INTO snapshots (cluster_id, hash, kb_version, agent_version, received_at, inventory)
+				SELECT ?, 'h' || i, 'kb', 'v', strftime('%Y-%m-%dT%H:%M:%S.000000000Z', '2026-06-10 12:00:00', '-' || i || ' minutes'), zeroblob(?)
+				FROM n`, noopPruneEvaluations, cid, sz.bytes); err != nil {
+				t.Fatal(err)
+			}
+			timePrune(t, s, fmt.Sprintf("20,000 snapshots of %d KB", sz.bytes>>10))
+		})
+	}
+}

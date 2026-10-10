@@ -28,7 +28,7 @@ func TestGateCIFormats(t *testing.T) {
 		for _, body := range []string{pspManifest, deploymentManifest} {
 			want, _ := postGate(t, ts, q, "", body, "application/x-yaml")
 			for _, format := range []string{"junit", "gitlab-codequality"} {
-				resp, raw := postGate(t, ts, q+"&format="+format+"&path=deploy/rendered.yaml", "read-tok", body, "application/x-yaml")
+				resp, raw := postGate(t, ts, q+"&format="+format+"&path=deploy/rendered.yaml", "", body, "application/x-yaml")
 				if resp.StatusCode != want.StatusCode || resp.Header.Get("X-Upgradescope-Verdict") != want.Header.Get("X-Upgradescope-Verdict") {
 					t.Errorf("%s format=%s: %d verdict %q, want JSON's %d verdict %q", q, format, resp.StatusCode,
 						resp.Header.Get("X-Upgradescope-Verdict"), want.StatusCode, want.Header.Get("X-Upgradescope-Verdict"))

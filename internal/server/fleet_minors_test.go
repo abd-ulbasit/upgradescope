@@ -40,7 +40,7 @@ func TestFleetDefaultColumnsAreMeasured(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = st.Close() })
-	s, err := New(Config{Store: st, KB: testKB(), IngestToken: "ingest-tok"})
+	s, err := New(Config{Store: st, KB: testKB(), IngestToken: "ingest-tok", AllowedHosts: testClientHosts})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -119,7 +119,7 @@ func TestFleetReadsOfTheWidestGapsAreBounded(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = st.Close() })
-	s, err := New(Config{Store: st, KB: testKB(), IngestToken: "ingest-tok", ExtraTargets: heapTargets})
+	s, err := New(Config{Store: st, KB: testKB(), IngestToken: "ingest-tok", AllowedHosts: testClientHosts, ExtraTargets: heapTargets})
 	if err != nil {
 		t.Fatal(err)
 	}

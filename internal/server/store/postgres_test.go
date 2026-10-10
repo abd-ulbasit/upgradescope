@@ -81,6 +81,56 @@ func TestPostgresConformance(t *testing.T) {
 	storetest.RunStoreConformance(t, func(t *testing.T) store.Store { return freshPostgres(t) })
 	t.Run("ConcurrentMigrations", testConcurrentMigrations)
 	t.Run("PreFreshnessWriter", testPreFreshnessWriter)
+	t.Run("ReadTokenMintedThroughAnotherHandle", testReadTokenMintedThroughAnotherHandle)
+}
+
+// testReadTokenMintedThroughAnotherHandle is the store half of minting the
+// first read token while serve holds the database: serve's handle and the
+// handle 'upgradescope tokens create --read' opens (a second process, the
+// install notes' kubectl exec) share one schema, and what the second writes
+// the first sees on its next query, with no restart of either: the token
+// list (the server's "is the API open" question) turns non-empty, the token
+// validates, and a revocation through the second handle refuses it. Nothing
+// is cached by the store.
+func testReadTokenMintedThroughAnotherHandle(t *testing.T) {
+	dsn := freshSchemaDSN(t)
+	serving, err := store.OpenPostgres(dsn)
+	if err != nil {
+		t.Fatalf("OpenPostgres (serve): %v", err)
+	}
+	defer serving.Close()
+	minting, err := store.OpenPostgres(dsn)
+	if err != nil {
+		t.Fatalf("OpenPostgres (tokens create): %v", err)
+	}
+	defer minting.Close()
+	ctx := context.Background()
+
+	if toks, err := serving.ListReadTokens(ctx); err != nil || len(toks) != 0 {
+		t.Fatalf("serve's handle before any mint: %v, %v; want none", toks, err)
+	}
+	const token = "pg-minted-read-token"
+	id, err := minting.CreateReadToken(ctx, []string{store.ReadScopeFleet}, token)
+	if err != nil {
+		t.Fatalf("CreateReadToken through the second handle: %v", err)
+	}
+	toks, err := serving.ListReadTokens(ctx)
+	if err != nil || len(toks) != 1 || toks[0].ID != id || toks[0].RevokedAt != nil {
+		t.Fatalf("serve's handle after the mint: %+v, %v; want the one active token %d", toks, err, id)
+	}
+	if teams, ok, err := serving.ValidReadToken(ctx, token); err != nil || !ok || len(teams) != 1 || teams[0] != store.ReadScopeFleet {
+		t.Errorf("serve's handle validating the minted token = %v, %v, %v; want the fleet scope", teams, ok, err)
+	}
+	if err := minting.RevokeReadToken(ctx, id); err != nil {
+		t.Fatalf("RevokeReadToken through the second handle: %v", err)
+	}
+	if _, ok, err := serving.ValidReadToken(ctx, token); err != nil || ok {
+		t.Errorf("serve's handle validating the revoked token = %v, %v; want refused", ok, err)
+	}
+	// Revoking the only token leaves its row: the API does not open again.
+	if toks, err := serving.ListReadTokens(ctx); err != nil || len(toks) != 1 || toks[0].RevokedAt == nil {
+		t.Errorf("serve's handle after the revocation: %+v, %v; want the one row, revoked", toks, err)
+	}
 }
 
 // testPreFreshnessWriter: during a rolling upgrade (or after a rollback) a

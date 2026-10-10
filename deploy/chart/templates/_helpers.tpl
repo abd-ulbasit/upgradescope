@@ -252,6 +252,34 @@ re-reads it, so a rotated token needs no restart.
 {{- if or .Values.server.readToken .Values.server.readTokenFromSecret -}}true{{- end -}}
 {{- end -}}
 
+{{/*
+Does the chart opt into an OPEN read API (no read credential at all)?
+Non-empty string = yes: no read token, and server.allowAnonymousRead or
+server.ingress.allowAnonymousRead is true. With no read token and neither,
+the chart passes --require-read-credential: the read API is closed whatever
+the database holds, and reads are 401 until a read token is minted (#295).
+*/}}
+{{- define "upgradescope.readAnonymous" -}}
+{{- if and (not (include "upgradescope.readTokenEnabled" .)) (or .Values.server.allowAnonymousRead .Values.server.ingress.allowAnonymousRead) -}}true{{- end -}}
+{{- end -}}
+
+{{/*
+Does the extra argument ARG set the boolean flag --FLAG? Pass
+(dict "arg" "--x=false" "flag" "x"). Output: "" when ARG is not that flag,
+"false" when it sets it to a value serve reads as false (strconv.ParseBool:
+0, f, F, false, FALSE, False), "true" otherwise: the bare flag, any true
+value, and (so the render errs on the side of refusing) a value serve would
+reject anyway.
+*/}}
+{{- define "upgradescope.boolFlagArg" -}}
+{{- $f := printf "--%s" .flag -}}
+{{- if eq .arg $f -}}
+true
+{{- else if hasPrefix (printf "%s=" $f) .arg -}}
+{{- if has (trimPrefix (printf "%s=" $f) .arg) (list "0" "f" "F" "false" "FALSE" "False") -}}false{{- else -}}true{{- end -}}
+{{- end -}}
+{{- end -}}
+
 {{/* Does the server get an admin token? Non-empty string = yes. */}}
 {{- define "upgradescope.adminTokenEnabled" -}}
 {{- if and .Values.server.adminTokenFromSecret (not .Values.server.existingSecret) -}}

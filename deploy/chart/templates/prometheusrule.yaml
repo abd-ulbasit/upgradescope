@@ -63,13 +63,22 @@ spec:
             description: {{ `The upgradescope server has had no snapshot from {{ $labels.cluster }} for {{ $value | humanizeDuration }}. Its agent is down, cannot reach the server, or its token was revoked; the fleet view shows its last known state.` | quote }}
         {{- if not $retentionOff }}
         - alert: UpgradescopeRetentionStale
-          # No retention prune has completed in over 2 days (it runs at
-          # startup and daily), or none has since a server that started
-          # more than 2 days ago: the gauge is absent until the first one
-          # does. The third arm is for a server that restarts more often
-          # than that, where the second never holds: a prune failed in the
-          # last 2 days and none has completed since the current process
-          # started. Job label as for the other server alerts.
+          # Three arms, for the three ways a server stops pruning. 1: the
+          # last completed prune is over 2 days old (the server has run
+          # that long since a success, and its daily prunes fail). 2: the
+          # gauge is absent, because the first prune of the process never
+          # completed, and the oldest process is over 2 days old. 3: the
+          # gauge is absent and a failure has been counted: a prune failed
+          # in a process that has completed none, however young it is, so
+          # a server that restarts every hour or every 12h, whose startup
+          # prune keeps failing, is covered where the other two never
+          # hold. Arm 3 reads the counter's value and not its increase:
+          # the startup prune fails within milliseconds, before the first
+          # scrape of the new process, so the series is first seen at 1
+          # and increase() over it is 0. The counter and the gauge both
+          # restart with the process, so a process that has not failed
+          # yet, or that restarted after a prune succeeded, counts 0 and
+          # stays quiet. Job label as for the other server alerts.
           expr: |-
             time() - upgradescope_retention_last_success_timestamp_seconds{job="{{ $serverJob }}"} > 172800
             or
@@ -77,7 +86,7 @@ spec:
               and on() (time() - min(process_start_time_seconds{job="{{ $serverJob }}"}) > 172800))
             or
             (absent(upgradescope_retention_last_success_timestamp_seconds{job="{{ $serverJob }}"})
-              and on() increase(upgradescope_retention_prune_failures_total{job="{{ $serverJob }}"}[2d]) > 0)
+              and on() max(upgradescope_retention_prune_failures_total{job="{{ $serverJob }}"}) > 0)
           for: 15m
           labels:
             severity: warning

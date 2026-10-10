@@ -227,3 +227,38 @@ func TestEvaluationWrittenWithoutCarriesHoldMayCarryOne(t *testing.T) {
 		t.Errorf("CarriesHold = (%v, %v), want true for a NULL column", e.CarriesHold, err)
 	}
 }
+
+// TestPruneEvaluationDrainUsesCreatedAtIndex pins the plan of retention's
+// evaluation DELETE (#297): its inner SELECT finds the old rows through
+// idx_evaluations_created_at (migration 0010) and does not scan the table.
+// created_at is stored after the report BLOB, so a scan reads every
+// report's overflow chain, under the write lock, on every run, even with
+// nothing to delete. The index alone is not enough: with ORDER BY id
+// SQLite still scans (measured in #297), so the statement orders by
+// (created_at, id) as the index does.
+func TestPruneEvaluationDrainUsesCreatedAtIndex(t *testing.T) {
+	s := newTestStore(t)
+	plan := queryPlan(t, s.db, sqliteDialect.evaluationDrain(), formatTime(tBase), pruneBatchRows)
+	if !strings.Contains(plan, "idx_evaluations_created_at") || !strings.Contains(plan, "created_at<?") {
+		t.Errorf("plan = %q, want a search of idx_evaluations_created_at bounded by created_at<?", plan)
+	}
+	// The outer DELETE looks the ids up by primary key. The subquery of
+	// the newest decided evaluations walks the partial index
+	// idx_evaluations_decided, which is not a covering index: its
+	// "ready = 1 OR blockers > 0" predicate is re-checked against the
+	// table row, so each decided evaluation's row is looked up for its
+	// leading columns (never its report overflow). It runs only when the
+	// created_at range finds a row older than the cutoff. A bare
+	// "SCAN evaluations" would be the table itself, reports and all.
+	for _, step := range strings.Split(plan, "; ") {
+		if step == "SCAN evaluations" {
+			t.Errorf("plan step %q scans every evaluation (plan = %q)", step, plan)
+		}
+	}
+	if !strings.Contains(plan, "SCAN evaluations USING INDEX idx_evaluations_decided") {
+		t.Errorf("plan = %q, want the decided-evaluation subquery to walk idx_evaluations_decided", plan)
+	}
+	if strings.Contains(plan, "TEMP B-TREE") {
+		t.Errorf("plan = %q, want no sort: the index delivers the order", plan)
+	}
+}

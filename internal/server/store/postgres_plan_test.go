@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -58,8 +59,10 @@ func TestPostgresEvaluationReadsUseIndexes(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer conn.Close()
-	if _, err := conn.ExecContext(ctx, `SET enable_seqscan = off`); err != nil {
-		t.Fatal(err)
+	for _, set := range []string{`SET enable_seqscan = off`, `SET enable_bitmapscan = off`} {
+		if _, err := conn.ExecContext(ctx, set); err != nil {
+			t.Fatal(err)
+		}
 	}
 	plan := func(query string, args ...any) string {
 		t.Helper()
@@ -152,5 +155,102 @@ func TestMigration0009BackfillsPostgres(t *testing.T) {
 	var nulls int
 	if err := p.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM evaluations WHERE carries_hold IS NULL`).Scan(&nulls); err != nil || nulls != 0 {
 		t.Errorf("rows left NULL = (%d, %v), want 0", nulls, err)
+	}
+}
+
+// TestPostgresPruneEvaluationDrainUsesCreatedAtIndex is
+// TestPruneEvaluationDrainUsesCreatedAtIndex on Postgres (#297): the inner
+// SELECT of retention's evaluation DELETE ordered by (created_at, id)
+// walks idx_evaluations_created_at (migration 0010) bounded by the cutoff
+// and needs no sort of the old rows, so a run with nothing to delete reads
+// the oldest index entries and no report. Sequential and bitmap scans are
+// switched off: on the test's near-empty tables the planner may otherwise
+// prefer a bitmap scan of the same index plus a sort (which also reads only
+// the rows the index matches), and the point here is that the index serves
+// the drain's (created_at, id) order. The statement's other subqueries may
+// plan as they like.
+func TestPostgresPruneEvaluationDrainUsesCreatedAtIndex(t *testing.T) {
+	ctx := context.Background()
+	p, err := OpenPostgres(pgTestSchema(t, "drainplan"))
+	if err != nil {
+		t.Fatalf("OpenPostgres: %v", err)
+	}
+	defer p.Close()
+	conn, err := p.db.Conn(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	for _, set := range []string{`SET enable_seqscan = off`, `SET enable_bitmapscan = off`} {
+		if _, err := conn.ExecContext(ctx, set); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rows, err := conn.QueryContext(ctx, `EXPLAIN `+pgDialect.evaluationDrain(), tBase.UTC(), pruneBatchRows)
+	if err != nil {
+		t.Fatalf("EXPLAIN: %v", err)
+	}
+	defer rows.Close()
+	var lines []string
+	for rows.Next() {
+		var line string
+		if err := rows.Scan(&line); err != nil {
+			t.Fatal(err)
+		}
+		lines = append(lines, strings.TrimSpace(line))
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	plan := strings.Join(lines, "; ")
+	if !strings.Contains(plan, "Index Scan using idx_evaluations_created_at") && !strings.Contains(plan, "Index Only Scan using idx_evaluations_created_at") {
+		t.Errorf("plan = %q, want an index scan on idx_evaluations_created_at", plan)
+	}
+	// No sort on the drain's order columns at all: a sort by created_at
+	// means the index's order went unused, and a sort by id means the drain
+	// is ordered by id again (#297's bug), which the index cannot serve. The
+	// other subqueries group by cluster_id and target, which this ignores.
+	sortsDrain := regexp.MustCompile(`created_at|\.id(,|$)`)
+	for _, line := range lines {
+		if strings.HasPrefix(line, "Sort Key:") && sortsDrain.MatchString(line) {
+			t.Errorf("plan = %q: %q, want the drain read in idx_evaluations_created_at's order with no sort", plan, line)
+		}
+	}
+}
+
+// TestPostgresMigration0010AcceptsAnIndexBuiltConcurrently: an operator who
+// built idx_evaluations_created_at with CREATE INDEX CONCURRENTLY before the
+// upgrade (docs/operations/upgrade.md, so the build does not block writes
+// to evaluations) gets a migration 0010 that succeeds, records itself and
+// leaves the one index, not a failure of the replica's start.
+func TestPostgresMigration0010AcceptsAnIndexBuiltConcurrently(t *testing.T) {
+	ctx := context.Background()
+	dsn := pgTestSchema(t, "mig10")
+	db, err := sql.Open("pgx", dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	sub, err := fs.Sub(pgMigrationsFS, "pgmigrations")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := migratePostgres(ctx, db, migrationsBefore(t, sub, "0010")); err != nil {
+		t.Fatalf("migrate to 0009: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `CREATE INDEX CONCURRENTLY idx_evaluations_created_at ON evaluations (created_at, id)`); err != nil {
+		t.Fatalf("CREATE INDEX CONCURRENTLY: %v", err)
+	}
+	p, err := OpenPostgres(dsn) // applies 0010
+	if err != nil {
+		t.Fatalf("OpenPostgres with the index already built: %v", err)
+	}
+	defer p.Close()
+	var recorded, indexes int
+	if err := p.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM schema_migrations WHERE version = '0010_evaluation_created_at.sql'`).Scan(&recorded); err != nil || recorded != 1 {
+		t.Errorf("migration 0010 recorded = (%d, %v), want 1", recorded, err)
+	}
+	if err := p.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pg_indexes WHERE schemaname = current_schema() AND indexname = 'idx_evaluations_created_at'`).Scan(&indexes); err != nil || indexes != 1 {
+		t.Errorf("idx_evaluations_created_at count = (%d, %v), want 1", indexes, err)
 	}
 }

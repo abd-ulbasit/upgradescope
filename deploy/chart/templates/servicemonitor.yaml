@@ -77,6 +77,9 @@ spec:
             key: {{ . | quote }}
         {{- end }}
       {{- end }}
+      {{- if and (not (include "upgradescope.readTokenEnabled" .)) (not (include "upgradescope.readAnonymous" .)) }}
+      {{- fail "metrics.serviceMonitor scrapes the server's /metrics, which needs a read credential, and with no server.readToken the chart closes the read API (--require-read-credential) and the ServiceMonitor can send only the chart's read token: set server.readToken (or server.existingSecret with readTokenFromSecret), or server.allowAnonymousRead=true to leave the read API open" }}
+      {{- end }}
       {{- if include "upgradescope.readTokenEnabled" . }}
       # The read token guards /metrics too (per-cluster scores).
       authorization:

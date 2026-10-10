@@ -75,6 +75,7 @@ done <<'EOF'
 default|
 server|--set server.enabled=true --set server.ingestToken=t
 server-readtoken|--set server.enabled=true --set server.ingestToken=t --set server.readToken=r
+server-open|--set server.enabled=true --set server.ingestToken=t --set server.allowAnonymousRead=true
 server-existing-secret|--set server.enabled=true --set server.existingSecret=s --set agent.existingSecret=s
 server-no-persistence|--set server.enabled=true --set server.ingestToken=t --set server.persistence.enabled=false
 server-targets-notify|--set server.enabled=true --set server.ingestToken=t --set server.targets={1.37} --set server.webhook=https://hooks.example.com/x

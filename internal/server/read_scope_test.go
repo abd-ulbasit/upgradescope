@@ -798,11 +798,14 @@ func TestFleetWideTokensReadAsBefore(t *testing.T) {
 // A revoked read token reads nothing, and revoking the last one does not
 // open the read API again.
 func TestRevokedReadTokenIsRejected(t *testing.T) {
-	_, st, ts, _ := scopeServer(t, func(c *Config) { c.ReadToken = "" })
+	s, st, ts, _ := scopeServer(t, func(c *Config) { c.ReadToken = "" })
+	clock := &fakeClock{t: time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC)}
+	s.openClock = clock.now
 	if resp, _ := fetch(t, ts, "/api/v1/clusters", ""); resp.StatusCode != http.StatusOK {
 		t.Fatalf("no read credential at all: anonymous read = %d, want 200 (open)", resp.StatusCode)
 	}
 	id := mintReadToken(t, st, "pay-tok", "payments")
+	clock.set(clock.now().Add(readOpenWindow)) // the open answer lapses (readOpen)
 	if resp, _ := fetch(t, ts, "/api/v1/clusters", ""); resp.StatusCode != http.StatusUnauthorized {
 		t.Errorf("with a read token minted: anonymous read = %d, want 401", resp.StatusCode)
 	}

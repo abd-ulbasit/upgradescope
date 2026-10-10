@@ -42,7 +42,9 @@ for a single-user workstation. Add `--read-token` (and send it as
 `Authorization: Bearer <token>`) wherever that is not acceptable.
 
 In a cluster, the chart runs it next to the agent
-(`--set server.enabled=true`) or alone as a fleet hub with Postgres, an
+(`--set server.enabled=true`; with no `server.readToken` it runs with
+`--require-read-credential`, so reads are `401` until you mint a read
+token, which the install notes show how to do) or alone as a fleet hub with Postgres, an
 Ingress and TLS; the [chart README](https://github.com/abd-ulbasit/upgradescope/blob/main/deploy/chart/README.md#fleet-hub-server-only)
 has the hub recipe.
 

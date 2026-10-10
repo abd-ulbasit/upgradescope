@@ -361,7 +361,7 @@ func createReadToken(cmd *cobra.Command, flags dbFlags, raw []string) error {
 	fmt.Fprintln(cmd.OutOrStdout(), token)
 	fmt.Fprintf(cmd.ErrOrStderr(),
 		"read token id %d (prefix %s) for %s created — shown once: the server stores its sha256 hash and its first 8 characters, never the token; "+
-			"from now on the server's read API needs a credential\n",
+			"the server's read API needs a credential while this database lasts; run serve with --require-read-credential so a lost or restored database cannot reopen it\n",
 		id, store.TokenPrefix(token), scope)
 	return nil
 }
