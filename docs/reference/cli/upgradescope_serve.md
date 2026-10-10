@@ -43,7 +43,7 @@ upgradescope serve [flags]
 ### Options
 
 ```
-      --admin-token string             bearer token for cluster administration: DELETE and PATCH (rename) /api/v1/clusters/{id}, 'upgradescope clusters delete|rename --server'; it also reads (empty = administration refused) (visible in process listings: prefer $UPGRADESCOPE_ADMIN_TOKEN or --admin-token-file)
+      --admin-token string             bearer token for cluster administration: DELETE and PATCH (rename) /api/v1/clusters/{id}, 'upgradescope clusters delete|rename --server-url'; it also reads (empty = administration refused) (visible in process listings: prefer $UPGRADESCOPE_ADMIN_TOKEN or --admin-token-file)
       --admin-token-file string        read --admin-token from this file, e.g. a mounted Secret (surrounding whitespace is trimmed); the file is re-read when it changes (checked at most every 5s, when it is next needed), so a rotated Secret needs no restart. A value from the flag or the environment is read once
       --allow-anonymous-read           serve the read API and /api/v1/gate without a read token on a non-loopback --listen address (it is open only while no read credential exists: --read-token, a read token minted in the database, or a trusted team header; a lost or restored database reopens it, and a request that presents a bearer nothing knows gets 401); anonymous reads must name a host the server answers for (see --allowed-host); excludes --require-read-credential
       --allowed-host strings           a host name (or IP) requests may name in their Host header, any port, repeatable or comma separated (default $UPGRADESCOPE_ALLOWED_HOSTS): on a loopback --listen, with --trust-team-header, or for an anonymous request while the read API is open (any --listen address), any other Host than localhost, a loopback address, the --listen host (not 0.0.0.0 or ::) or the address the request arrived on gets 421, which stops DNS-rebinding pages; name the Service, Ingress or proxy host the server is reached under
@@ -65,7 +65,7 @@ upgradescope serve [flags]
       --slack-webhook string           Slack incoming-webhook URL for delta notifications (visible in process listings: prefer $UPGRADESCOPE_SLACK_WEBHOOK or --slack-webhook-file)
       --slack-webhook-file string      read --slack-webhook from this file, e.g. a mounted Secret (surrounding whitespace is trimmed); the file is re-read when it changes (checked at most every 5s, when it is next needed), so a rotated Secret needs no restart. A value from the flag or the environment is read once
       --stale-after duration           mark a cluster stale (API, dashboard data, /metrics) when its agent has not pushed for this long; agents push at least about every 70m by default (default 2h0m0s)
-      --targets string                 extra target versions evaluated on every snapshot, CSV, e.g. 1.37,1.38; at most 4 distinct minors
+      --targets strings                extra target versions evaluated on every snapshot, CSV or repeated, e.g. 1.37,1.38; at most 4 distinct minors
       --team-map string                YAML file of {pattern, team} namespace globs overriding team labels (first match wins)
       --tls-cert-file string           PEM certificate (chain) to serve HTTPS directly, TLS 1.2 minimum; requires --tls-key-file; a new handshake re-reads the pair when either file changed (checked at most once a second), so a renewal needs no restart
       --tls-key-file string            PEM private key for --tls-cert-file

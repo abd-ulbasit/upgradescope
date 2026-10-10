@@ -39,7 +39,7 @@ type serveOptions struct {
 	slackWebhook string
 	webhook      string
 	webhookKey   string
-	targets      string
+	targets      []string
 	teamMap      string
 	registryDir  string // --registry-dir: extra add-on registry entries
 
@@ -286,7 +286,7 @@ gets 401, and an anonymous request must name a host the server answers for
 		addSecretFlag(cmd, &opts.readToken, "read-token", "UPGRADESCOPE_READ_TOKEN",
 			"bearer token for the read API and /api/v1/gate (empty = OPEN read access unless a read token is minted in the database; refused on non-loopback --listen without --allow-anonymous-read; --require-read-credential keeps it closed whatever the database holds)"),
 		addSecretFlag(cmd, &opts.adminToken, "admin-token", "UPGRADESCOPE_ADMIN_TOKEN",
-			"bearer token for cluster administration: DELETE and PATCH (rename) /api/v1/clusters/{id}, 'upgradescope clusters delete|rename --server'; it also reads (empty = administration refused)"),
+			"bearer token for cluster administration: DELETE and PATCH (rename) /api/v1/clusters/{id}, 'upgradescope clusters delete|rename --server-url'; it also reads (empty = administration refused)"),
 		addSecretFlag(cmd, &opts.slackWebhook, "slack-webhook", "UPGRADESCOPE_SLACK_WEBHOOK",
 			"Slack incoming-webhook URL for delta notifications"),
 		addSecretFlag(cmd, &opts.webhook, "webhook", "UPGRADESCOPE_WEBHOOK_URL",
@@ -305,7 +305,7 @@ gets 401, and an anonymous request must name a host the server answers for
 		"anonymous reads must name a host the server answers for (see --allowed-host); excludes --require-read-credential")
 	cmd.Flags().BoolVar(&opts.requireReadCredential, "require-read-credential", false, "never open the read API: a read with no credential, or with a bearer nothing knows, gets 401 even when the database holds no read token "+
 		"(a lost or restored database cannot reopen it); serve warns at startup while no credential exists yet, and mint the first with: upgradescope tokens create --read --teams '*' (same --db or --db-url); or set --read-token; excludes --allow-anonymous-read")
-	cmd.Flags().StringVar(&opts.targets, "targets", "", "extra target versions evaluated on every snapshot, CSV, e.g. 1.37,1.38; at most 4 distinct minors")
+	cmd.Flags().StringSliceVar(&opts.targets, "targets", nil, "extra target versions evaluated on every snapshot, CSV or repeated, e.g. 1.37,1.38; at most 4 distinct minors")
 	cmd.Flags().StringVar(&opts.trustTeamHeader, "trust-team-header", "",
 		"DANGEROUS unless the proxy strips client-supplied copies: scope a read from a --trusted-proxy-cidr peer to the teams this request header lists, comma separated and each percent-encoded where it must be "+
 			"(an authenticating proxy's group header, e.g. X-Forwarded-Groups; never the whole fleet, '*' included); needs --trusted-proxy-cidr")
@@ -456,10 +456,7 @@ func validateServeOptions(opts *serveOptions) error {
 		}
 		opts.parsedTeamMap = tm
 	}
-	if opts.targets == "" {
-		return nil
-	}
-	for _, raw := range strings.Split(opts.targets, ",") {
+	for _, raw := range opts.targets {
 		v, err := inventory.ParseTarget(strings.TrimSpace(raw))
 		if err != nil {
 			return fmt.Errorf("invalid --targets entry %q: %w", raw, err)

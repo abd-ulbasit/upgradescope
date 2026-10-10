@@ -457,3 +457,46 @@ func TestMemoryLimitFromCgroup(t *testing.T) {
 		t.Fatal("applyMemoryLimit overrode an explicit GOMEMLIMIT")
 	}
 }
+
+// --targets is a repeatable list like the agent's: repeated flags
+// accumulate (the last one no longer wins), and CSV still works, alone or
+// mixed with repeats.
+func TestServeTargetsRepeatAndCSV(t *testing.T) {
+	want := []inventory.Version{{Major: 1, Minor: 37}, {Major: 1, Minor: 38}}
+	for name, args := range map[string][]string{
+		"repeated":      {"--targets", "1.37", "--targets", "1.38"},
+		"csv":           {"--targets", "1.37,1.38"},
+		"equals form":   {"--targets=1.37,1.38"},
+		"mixed":         {"--targets", "1.37", "--targets", "1.38,1.37"},
+		"spaces in csv": {"--targets", "1.37, 1.38"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var got []inventory.Version
+			err := execServe(t, append([]string{"--ingest-token", "t"}, args...),
+				func(_ context.Context, opts serveOptions) error {
+					got = opts.parsedTargets
+					return nil
+				})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(got, want) {
+				t.Fatalf("parsedTargets = %v, want %v", got, want)
+			}
+		})
+	}
+	// The cap still counts distinct minors across repeats.
+	err := execServe(t, []string{"--ingest-token", "t", "--targets", "1.36,1.37", "--targets", "1.38,1.39", "--targets", "1.40"}, serveOK())
+	if err == nil || !strings.Contains(err.Error(), "at most 4") {
+		t.Fatalf("5 minors over repeated flags: err = %v, want the limit of 4", err)
+	}
+}
+
+// The chart renders --targets=1.37,1.38 (one CSV argument): it parses.
+func TestServeTargetsAsTheChartRendersThem(t *testing.T) {
+	var got []inventory.Version
+	if err := execServe(t, []string{"--ingest-token", "t", "--targets=1.37,1.38"},
+		func(_ context.Context, opts serveOptions) error { got = opts.parsedTargets; return nil }); err != nil || len(got) != 2 {
+		t.Fatalf("--targets=1.37,1.38: (%v, %v), want two targets", got, err)
+	}
+}
