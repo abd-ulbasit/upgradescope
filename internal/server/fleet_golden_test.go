@@ -19,8 +19,8 @@ import (
 // fixture and this file's dump half copied in). A fleet-wide read must
 // still answer them byte for byte. Regenerate them only on a commit
 // without read scopes, or the test proves nothing. Fields added since
-// (fleet-teams.json's `verdict` and `excluded`, shared-history.json's `verdict`, #243) are written in by
-// hand, and the unowned team bucket's key was renamed "(unattributed)"
+// (fleet-teams.json's `verdict` and `excluded`, shared-history.json's `verdict`, #243;
+// shared.json's `volumes` capability, #351) are written in by hand, and the unowned team bucket's key was renamed "(unattributed)"
 // the same way: nothing else in them changed.
 const fleetGoldenDir = "testdata/fleet-wide"
 

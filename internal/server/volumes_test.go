@@ -1,0 +1,116 @@
+package server
+
+import (
+	"net/http"
+	"strings"
+	"testing"
+
+	"github.com/abd-ulbasit/upgradescope/internal/inventory"
+	"github.com/abd-ulbasit/upgradescope/internal/kb"
+)
+
+// #351: in-tree volume plugins at ingest.
+
+func volumesKB() kb.KB {
+	k := testKB()
+	k.VolumePlugins = kb.VolumePlugins()
+	return k
+}
+
+func glusterInventory() inventory.Inventory {
+	inv := testInventory()
+	inv.VolumePlugins = []inventory.VolumePluginUse{{Plugin: "glusterfs", Count: 2, Namespaces: map[string]int{"payments-prod": 2}}}
+	return inv
+}
+
+// An inventory from an agent that predates the volumes capability (a
+// v0.1.x agent's, a v0.2.0 release candidate's, or any that does not
+// report it) reads as not assessed for volume plugins, never as clean, and
+// the gap is optional: the verdict is the one its other data gives. The
+// current agent's glusterfs pods block.
+func TestOlderAgentVolumesNotAssessed(t *testing.T) {
+	h := newHarness(t, Config{KB: volumesKB()}, aug1)
+	for _, agent := range []string{"0.1.1", "dev", "0.2.0-rc.2", "v0.2.0"} {
+		cluster := "old-" + strings.NewReplacer(".", "-", "v", "").Replace(agent)
+		inv := unmarked(testInventory())
+		if agent == "v0.2.0" {
+			inv = testInventory() // stamped, as a build without the capability would be
+		}
+		delete(inv.Capabilities, inventory.CapVolumes)
+		if code, out := h.pushAs(cluster, agent, inv); code != http.StatusAccepted {
+			t.Fatalf("push as %q = %d %v", agent, code, out)
+		}
+		rep := h.report(cluster, "1.34")
+		reason, required := rep.gap(string(inventory.CapVolumes))
+		if !strings.Contains(reason, "predates in-tree volume plugin checks") || required {
+			t.Errorf("agent %q: volumes gap = %q (required %v), want the optional predates gap", agent, reason, required)
+		}
+	}
+
+	if code, out := h.pushAs("current", "v0.2.0", glusterInventory()); code != http.StatusAccepted {
+		t.Fatalf("push = %d %v", code, out)
+	}
+	rep := h.report("current", "1.34")
+	if rep.Verdict != "blocked" {
+		t.Errorf("current agent with glusterfs pods: verdict %s (findings %+v), want blocked", rep.Verdict, rep.Findings)
+	}
+	if reason, _ := rep.gap(string(inventory.CapVolumes)); reason != "" {
+		t.Errorf("current agent: volumes gap %q, want none", reason)
+	}
+}
+
+// Volume plugin entries are validated like API usage entries: a namespace
+// key that is no namespace name is refused (422) before anything is stored.
+func TestIngestRefusesInvalidVolumePlugins(t *testing.T) {
+	h := newHarness(t, Config{KB: volumesKB()}, aug1)
+	inv := glusterInventory()
+	inv.VolumePlugins[0].Namespaces = map[string]int{"Not_A_Namespace": 1}
+	code, out := h.pushAs("bad", "v0.2.0", inv)
+	if code != http.StatusUnprocessableEntity || !strings.Contains(out["error"].(string), "volumePlugins[0].namespaces") {
+		t.Errorf("push = %d %v, want 422 naming volumePlugins[0].namespaces", code, out)
+	}
+}
+
+// An agent newer than the server pushes fields and capabilities the server
+// does not know: decoding ignores them, so the push is accepted, and an
+// unknown available capability is no gap. That is why the volumes
+// capability needed no collectorSchema bump, which would make an older
+// server refuse every push of a newer agent.
+func TestIngestAcceptsUnknownFieldsAndCapabilities(t *testing.T) {
+	ts, done := fleetFixture(t)
+	defer done()
+	body := `{"schemaVersion":1,"clusterName":"newer","agentVersion":"v0.3.0","kbVersion":"k","inventory":{` +
+		`"schemaVersion":1,"collectorSchema":1,"clusterId":"uid-newer","serverVersion":"v1.34.2",` +
+		`"capabilities":{"api-usage":{"available":true},"versions":{"available":true},"addons":{"available":true},` +
+		`"crds":{"available":true},"volumes":{"available":true},"future-capability":{"available":true}},` +
+		`"futureField":[{"anything":1}],"nodes":[{"name":"n","kubeletVersion":"v1.34.2"}]}}`
+	resp, out := postSnapshot(t, ts, "ingest-tok", []byte(body), false)
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("push with unknown fields = %d %v, want 202", resp.StatusCode, out)
+	}
+}
+
+// The gate with ?cluster= judges the manifests' volume plugins with the
+// cluster's: the proposed state names both, and neither input changes.
+func TestMergeManifestsVolumePlugins(t *testing.T) {
+	cluster := glusterInventory()
+	manifests := inventory.Inventory{
+		Capabilities: map[inventory.Capability]inventory.CapabilityStatus{inventory.CapVolumes: {Available: true}},
+		VolumePlugins: []inventory.VolumePluginUse{
+			{Plugin: "gitRepo", Count: 1, Namespaces: map[string]int{"shop": 1}, Objects: []inventory.ObjectRef{{Namespace: "shop", Name: "web", Line: 1}}},
+			{Plugin: "glusterfs", Count: 1, Namespaces: map[string]int{"shop": 1}, Objects: []inventory.ObjectRef{{Namespace: "shop", Name: "web", Line: 1}}},
+		},
+	}
+	proposed := cluster
+	mergeManifests(&proposed, manifests)
+	if len(proposed.VolumePlugins) != 2 || proposed.VolumePlugins[0].Plugin != "gitRepo" {
+		t.Fatalf("VolumePlugins = %+v, want gitRepo and glusterfs", proposed.VolumePlugins)
+	}
+	g := proposed.VolumePlugins[1]
+	if g.Count != 3 || g.Namespaces["payments-prod"] != 2 || g.Namespaces["shop"] != 1 || len(g.Objects) != 1 {
+		t.Errorf("glusterfs = %+v, want the cluster's 2 pods and the manifest's object", g)
+	}
+	if len(cluster.VolumePlugins) != 1 || cluster.VolumePlugins[0].Count != 2 || len(cluster.VolumePlugins[0].Namespaces) != 1 {
+		t.Error("the cluster's inventory must not be modified")
+	}
+}
