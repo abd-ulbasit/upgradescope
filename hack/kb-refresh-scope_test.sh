@@ -487,8 +487,9 @@ mkdir -p "$work/bin"
 # staging branch exists; ref-error: looking it up fails with a 500), list.json (gh run list's JSON), status.N (the n-th
 # run reading of the build run, "<status> <conclusion>", the last once they
 # run out), run.json / jobs.json / artifacts.json / logs.txt (the build run as
-# the verify job reads it; logs-fail holds the number of log fetches that fail first). `gh api` / `gh run list` apply --jq with jq, as gh
-# does.
+# the verify job reads it). `gh api` / `gh run list` apply --jq with jq, as gh
+# does. The job's log is the one thing gh never serves here (it refuses a
+# response with escape sequences, as the runner's does); the stub curl serves it.
 cat >"$work/bin/gh" <<'STUB'
 #!/usr/bin/env bash
 echo "gh $*" >>"$GH_LOG"
@@ -516,19 +517,34 @@ case "$1 $2" in
   "api repos/o/r/actions/runs/777/jobs?per_page=100") jqf "$@" <"$STUB/jobs.json" ;;
   "api repos/o/r/actions/runs/777/artifacts?per_page=100") jqf "$@" <"$STUB/artifacts.json" ;;
   "api repos/o/r/actions/jobs/13/logs")
-    if [ -e "$STUB/logs-fail" ]; then
-      n=$(($(cat "$STUB/logs.n" 2>/dev/null || echo 0) + 1)); echo "$n" >"$STUB/logs.n"
-      if [ "$n" -le "$(cat "$STUB/logs-fail")" ]; then echo 'gh: Bad Gateway (HTTP 502)' >&2; exit 1; fi
-    fi
-    cat "$STUB/logs.txt" ;;
+    # What the runner's gh does with a job log: it holds ANSI escapes, so gh
+    # refuses to print it. The verify job must not depend on gh for the log.
+    echo 'the response contains terminal escape sequences; pass --allow-escape-sequences to output it anyway' >&2
+    exit 1 ;;
   *) echo "stub gh: unexpected call: $*" >&2; exit 2 ;;
 esac
+STUB
+# curl: the seal job's log, as the blob store serves it after the redirect.
+# Logs each call's arguments. Answers the one URL the verify job may fetch,
+# with the token it holds; logs-fail holds the number of calls that fail
+# first (curl -f: a failed HTTP status exits 22, nothing on stdout).
+cat >"$work/bin/curl" <<'STUB'
+#!/usr/bin/env bash
+echo "curl $*" >>"$CURL_LOG"
+url=${!#}
+[ "$url" = "https://api.github.com/repos/o/r/actions/jobs/13/logs" ] || { echo "stub curl: unexpected url: $url" >&2; exit 2; }
+case " $* " in *" -H Authorization: Bearer stub "*) ;; *) echo "stub curl: no Authorization header" >&2; exit 22 ;; esac
+if [ -e "$STUB/logs-fail" ]; then
+  n=$(($(cat "$STUB/logs.n" 2>/dev/null || echo 0) + 1)); echo "$n" >"$STUB/logs.n"
+  if [ "$n" -le "$(cat "$STUB/logs-fail")" ]; then echo 'curl: (22) The requested URL returned error: 502' >&2; exit 22; fi
+fi
+cat "$STUB/logs.txt"
 STUB
 cat >"$work/bin/sleep" <<'STUB'
 #!/usr/bin/env bash
 echo "$*" >>"$SLEEP_LOG"
 STUB
-chmod +x "$work/bin/gh" "$work/bin/sleep"
+chmod +x "$work/bin/gh" "$work/bin/curl" "$work/bin/sleep"
 sha=1111111111111111111111111111111111111111
 out() { sort "$work/bc.out" | tr '\n' ' ' | sed 's/ $//'; }
 
@@ -672,6 +688,7 @@ v_reset() {
   jq -n --arg p "$p" '{artifacts: [{name: ("kb-refresh-" + $p), expired: false}]}' >"$STUB/artifacts.json"
   {
     echo "2026-10-12T06:20:00.1000000Z ##[group]Run set -euo pipefail"
+    printf '2026-10-12T06:20:00.1000002Z \033[36;1mhash=$(sha256sum patch)\033[0m\n'
     echo "2026-10-12T06:20:00.1000001Z   echo \"kb-refresh-patch-sha256 \$PIPELINE \$hash\""
     echo "2026-10-12T06:20:00.2000000Z kb-refresh-patch-sha256 $p $good_digest"
   } >"$STUB/logs.txt"
@@ -688,8 +705,8 @@ v_case() {
     jq -c "$filter" "$STUB/$file" >"$STUB/tmp" && mv "$STUB/tmp" "$STUB/$file"
   done
   vstep "$p"
-  : >"$work/v.gh"; : >"$work/v.out"; V_RC=0
-  PATH="$work/bin:$PATH" GH_LOG="$work/v.gh" SLEEP_LOG=/dev/null GITHUB_OUTPUT="$work/v.out" GH_REPO=o/r SHA=$sha PIPELINE=$p REQUEST=${V_REQUEST:-55-1} \
+  : >"$work/v.gh"; : >"$work/v.curl"; : >"$work/v.out"; V_RC=0
+  PATH="$work/bin:$PATH" GH_LOG="$work/v.gh" CURL_LOG="$work/v.curl" SLEEP_LOG=/dev/null GITHUB_OUTPUT="$work/v.out" GH_REPO=o/r SHA=$sha PIPELINE=$p REQUEST=${V_REQUEST:-55-1} \
     BUILD_BRANCH=$branch RUN_ID=777 GH_TOKEN=stub bash --noprofile --norc -e "$work/verify-$p.sh" >"$work/v.log" 2>&1 || V_RC=$?
   case $want in
     pass) [ "$V_RC" = 0 ] && [ "$(cat "$work/v.out")" = "sha256=$good_digest" ] ;;
@@ -739,6 +756,22 @@ for p in api-lifecycle registry; do
   grep -q "could not fetch the seal job's log" "$work/v.log" && ok "verify($p): a log fetch failure is reported as one, not as a missing digest" ||
     fail "verify($p): a log fetch failure is not reported as one: $(tail -3 "$work/v.log")"
 done
+# The log is fetched with curl, not gh (the runner's gh refuses a response
+# holding terminal escape sequences, and a job log is full of them): the
+# stub gh refuses the logs endpoint outright, so every passing case above
+# already proves the verify job does not need gh for it. These pin the rest.
+for p in api-lifecycle registry; do
+  v_case "a log full of ANSI escape sequences is read, with gh refusing to print it" "$p" pass
+  grep -q 'logs' "$work/v.gh" && fail "verify($p): gh was asked for the job log" || ok "verify($p): gh is never asked for the job log"
+  [ "$(wc -l <"$work/v.curl" | tr -d ' ')" = 1 ] && ok "verify($p): the log is fetched once when the first fetch works" || fail "verify($p): curl calls: $(cat "$work/v.curl")"
+  c=$(cat "$work/v.curl")
+  case " $c " in *" -L "*|*" -fsSL "*) ok "verify($p): curl follows the redirect to the blob store" ;; *) fail "verify($p): curl does not follow redirects: $c" ;; esac
+  case "$c" in *location-trusted*) fail "verify($p): curl forwards the token across hosts (--location-trusted)" ;; *) ok "verify($p): curl does not forward the token across hosts" ;; esac
+  case "$c" in *"-f"*) ok "verify($p): curl fails on an HTTP error status" ;; *) fail "verify($p): curl does not fail on HTTP errors: $c" ;; esac
+  V_LOGS_FAIL=3 v_case "a seal log that fails to fetch three times is refused as a fetch failure" "$p" refuse
+  [ "$(wc -l <"$work/v.curl" | tr -d ' ')" = 3 ] && ok "verify($p): three log fetches are attempted, no more" || fail "verify($p): curl calls: $(cat "$work/v.curl")"
+  grep -q "could not fetch the seal job's log" "$work/v.log" && ok "verify($p): three failed fetches are reported as a fetch failure" || fail "verify($p): not reported as a fetch failure: $(tail -3 "$work/v.log")"
+done
 # The log cases edit logs.txt (not JSON), so they are written out.
 l_case() { # label pipeline want <log lines...>
   local label=$1 p=$2 want=$3
@@ -747,7 +780,7 @@ l_case() { # label pipeline want <log lines...>
   printf '%s\n' "$@" >"$STUB/logs.txt"
   vstep "$p"
   : >"$work/v.out"; V_RC=0
-  PATH="$work/bin:$PATH" GH_LOG="$work/v.gh" SLEEP_LOG=/dev/null GITHUB_OUTPUT="$work/v.out" GH_REPO=o/r SHA=$sha PIPELINE=$p REQUEST=${V_REQUEST:-55-1} \
+  PATH="$work/bin:$PATH" GH_LOG="$work/v.gh" CURL_LOG="$work/v.curl" SLEEP_LOG=/dev/null GITHUB_OUTPUT="$work/v.out" GH_REPO=o/r SHA=$sha PIPELINE=$p REQUEST=${V_REQUEST:-55-1} \
     BUILD_BRANCH=$branch RUN_ID=777 GH_TOKEN=stub bash --noprofile --norc -e "$work/verify-$p.sh" >"$work/v.log" 2>&1 || V_RC=$?
   case $want in
     pass) [ "$V_RC" = 0 ] && [ "$(cat "$work/v.out")" = "sha256=$good_digest" ] ;;
@@ -777,7 +810,7 @@ for p in api-lifecycle registry; do
   { echo "2026-10-12T06:20:00.1Z ##[group]Run echo"; echo "2026-10-12T06:20:00.2Z $(cat "$work/seal.out")"; } >"$STUB/logs.txt"
   vstep "$p"
   : >"$work/v.out"; V_RC=0
-  PATH="$work/bin:$PATH" GH_LOG="$work/v.gh" SLEEP_LOG=/dev/null GITHUB_OUTPUT="$work/v.out" GH_REPO=o/r SHA=$sha PIPELINE=$p REQUEST=${V_REQUEST:-55-1} \
+  PATH="$work/bin:$PATH" GH_LOG="$work/v.gh" CURL_LOG="$work/v.curl" SLEEP_LOG=/dev/null GITHUB_OUTPUT="$work/v.out" GH_REPO=o/r SHA=$sha PIPELINE=$p REQUEST=${V_REQUEST:-55-1} \
     BUILD_BRANCH=$branch RUN_ID=777 GH_TOKEN=stub bash --noprofile --norc -e "$work/verify-$p.sh" >"$work/v.log" 2>&1 || V_RC=$?
   digest=$(sed -n 's/^sha256=//p' "$work/v.out")
   step 'Check the patch against the digest' < <(job "$entry" "$p-verify") | run_block >"$work/cmp-$p.sh"
