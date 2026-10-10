@@ -12,6 +12,10 @@ score and verdict.
 Run it once with 'scan', continuously in the cluster with 'agent', and across
 a fleet with 'serve'.
 
+```
+upgradescope [flags]
+```
+
 ### Examples
 
 ```

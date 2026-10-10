@@ -118,11 +118,11 @@ upgradescope scan [flags]
       --from string                with --plan and --files: the minor the cluster runs now, where the plan starts (a live scan reads it from the cluster)
   -h, --help                       help for scan
       --kubeconfig string          path to kubeconfig (default: standard loading rules)
-      --output string              output format: table|json|sarif|markdown|junit|gitlab-codequality (default "table")
+  -o, --output string              output format: table|json|sarif|markdown|junit|gitlab-codequality (default "table")
       --plan                       also judge each control-plane upgrade on the way to --target, one minor at a time, listing each finding at the first upgrade it affects (table, markdown, json)
       --registry-dir string        extra add-on registry entries: one <id>.yaml file or a directory of them, in the schema of registry/CONTRIBUTING.md and validated like the embedded entries; an entry with an embedded id replaces it
       --request-timeout duration   give up on a single API request after this long (0 = no per-request limit) (default 30s)
-      --target string              target Kubernetes minor version, e.g. 1.36 (required)
+      --target string              target Kubernetes minor version, e.g. 1.37 (required)
       --team-label string          namespace label used for team attribution (live scans only: --files mode reads no Namespace objects, so all its findings are unattributed) (default "team")
       --write-baseline string      also write this scan's JSON report to this path, for a later --baseline
 ```
