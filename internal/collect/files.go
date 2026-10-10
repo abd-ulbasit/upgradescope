@@ -96,7 +96,10 @@ const jsonPeek = 4096
 // numbers (JSON is a YAML subset), and lines are counted across the stream
 // so every object can be located. Each is also decoded by kubectl's own
 // decoder, which the yaml.v3 reading is checked against (see decoded):
-// what kubectl would send is never silently dropped.
+// what kubectl would send is never silently dropped. A YAML document is
+// parsed once, though: kubectl's YAML-to-JSON step is made from the nodes
+// yaml.v3 read when that gives the JSON kubectl's own would (see
+// treeJSONConverter), and only otherwise from the text again.
 //
 // A document that is not a mapping with apiVersion and kind is not a
 // Kubernetes object (values.yaml, Chart.yaml, workflows, kustomize patches,
@@ -112,7 +115,19 @@ func parseManifestStream(r io.Reader) (objs []manifestObject, ev addOnEvidence, 
 	if err != nil {
 		return nil, addOnEvidence{}, nil, err
 	}
-	p := &streamParser{data: data}
+	p := readStream(data)
+	return p.objs, p.ev, p.bad, nil
+}
+
+// reparseDocuments is set by tests only: kubectl's decoder then reads every
+// document's text itself, as it did before a document was parsed once
+// (#285), which is the reference the tests hold the single parse to.
+var reparseDocuments = false
+
+// readStream decodes one stream (see parseManifestStream) and returns the
+// parser that holds what it found.
+func readStream(data []byte) *streamParser {
+	p := &streamParser{data: data, reparse: reparseDocuments}
 	yamlFrom := 0
 	if utilyaml.IsJSONBuffer(data[:min(len(data), jsonPeek)]) {
 		yamlFrom = p.jsonStream()
@@ -120,7 +135,7 @@ func parseManifestStream(r io.Reader) (objs []manifestObject, ev addOnEvidence, 
 	if yamlFrom >= 0 {
 		p.yamlStream(yamlFrom)
 	}
-	return p.objs, p.ev, p.bad, nil
+	return p
 }
 
 // streamParser holds one stream being decoded and what was found in it.
@@ -132,6 +147,12 @@ type streamParser struct {
 	objs              []manifestObject
 	ev                addOnEvidence
 	bad               []docError
+	// reparse (reparseDocuments, for tests) makes kubectl's decoder read
+	// every document's text itself (see kubectlFor); unset, it is given
+	// the JSON made of the tree the walk has already read, where that is
+	// certain to be the same.
+	reparse bool
+	toJSON  treeJSONConverter
 }
 
 // addEvidence adds the add-on evidence of objects kubectl's decoder
@@ -306,8 +327,18 @@ func (p *streamParser) document(start, end int, isJSON bool) {
 //   - When the walk refuses the document (an unrendered template, items
 //     through an alias), or neither can read it, it is not assessed; what
 //     kubectl's decoder found in it is named with its text.
+//
+// root is the first node of text itself, so kubectl's decoder is given the
+// JSON made of root rather than parse text again (see kubectlFor).
 func (p *streamParser) decoded(root *yaml.Node, yerr error, text []byte, first int, isJSON bool, renderedFrom string) {
-	kubectl, kerr := kubectlDecode(text, isJSON)
+	kubectl, kerr := p.kubectlFor(root, text, isJSON)
+	p.settle(root, yerr, text, first, renderedFrom, kubectl, kerr)
+}
+
+// settle is decoded given what kubectl's decoder found (kubectl, or kerr
+// when it could not read the document). A test hands it kubectlDecode's
+// answer for a text the walk's tree does not belong to.
+func (p *streamParser) settle(root *yaml.Node, yerr error, text []byte, first int, renderedFrom string, kubectl []manifestObject, kerr error) {
 	var named []gvk
 	for _, o := range kubectl {
 		named = append(named, gvk{o.group, o.version, o.kind})
@@ -384,6 +415,27 @@ func kubectlDecode(text []byte, isJSON bool) ([]manifestObject, error) {
 		}
 		raw = ext.Raw
 	}
+	return kubectlSends(raw)
+}
+
+// kubectlFor is kubectlDecode for a document whose first node root the
+// walk has read: a YAML document is parsed once (#285), not by yaml.v3 for
+// the walk and again by go-yaml v2 inside kubectl's decoder. The JSON that
+// decoder makes of the text is made from root instead (treeJSONConverter),
+// when that is certain to be the same JSON; otherwise, and for a JSON
+// value, which needs no conversion, kubectl's decoder reads the text.
+func (p *streamParser) kubectlFor(root *yaml.Node, text []byte, isJSON bool) ([]manifestObject, error) {
+	if !isJSON && !p.reparse && root != nil {
+		if raw, ok := p.toJSON.json(root, text); ok {
+			return kubectlSends(raw)
+		}
+	}
+	return kubectlDecode(text, isJSON)
+}
+
+// kubectlSends is the rest of kubectlDecode: the objects kubectl sends for
+// the JSON of one document.
+func kubectlSends(raw []byte) ([]manifestObject, error) {
 	raw = bytes.TrimSpace(raw)
 	if len(raw) == 0 || string(raw) == "null" {
 		return nil, nil

@@ -17,7 +17,11 @@
 # detector's slowdown invalidates its bounds reads it too. So
 # TestPruneWithNothingToDeleteIsCheap (internal/server/store, #297) is in the
 # set and is a timing proof (a prune that deletes nothing, and a concurrent
-# push, each under 50 ms), not a heap bound.
+# push, each under 50 ms), not a heap bound. So is
+# TestParseOnce_NumberDenseStreamIsNotSlower (internal/collect, #285), a CPU
+# ratio (a stream parsed once costs under 0.8 of the same parsed twice) that
+# could flake beside every other package's tests, so it also skips unless
+# UPGRADESCOPE_HEAP=1.
 #
 # The server's heap tests take about ten minutes, past go test's default
 # timeout, and the Helm manifest test's live-heap reading is inflated by a
