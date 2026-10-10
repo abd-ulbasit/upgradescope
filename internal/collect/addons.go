@@ -229,7 +229,13 @@ func collectAddOnsFrom(ctx context.Context, kube kubernetes.Interface, addons []
 	var unrec []string
 	inv.AddOns, unrec = matchAddOns(ev, addons)
 	setUnrecognized(inv, unrec)
-	setLiveVolumes(inv, ev.volumes, podErr, podsRead)
+	// The volumes capability's own lists (#362), made whenever it is
+	// assessed: not after a pod list that read nothing.
+	var volObjs volumeObjectsRead
+	if podErr == nil || podsRead {
+		volObjs = listVolumeObjects(ctx, kube, &ev.volumes)
+	}
+	setLiveVolumes(inv, ev.volumes, podErr, podsRead, volObjs)
 	if podErr != nil && len(ev.releases) == 0 && len(ev.gitops) == 0 && !classesRead {
 		return fmt.Errorf("list pods: %w", podErr) // nothing was read: not assessed, not partial
 	}
