@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -249,3 +250,103 @@ func TestRunFlagsAllCyclesEnded(t *testing.T) {
 }
 
 var today = time.Date(2026, 10, 2, 12, 0, 0, 0, time.UTC)
+
+// Compatibility ranges of a synced entry live in `compat`, not in the cycles
+// eol-sync owns (#341): a write run replaces the cycles and leaves the compat
+// block, and the comment above it, byte for byte, wherever the cycles sit.
+func TestRunKeepsCompatRows(t *testing.T) {
+	const compat = `# Ranges kept apart from cycles so that a sync never drops them.
+compat:
+  - {range: ">=1.0.0 <2.0.0", k8s_min: "1.30", k8s_max: "1.34", citations: ["https://example.com/matrix"]}
+`
+	for name, entry := range map[string]string{
+		"after cycles":  sampleEntry + "cycles:\n  - {cycle: \"1.30\", eol: false, citations: [\"https://endoflife.date/istio\"]}\n\n" + compat,
+		"before cycles": sampleEntry + compat + "cycles:\n  - {cycle: \"1.30\", eol: false, citations: [\"https://endoflife.date/istio\"]}\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "istio.yaml")
+			if err := os.WriteFile(path, []byte(entry), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			fetch := func(string) ([]byte, error) { return []byte(`[{"cycle":"1.31","eol":"2027-02-28"}]`), nil }
+			if _, err := run(dir, false, fetch, today, &bytes.Buffer{}); err != nil {
+				t.Fatal(err)
+			}
+			raw, _ := os.ReadFile(path)
+			if !strings.Contains(string(raw), compat) {
+				t.Errorf("sync dropped or changed the compat block:\n%s", raw)
+			}
+			if !strings.Contains(string(raw), `{cycle: "1.31", eol: "2027-02-28"`) || strings.Contains(string(raw), `"1.30", eol: false`) {
+				t.Errorf("sync did not replace the cycles:\n%s", raw)
+			}
+		})
+	}
+}
+
+// The same on the embedded registry: every synced entry that carries compat
+// rows keeps them, and the comment that explains them, through a write run.
+func TestRunKeepsEmbeddedCompatRows(t *testing.T) {
+	src := filepath.Join("..", "..", "registry", "data")
+	files, err := filepath.Glob(filepath.Join(src, "*.yaml"))
+	if err != nil || len(files) == 0 {
+		t.Fatalf("registry data not found at %s: %v", src, err)
+	}
+	dir := t.TempDir()
+	want := map[string]string{} // file name → compat block with the comment above it
+	for _, f := range files {
+		raw, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, filepath.Base(f)), raw, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if extractSlug(raw) == "" {
+			continue // hand-curated: never rewritten
+		}
+		if block := compatBlock(string(raw)); block != "" {
+			want[filepath.Base(f)] = block
+		}
+	}
+	if len(want) == 0 {
+		t.Fatal("no synced registry entry carries compat rows")
+	}
+	fetch := func(string) ([]byte, error) { return []byte(`[{"cycle":"99.1","eol":false}]`), nil }
+	if _, err := run(dir, false, fetch, today, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	for name, block := range want {
+		raw, _ := os.ReadFile(filepath.Join(dir, name))
+		if got := compatBlock(string(raw)); got != block {
+			t.Errorf("%s: compat rows changed by a sync:\nwant\n%s\ngot\n%s", name, block, got)
+		}
+		if !strings.Contains(string(raw), `"99.1"`) {
+			t.Errorf("%s: cycles were not rewritten", name)
+		}
+	}
+}
+
+// compatBlock returns the top-level compat block of a registry entry with the
+// comment lines directly above it, up to the next top-level key; "" when the
+// entry has none.
+func compatBlock(s string) string {
+	lines := strings.SplitAfter(s, "\n")
+	at := slices.IndexFunc(lines, func(l string) bool { return strings.HasPrefix(l, "compat:") })
+	if at < 0 {
+		return ""
+	}
+	start := at
+	for start > 0 && strings.HasPrefix(lines[start-1], "#") {
+		start--
+	}
+	end := at + 1
+	for end < len(lines) {
+		l := lines[end]
+		if l != "" && l[0] != ' ' && l[0] != '\t' && l[0] != '#' && l[0] != '\n' && l[0] != '\r' {
+			break
+		}
+		end++
+	}
+	return strings.TrimRight(strings.Join(lines[start:end], ""), "\n")
+}

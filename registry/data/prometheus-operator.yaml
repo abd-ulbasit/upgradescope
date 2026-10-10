@@ -1,14 +1,21 @@
 # registry/data/prometheus-operator.yaml
 # Hand-curated: endoflife.date has no prometheus-operator product; status
-# comes from the upstream compatibility document (prometheus-operator
-# >= v0.84.0 requires Kubernetes >= 1.25; no upper bound is published, so
-# no bounded compat row is recorded).
+# comes from the upstream compatibility document, read on 2026-10-10 at the
+# commit pinned in the compat rows: "prometheus-operator >= v0.84.0 requires
+# Kubernetes >= v1.25.0 (or v1.23.0 with the CustomResourceValidationExpressions
+# feature gate enabled). Releases before v0.84.0 require Kubernetes >= v1.16.0."
+# Those are minimums, so the rows have no maximum (none is published). The
+# first row takes 1.25, the requirement without the feature gate.
 schema_version: 2
 id: prometheus-operator
 display_name: Prometheus Operator
 matchers:
   images:
     - prometheus-operator/prometheus-operator
+    - rancher/mirrored-prometheus-operator-prometheus-operator # Rancher Monitoring, the upstream tag
+    # Bitnami's rebuild, tagged <po>-debian-12-r<n> (empty on bitnami/ since 2025).
+    - bitnami/prometheus-operator
+    - bitnamilegacy/prometheus-operator
   charts:
     - kube-prometheus-stack
     - prometheus-operator
@@ -16,3 +23,6 @@ support:
   status: supported
   citations:
     - https://github.com/prometheus-operator/prometheus-operator/blob/main/Documentation/getting-started/compatibility.md
+compat:
+  - {range: ">=0.84.0", k8s_min: "1.25", citations: ["https://github.com/prometheus-operator/prometheus-operator/blob/7e6ede52280c009e23e99aebac66d4cac82664d4/Documentation/getting-started/compatibility.md#kubernetes"]}
+  - {range: "<0.84.0", k8s_min: "1.16", citations: ["https://github.com/prometheus-operator/prometheus-operator/blob/7e6ede52280c009e23e99aebac66d4cac82664d4/Documentation/getting-started/compatibility.md#kubernetes"]}

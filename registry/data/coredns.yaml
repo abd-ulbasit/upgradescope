@@ -1,11 +1,23 @@
 # registry/data/coredns.yaml
+# No compat rows. The cited CoreDNS-k8s_version.md (read on 2026-10-10) lists the
+# CoreDNS version kubeadm installs with each Kubernetes release and says it
+# "should not be read as a recommendation for what version of CoreDNS to
+# currently use": a default, not a support range. CoreDNS defines no support
+# window for its release lines either, so there are no cycles.
 schema_version: 2
 id: coredns
 display_name: CoreDNS
 matchers:
   images:
-    - coredns/coredns
+    - coredns/coredns # also matches public.ecr.aws/eks-distro/coredns/coredns (v<coredns>-eks-<k8s>-<n>)
     - eks/coredns # EKS add-on image, tagged v<coredns>-eksbuild.N
+    # AKS: Microsoft's builds, tagged v<coredns>-<build> or v<coredns>-hotfix.<date>
+    # (repositories read from mcr.microsoft.com's tag lists on 2026-10-10). Provider
+    # builds, so they name their host (see CONTRIBUTING).
+    - mcr.microsoft.com/oss/kubernetes/coredns
+    - mcr.microsoft.com/oss/v2/kubernetes/coredns
+    # RKE2 and k3s: Rancher's verbatim mirror, the upstream tag (docker.io/rancher).
+    - rancher/mirrored-coredns-coredns
   charts:
     - coredns
 support:

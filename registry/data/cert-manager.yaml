@@ -31,3 +31,28 @@ cycles:
   - {cycle: "1.12", eol: "2025-05-19", citations: ["https://endoflife.date/cert-manager"]}
   - {cycle: "1.11", eol: "2023-09-12", citations: ["https://endoflife.date/cert-manager"]}
   - {cycle: "1.10", eol: "2023-05-19", citations: ["https://endoflife.date/cert-manager"]}
+# Kubernetes ranges, kept apart from `cycles` so that tools/eol-sync, which
+# rewrites the cycles block from endoflife.date, never drops them (see
+# CONTRIBUTING, "Compatibility ranges on synced entries"). One row per release
+# line, read on 2026-10-10 from the tables of https://cert-manager.io/docs/releases/:
+# "Supported Kubernetes / OpenShift Versions" for 1.20 and 1.21, "Compatible
+# Kubernetes versions" under "Old cert-manager releases" for 1.10 to 1.19. The
+# page says a Kubernetes version outside a release's supported range is not
+# tested or fixed ("We will not generally test or fix issues for cert-manager
+# 1.12 on Kubernetes 1.21 or earlier"), so both ends are bounds. The "Tested"
+# column is the same range or narrower and is not used. A release line the
+# registry gains (1.22, expected November 2026, "TBD" on the page) needs its row
+# added from that table: until then it is not judged for compatibility.
+compat:
+  - {range: ">=1.21.0 <1.22.0", k8s_min: "1.33", k8s_max: "1.36", citations: ["https://cert-manager.io/docs/releases/"]}
+  - {range: ">=1.20.0 <1.21.0", k8s_min: "1.32", k8s_max: "1.35", citations: ["https://cert-manager.io/docs/releases/"]}
+  - {range: ">=1.19.0 <1.20.0", k8s_min: "1.31", k8s_max: "1.35", citations: ["https://cert-manager.io/docs/releases/"]}
+  - {range: ">=1.18.0 <1.19.0", k8s_min: "1.29", k8s_max: "1.33", citations: ["https://cert-manager.io/docs/releases/"]}
+  - {range: ">=1.17.0 <1.18.0", k8s_min: "1.29", k8s_max: "1.33", citations: ["https://cert-manager.io/docs/releases/"]}
+  - {range: ">=1.16.0 <1.17.0", k8s_min: "1.25", k8s_max: "1.32", citations: ["https://cert-manager.io/docs/releases/"]}
+  - {range: ">=1.15.0 <1.16.0", k8s_min: "1.25", k8s_max: "1.32", citations: ["https://cert-manager.io/docs/releases/"]}
+  - {range: ">=1.14.0 <1.15.0", k8s_min: "1.24", k8s_max: "1.31", citations: ["https://cert-manager.io/docs/releases/"]}
+  - {range: ">=1.13.0 <1.14.0", k8s_min: "1.21", k8s_max: "1.27", citations: ["https://cert-manager.io/docs/releases/"]}
+  - {range: ">=1.12.0 <1.13.0", k8s_min: "1.22", k8s_max: "1.32", citations: ["https://cert-manager.io/docs/releases/"]}
+  - {range: ">=1.11.0 <1.12.0", k8s_min: "1.21", k8s_max: "1.27", citations: ["https://cert-manager.io/docs/releases/"]}
+  - {range: ">=1.10.0 <1.11.0", k8s_min: "1.20", k8s_max: "1.26", citations: ["https://cert-manager.io/docs/releases/"]}

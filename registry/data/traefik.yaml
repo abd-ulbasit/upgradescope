@@ -2,6 +2,10 @@
 # cycles are generated from the endoflife.date API by tools/eol-sync; do not
 # edit them by hand. support is hand-curated: status eol is only for a
 # product upstream retired as a whole.
+#
+# No Kubernetes range is recorded: Traefik publishes no Kubernetes
+# compatibility matrix (checked 2026-10-10: the deprecation/releases page and
+# the Kubernetes provider pages give none).
 schema_version: 2
 id: traefik
 display_name: Traefik Proxy

@@ -8,6 +8,7 @@ matchers:
   images:
     - external-dns/external-dns
     - bitnami/external-dns
+    - bitnamilegacy/external-dns # the namespace Bitnami's rebuilds live in since 2025
   charts:
     - external-dns
 support:

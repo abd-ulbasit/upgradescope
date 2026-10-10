@@ -12,6 +12,13 @@
 # November 1, 2022, when its repository was archived
 # (https://fluxcd.io/flux/migration/timetable/); endoflife.date's 1.25 line
 # ends 2022-11-02, and a v1 release older than 1.25 predates every line.
+#
+# No Kubernetes range is recorded: Flux publishes no per-release matrix
+# (https://fluxcd.io/flux/releases/, read on 2026-10-10). It says its CLI and
+# controllers "offer support for all Kubernetes versions supported upstream",
+# that each release is tested against the latest Kubernetes minor, and that it
+# cannot guarantee a release works on an end-of-life Kubernetes version. That
+# is a policy relative to upstream's own support window, not a range per line.
 schema_version: 2
 id: flux
 display_name: Flux

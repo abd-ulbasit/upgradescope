@@ -3,8 +3,8 @@
 # (make eol-sync). Karpenter documents no EOL policy: endoflife.date records
 # a line as ended when the next one is released and notes that only the
 # latest release "seems to be supported", so a line's date is that site's, not
-# a vendor commitment. No Kubernetes ranges are recorded: the compatibility
-# matrix is cited for the reader, not encoded. Karpenter's own Helm chart
+# a vendor commitment. The compat rows at the end encode the compatibility
+# matrix. Karpenter's own Helm chart
 # (name karpenter, chart and app version equal) is published as an OCI chart;
 # the CRD chart (karpenter-crd) has no pods. Known limit: Azure's
 # karpenter-provider-azure self-hosted chart is also named karpenter. Its
@@ -44,3 +44,24 @@ cycles:
   - {cycle: "1.2", eol: "2025-04-16", citations: ["https://endoflife.date/karpenter"]}
   - {cycle: "1.1", eol: "2025-03-04", citations: ["https://endoflife.date/karpenter"]}
   - {cycle: "1.0", eol: "2025-01-28", citations: ["https://endoflife.date/karpenter"]}
+# Kubernetes ranges, kept apart from `cycles` so that tools/eol-sync never
+# drops them (CONTRIBUTING, "Compatibility ranges on synced entries"). The
+# matrix at https://karpenter.sh/docs/upgrading/compatibility/ (read on
+# 2026-10-10; the 1.37 column is in the docs of the main branch, pinned below,
+# and not yet in the v1.14 docs) is a table of the OLDEST Karpenter that runs
+# on each Kubernetes minor:
+#   Kubernetes  1.31      1.32    1.33    1.34    1.35    1.36     1.37
+#   karpenter   >= 1.0.5  >= 1.2  >= 1.5  >= 1.6  >= 1.9  >= 1.13  1.15.x
+# The upper bound of a Karpenter release line is therefore the newest
+# Kubernetes minor whose oldest Karpenter is no newer than the line: 1.6 to 1.8
+# run up to 1.34 (1.35 needs 1.9). That is derived from the matrix, not quoted
+# from it. Karpenter 1.15, the first to run Kubernetes 1.37, has no row (no
+# upper bound is published for it). The lower end is not encoded: the matrix
+# names no Karpenter version that is too new for an old Kubernetes.
+compat:
+  - {range: ">=1.0.0 <1.2.0", k8s_max: "1.31", citations: ["https://karpenter.sh/v1.14/upgrading/compatibility/", "https://github.com/aws/karpenter-provider-aws/blob/6d1426c4c5155fbcba2a36175f26557e6ffc9363/website/content/en/docs/upgrading/compatibility.md"]}
+  - {range: ">=1.2.0 <1.5.0", k8s_max: "1.32", citations: ["https://karpenter.sh/v1.14/upgrading/compatibility/", "https://github.com/aws/karpenter-provider-aws/blob/6d1426c4c5155fbcba2a36175f26557e6ffc9363/website/content/en/docs/upgrading/compatibility.md"]}
+  - {range: ">=1.5.0 <1.6.0", k8s_max: "1.33", citations: ["https://karpenter.sh/v1.14/upgrading/compatibility/", "https://github.com/aws/karpenter-provider-aws/blob/6d1426c4c5155fbcba2a36175f26557e6ffc9363/website/content/en/docs/upgrading/compatibility.md"]}
+  - {range: ">=1.6.0 <1.9.0", k8s_max: "1.34", citations: ["https://karpenter.sh/v1.14/upgrading/compatibility/", "https://github.com/aws/karpenter-provider-aws/blob/6d1426c4c5155fbcba2a36175f26557e6ffc9363/website/content/en/docs/upgrading/compatibility.md"]}
+  - {range: ">=1.9.0 <1.13.0", k8s_max: "1.35", citations: ["https://karpenter.sh/v1.14/upgrading/compatibility/", "https://github.com/aws/karpenter-provider-aws/blob/6d1426c4c5155fbcba2a36175f26557e6ffc9363/website/content/en/docs/upgrading/compatibility.md"]}
+  - {range: ">=1.13.0 <1.15.0", k8s_max: "1.36", citations: ["https://karpenter.sh/v1.14/upgrading/compatibility/", "https://github.com/aws/karpenter-provider-aws/blob/6d1426c4c5155fbcba2a36175f26557e6ffc9363/website/content/en/docs/upgrading/compatibility.md"]}

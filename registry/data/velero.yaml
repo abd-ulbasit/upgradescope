@@ -1,8 +1,13 @@
 # registry/data/velero.yaml
 # Hand-curated: endoflife.date has no velero product; status comes from the
-# upstream "Velero compatibility matrix" (every maintained Velero release
-# >= 1.14 is expected to work on Kubernetes 1.18-latest — open-ended, so no
-# bounded compat row is recorded).
+# upstream "Velero compatibility matrix". Read on 2026-10-10 at the commit
+# pinned in the compat row: for Velero 1.14 to 1.18 the column "Expected
+# Kubernetes version compatibility" says "1.18-latest", open-ended, so the row
+# has a minimum and no maximum. The "Tested on Kubernetes version" column (for
+# example 1.18: 1.33.7, 1.34.1 and 1.35.0) is tested-with and is not encoded:
+# the README says maintainers cannot test every combination and that the table
+# "is meant to track the current testing coverage and the expected supported
+# Kubernetes versions".
 schema_version: 2
 id: velero
 display_name: Velero
@@ -16,3 +21,5 @@ support:
   citations:
     - https://github.com/vmware-tanzu/velero#velero-compatibility-matrix
     - https://velero.io/docs/latest/support-process/
+compat:
+  - {range: ">=1.14.0 <1.19.0", k8s_min: "1.18", citations: ["https://github.com/velero-io/velero/blob/f8c23ef4e089f34e8904e6908ca5e8f2d39e94e0/README.md#velero-compatibility-matrix"]}
