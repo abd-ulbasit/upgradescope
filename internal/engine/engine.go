@@ -194,7 +194,7 @@ func evalAPIUsage(inv inventory.Inventory, k kb.KB, target inventory.Version, b 
 				}
 				f.Remediation = fmt.Sprintf("write it as %s %s, the newest version Kubernetes %s can serve%s, or upgrade the cluster to Kubernetes %s before applying it", gvString(alt.Group, alt.Version), alt.Kind, target, enable, e.Introduced)
 			} else {
-				f.Remediation = fmt.Sprintf("Kubernetes %s serves no version of %s the knowledge base knows: upgrade the cluster to Kubernetes %s before applying it", target, u.Kind, e.Introduced)
+				f.Remediation = fmt.Sprintf("Kubernetes %s serves no version of %s as mature as %s that the knowledge base knows: upgrade the cluster to Kubernetes %s before applying it", target, u.Kind, u.Version, e.Introduced)
 			}
 			f.Citations = append(f.Citations, apiVersioningURL)
 		} else if r, ok := idx.ResolveReplacement(e, target); ok {

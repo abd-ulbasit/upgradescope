@@ -11,10 +11,8 @@ import (
 // "the newest version the target serves" used to land on an alpha for a
 // beta source, because the KB clamps the introduced minors of old alphas.
 // This holds over every shipped entry and every target from 1.16 to the
-// KB's horizon, for each way the engine picks a replacement. (ServedAlternative
-// is not one: it answers a manifest at a version the target does not serve
-// yet, which cannot be applied as written, so an older version is the only
-// one that can be.)
+// KB's horizon, for each way the engine picks a version, ServedAlternative (the
+// answer for a manifest at a version the target does not serve yet) included.
 func TestRemediationNeverNamesALessMatureVersion(t *testing.T) {
 	k, err := Load()
 	if err != nil {
@@ -33,6 +31,9 @@ func TestRemediationNeverNamesALessMatureVersion(t *testing.T) {
 			}
 			if r, ok := idx.ResolveReplacement(e, target); ok {
 				check("ResolveReplacement", r)
+			}
+			if a, ok := idx.ServedAlternative(e, target); ok {
+				check("ServedAlternative", a)
 			}
 			if s, ok := idx.ServedSuccessor(e, target); ok {
 				check("ServedSuccessor", GVK{Group: s.Group, Version: s.Version, Kind: s.Kind})
@@ -104,7 +105,7 @@ func TestClampedIntroducedMinorsAreCorrected(t *testing.T) {
 		if e.Introduced.String() != c.want {
 			t.Errorf("%s/%s %s introduced %s, want %s", c.group, c.version, c.kind, e.Introduced, c.want)
 		}
-		if c.want <= "1.16" && !servedAt(e, inventory.Version{Major: 1, Minor: 16}) && e.Removed != nil && e.Removed.Minor > 16 {
+		if e.Introduced.Compare(inventory.Version{Major: 1, Minor: 16}) <= 0 && !servedAt(e, inventory.Version{Major: 1, Minor: 16}) && (e.Removed == nil || e.Removed.Minor > 16) {
 			t.Errorf("%s/%s %s is not served at 1.16", c.group, c.version, c.kind)
 		}
 	}

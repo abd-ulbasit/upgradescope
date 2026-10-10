@@ -41,20 +41,20 @@ func TestFilesModeUnservedAPIIsABlocker(t *testing.T) {
 		wantTitle string // "" = no finding
 		wantFix   string
 	}{
-		{"DeviceClass v1 at 1.33", dc, 33, "resource.k8s.io/v1 DeviceClass is not served until 1.34, after target 1.33 (1 object)", "write it as resource.k8s.io/v1beta2 DeviceClass"},
+		{"DeviceClass v1 at 1.33", dc, 33, "resource.k8s.io/v1 DeviceClass is not served until 1.34, after target 1.33 (1 object)", "Kubernetes 1.33 serves no version of DeviceClass as mature as v1 that the knowledge base knows: upgrade the cluster to Kubernetes 1.34"},
 		{"DeviceClass v1 at its introduction", dc, 34, "", ""},
 		{"DeviceClass v1 after it", dc, 35, "", ""},
-		{"MutatingAdmissionPolicy v1 at 1.33", mapol, 33, "admissionregistration.k8s.io/v1 MutatingAdmissionPolicy is not served until 1.36, after target 1.33 (1 object)", "write it as admissionregistration.k8s.io/v1alpha1 MutatingAdmissionPolicy"},
+		{"MutatingAdmissionPolicy v1 at 1.33", mapol, 33, "admissionregistration.k8s.io/v1 MutatingAdmissionPolicy is not served until 1.36, after target 1.33 (1 object)", "Kubernetes 1.33 serves no version of MutatingAdmissionPolicy as mature as v1 that the knowledge base knows: upgrade the cluster to Kubernetes 1.36"},
 		{"MutatingAdmissionPolicy v1 at 1.36", mapol, 36, "", ""},
 		// Workload v1beta1 is introduced in 1.37 but deprecated from 1.40: the
 		// Deprecated branch must not answer for it ("deprecated in 1.40,
 		// after target 1.33" was the misleading info).
 		{"Workload v1beta1 at 1.33", manifestUsage("scheduling.k8s.io", "v1beta1", "Workload"), 33,
 			"scheduling.k8s.io/v1beta1 Workload is not served until 1.37, after target 1.33 (1 object)",
-			"Kubernetes 1.33 serves no version of Workload the knowledge base knows: upgrade the cluster to Kubernetes 1.37"},
-		{"Workload v1beta1 at 1.36 names v1alpha2", manifestUsage("scheduling.k8s.io", "v1beta1", "Workload"), 36,
+			"Kubernetes 1.33 serves no version of Workload as mature as v1beta1 that the knowledge base knows: upgrade the cluster to Kubernetes 1.37"},
+		{"Workload v1beta1 at 1.36 is not sent back to v1alpha2", manifestUsage("scheduling.k8s.io", "v1beta1", "Workload"), 36,
 			"scheduling.k8s.io/v1beta1 Workload is not served until 1.37, after target 1.36 (1 object)",
-			"write it as scheduling.k8s.io/v1alpha2 Workload"},
+			"Kubernetes 1.36 serves no version of Workload as mature as v1beta1 that the knowledge base knows: upgrade the cluster to Kubernetes 1.37"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			r := Evaluate(manifestsInv(c.us), k, inventory.Version{Major: 1, Minor: c.target}, testNow)

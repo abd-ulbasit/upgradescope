@@ -196,16 +196,15 @@ func (i Index) ResolveReplacement(e APILifecycleEntry, target inventory.Version)
 // yet (resource.k8s.io/v1 DeviceClass at 1.33 is v1beta2, v1 is served from
 // 1.34). Newest is the latest Introduced; the same release is broken by
 // stability (GA, then beta, then alpha) and then by the version name, so
-// the answer does not depend on entry order. Unlike a replacement, this
-// may be less mature than e: e is not served at target at all, so the
-// manifest cannot be applied as written, and an older version is the only
-// one that can be (the remediation says so, and when it may need enabling).
-// It reports false when the KB
-// knows no such version.
+// the answer does not depend on entry order. Like every remediation it is
+// never less mature than e (#332): a v1 manifest is not sent back to a
+// v1alpha1 the target happens to serve. When only a less mature version is
+// served, it reports false and the caller names the release that serves e.
+// It reports false when the KB knows no such version.
 func (i Index) ServedAlternative(e APILifecycleEntry, target inventory.Version) (GVK, bool) {
 	var best *APILifecycleEntry
 	for _, c := range i.byKind[GVK{Group: e.Group, Kind: e.Kind}] {
-		if c.Version == e.Version || !servedAt(c, target) {
+		if c.Version == e.Version || !servedAt(c, target) || stability(c.Version) < stability(e.Version) {
 			continue
 		}
 		if best == nil {

@@ -1266,7 +1266,7 @@ done
 summary=$(output summary-file)
 case $summary in "$tmp"/*.md) ok "summary-file output is under RUNNER_TEMP" ;; *) fail "summary-file output is under RUNNER_TEMP" "$rt/output" ;; esac
 cmp -s "$summary" "$rt/summary" && ok "summary-file holds the step summary" || fail "summary-file holds the step summary" "$rt/output"
-has "summary has the findings table" "$rt/summary" "| blocker | networking.k8s.io/v1beta1 Ingress removed in 1.22 (1 object) | \`action/testdata/removed/all.yaml:2\` shop/web | migrate to networking.k8s.io/v1 Ingress |"
+has "summary has the findings table" "$rt/summary" "| blocker | networking.k8s.io/v1beta1 Ingress removed in 1.22 (1 object) | \`action/testdata/removed/all.yaml:2\` shop/web | migrate to networking.k8s.io/v1 Ingress; networking.k8s.io/v1 is not a rename of the apiVersion: "
 has "summary header" "$rt/summary" "### upgradescope: blocked"
 has "log lists every blocker with its fix" "$work/out" "batch/v1beta1 CronJob removed in 1.25 (1 object) | \`action/testdata/removed/all.yaml:12\` nightly | migrate to batch/v1 CronJob"
 has "blocker annotation with file and line" "$work/out" "::error file=action/testdata/removed/all.yaml,line=2,title=upgradescope blocker (removed-api)::networking.k8s.io/v1beta1 Ingress removed in 1.22 (1 object). Fix: migrate to networking.k8s.io/v1 Ingress"

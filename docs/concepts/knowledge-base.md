@@ -131,6 +131,10 @@ uses (alpha before beta before GA, from the version name). When the GA
 replacement is not served at the target yet, the finding says the version in
 use is the right one for that target, and names the GA version with the
 minor that first serves it.
+A manifest written in a version the target does not serve yet follows the
+same rule: it is offered another version only if that one is at least as
+mature, and otherwise the finding says to upgrade the cluster to the minor
+that first serves it.
 
 ## The horizon
 
