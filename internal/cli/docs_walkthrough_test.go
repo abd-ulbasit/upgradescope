@@ -77,8 +77,9 @@ func markdownFiles(t *testing.T) []string {
 var (
 	inlineCode = regexp.MustCompile("`([^`\n]+)`")
 	// invocation: `upgradescope` as a word of its own (a path ending in it
-	// counts, an image name with a tag does not), up to the end of the line.
-	invocation = regexp.MustCompile(`(?:^|[\s"'(=/])upgradescope(?:\s+(.*))?$`)
+	// counts, an image name with a tag does not). Every occurrence on a line
+	// is one invocation: `cd upgradescope && upgradescope scan ...` has two.
+	invocation = regexp.MustCompile(`(?:^|[\s"'(=/])upgradescope(?:\s+|$)`)
 	flagToken  = regexp.MustCompile(`^--([a-zA-Z][a-zA-Z0-9-]*)`)
 )
 
@@ -145,8 +146,8 @@ func shellWords(s string) []string {
 func docInvocations(page, text string) []docInvocation {
 	var found []docInvocation
 	add := func(line int, s string) {
-		if m := invocation.FindStringSubmatch(s); m != nil {
-			found = append(found, docInvocation{page: page, line: line, words: shellWords(m[1])})
+		for _, loc := range invocation.FindAllStringIndex(s, -1) {
+			found = append(found, docInvocation{page: page, line: line, words: shellWords(s[loc[1]:])})
 		}
 	}
 	lines := strings.Split(text, "\n")
@@ -288,12 +289,18 @@ func TestDocsFlagScannerFindsDrift(t *testing.T) {
 		{"fenced, continued", "```sh\nupgradescope scan \\\n  --files rendered \\\n  --bogus x\n```", []string{"scan --bogus"}},
 		{"subcommand of a subcommand", "`upgradescope tokens create prod --nope`", []string{"create --nope"}},
 		{"real flags", "`upgradescope scan --files rendered --target 1.37 --output json`", nil},
-		{"after a pipe", "upgradescope scan --output json | jq --raw-output .score", nil},
+		{"after a pipe", "`upgradescope scan --output json | jq --raw-output .score`", nil},
+		{"after a pipe, fenced", "```sh\nupgradescope scan --output json | jq --raw-output .score\n```", nil},
 		{"after a redirect", "```\nupgradescope scan --output json > r.json --whatever\n```", nil},
-		{"another program before it", "helm template x --output-dir rendered && upgradescope scan --files rendered", nil},
+		{"another program before it", "```sh\nhelm template x --output-dir rendered && upgradescope scan --files rendered\n```", nil},
+		{"after &&", "```sh\nupgradescope scan --files rendered && kubectl apply --server-side\n```", nil},
+		{"after a semicolon", "`upgradescope scan --files rendered; ls --all`", nil},
+		{"after a spaced semicolon", "`upgradescope scan --files rendered ; ls --all`", nil},
+		{"the second invocation on a line", "`cd upgradescope && upgradescope scan --bogus`", []string{"scan --bogus"}},
 		{"a quoted value", "`upgradescope scan --files \"a --format\"`", nil},
 		{"a path to the binary", "```\n./bin/upgradescope scan --nope\n```", []string{"scan --nope"}},
-		{"a tagged image is not a command line", "ghcr.io/abd-ulbasit/upgradescope:1.0 --nope", nil},
+		{"a tagged image is not a command line", "`ghcr.io/abd-ulbasit/upgradescope:1.0 --nope`", nil},
+		{"a tagged image in a fence", "```sh\ndocker run ghcr.io/abd-ulbasit/upgradescope:1.0 scan --nope\n```", nil},
 		{"prose", "`upgradescope` is a scanner with `--nope`", nil},
 	} {
 		if got := flagsOf(tc.text); !slices.Equal(got, tc.want) {
@@ -345,7 +352,7 @@ func TestContributingRepositoryMap(t *testing.T) {
 	cliLine := mapped["cli"]
 	archTable := tableRows(readDoc(t, "docs/architecture.md"), "| Command | Runs | Produces |")
 	for _, c := range Root().Commands() {
-		if !strings.Contains(cliLine, c.Name()) {
+		if !slices.Contains(wordsOf(cliLine), c.Name()) {
 			t.Errorf("%s: the map's cli line does not name the `%s` command: %q", page, c.Name(), cliLine)
 		}
 		if !strings.Contains(archTable, "`upgradescope "+c.Name()+"`") {
@@ -390,4 +397,12 @@ func tableRows(doc, header string) string {
 		b.WriteString(l + "\n")
 	}
 	return b.String()
+}
+
+// wordsOf splits a map line into its words, so a command name matches only
+// as a whole word (`scan` is not found in `scanner`).
+func wordsOf(s string) []string {
+	return strings.FieldsFunc(s, func(r rune) bool {
+		return !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-' || r == '_')
+	})
 }
