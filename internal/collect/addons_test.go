@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	goruntime "runtime"
 	"slices"
 	"testing"
 
@@ -821,5 +822,67 @@ func TestMatchAddOnsImageWithoutVersionTakesLabelVersion(t *testing.T) {
 	want := []inventory.AddOnInstance{{ID: "flux", Namespaces: []string{"flux-system"}, Source: "image"}}
 	if got, _ := matchAddOns(flux, addons); !reflect.DeepEqual(got, want) {
 		t.Errorf("component image without a tag: got %+v, want %+v", got, want)
+	}
+}
+
+// manyLabelledPods is n pods of one namespace running one digest-only
+// (or :latest) add-on image, each labelled with the add-on's name and a
+// version, as a DaemonSet of a digest-pinned add-on is (#301).
+func manyLabelledPods(n int, image string) addOnEvidence {
+	var ev addOnEvidence
+	labels := map[string]string{"app.kubernetes.io/name": "cert-manager", "app.kubernetes.io/version": "v1.12.3"}
+	for range n {
+		ev.addPod("cert-manager", labels, []string{image})
+	}
+	return ev
+}
+
+const manyPodsDigest = "quay.io/jetstack/cert-manager-controller@sha256:3b1ab0b56f1c2f1f9ba0c6a4b9b4b1b4f0b9d2b2b6c9e2e1d0c1b2a3f4e5d6c7"
+
+// Matching is linear in the pods sharing one image. The label version of
+// an image without a tag is folded once per (namespace, image, add-on),
+// not rescanned per pod: 2,000 such pods cost 3.4 GB and 3.6 s a tick when
+// each pod scanned them all (measured at 602a9251, 2026-10-10). Bytes
+// allocated at three times the pods must stay near three times the bytes
+// (linear), not nine (quadratic): a ratio holds under -race, whose
+// instrumentation inflates absolute figures, and TotalAlloc is cumulative,
+// so neither the collector's timing nor the machine's load moves it.
+func TestMatchAddOnsLabelledPodsOfOneImageAreLinear(t *testing.T) {
+	addons, err := registry.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	allocated := func(image string, pods int) uint64 {
+		ev := manyLabelledPods(pods, image)
+		var before, after goruntime.MemStats
+		goruntime.ReadMemStats(&before)
+		got, _ := matchAddOns(ev, addons)
+		goruntime.ReadMemStats(&after)
+		if len(got) != 1 || got[0].Version != "1.12.3" {
+			t.Fatalf("%s: got %+v, want one cert-manager at 1.12.3", image, got)
+		}
+		return after.TotalAlloc - before.TotalAlloc
+	}
+	for _, image := range []string{manyPodsDigest, "quay.io/jetstack/cert-manager-controller:latest"} {
+		small, large := allocated(image, 1000), allocated(image, 3000)
+		if ratio := float64(large) / float64(small); ratio > 4.5 {
+			t.Errorf("%s: 3x the pods allocated %.1fx the bytes (%d -> %d MiB), want about 3x (linear), not 9x", image, ratio, small>>20, large>>20)
+		}
+	}
+}
+
+func BenchmarkMatchAddOnsLabelledPodsOfOneImage(b *testing.B) {
+	addons, err := registry.Load()
+	if err != nil {
+		b.Fatal(err)
+	}
+	for _, n := range []int{500, 2000, 5000} {
+		ev := manyLabelledPods(n, manyPodsDigest)
+		b.Run(fmt.Sprintf("pods=%d", n), func(b *testing.B) {
+			b.ReportAllocs()
+			for range b.N {
+				matchAddOns(ev, addons)
+			}
+		})
 	}
 }

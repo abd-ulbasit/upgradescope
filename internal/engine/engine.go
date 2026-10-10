@@ -960,8 +960,8 @@ type addOnSubject struct {
 // lacked, as the detector read it (#301), and not the sources it never
 // consulted. An install found from an image has no version read from it.
 // The inventory cannot tell why, so the sentence covers both: the image
-// has no version in its tag (a digest, ":latest") and no
-// app.kubernetes.io/version label of a pod running it names this add-on
+// has no version in its tag (a digest, ":latest") and no pod running it
+// whose labels name this add-on gives a usable app.kubernetes.io/version
 // (collect takes that label's version for such an image), or it is a
 // component image whose release line the registry does not map yet (the
 // label is never consulted for those). One found from labels alone has no
@@ -981,9 +981,9 @@ func noVersionReason(ins []addOnInstall, node bool) string {
 		via, _, _ = strings.Cut(via, " ")
 		switch {
 		case node:
-			add("No version could be read from the node's container runtime version.")
+			add("The node reports no container runtime version.")
 		case via == "image":
-			add("No version was read from the image: either its tag names no version (a digest, :latest) and no app.kubernetes.io/version label of a pod running it names this add-on, or it is a component image whose release line the registry does not map yet.")
+			add("No version was read from the image: either its tag names no version (a digest, :latest) and no pod running it whose labels name this add-on gives a usable app.kubernetes.io/version, or it is a component image whose release line the registry does not map yet.")
 		case via == "labels":
 			add("The pod labels name it, but no app.kubernetes.io/version label gives a version that applies to it.")
 		case via == "chart":

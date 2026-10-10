@@ -130,7 +130,7 @@ func TestEvalAddOnsNodeRuntimeNoDataDetail(t *testing.T) {
 	}
 	// A node whose runtime version is unread keeps the node sentence.
 	fs = evalAddOns(nodes("containerd://"), runtimeKB("1.37"), inventory.Version{Major: 1, Minor: 36}, day("2026-10-02"))
-	if want := " No version could be read from the node's container runtime version. Its end of life and Kubernetes compatibility were not assessed."; len(fs) != 1 || !strings.HasSuffix(fs[0].Detail, want) {
+	if want := " The node reports no container runtime version. Its end of life and Kubernetes compatibility were not assessed."; len(fs) != 1 || !strings.HasSuffix(fs[0].Detail, want) {
 		t.Errorf("findings = %+v, want one with suffix %q", fs, want)
 	}
 }

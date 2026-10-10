@@ -588,12 +588,25 @@ func matchAddOns(ev addOnEvidence, addons []registry.AddOn) ([]inventory.AddOnIn
 
 	// What names the add-on of an image without a tag (untaggedClaim): its
 	// pod's labels, then the Helm releases of its namespace.
+	//
+	// labelVersion is the oldest version those labels give an add-on for
+	// an image, folded here once so the image loop below does no per-pod
+	// work: ev.labelled and ev.images hold one entry per pod, and a
+	// digest-only add-on image in thousands of pods must not cost a
+	// quadratic scan every tick.
+	type nsImageAddOn struct {
+		img nsImage
+		id  string
+	}
 	labelNamed := map[nsImage][]imageClaim{}
+	labelVersion := map[nsImageAddOn]string{}
 	for _, p := range ev.labelled {
 		if id, version := labelAddOn(p.Labels, addons); id != "" {
 			for _, img := range p.Images {
 				k := nsImage{p.Namespace, img}
 				labelNamed[k] = append(labelNamed[k], imageClaim{id, version, true})
+				kv := nsImageAddOn{k, id}
+				labelVersion[kv] = olderVersion(labelVersion[kv], version)
 			}
 		}
 	}
@@ -606,24 +619,31 @@ func matchAddOns(ev addOnEvidence, addons []registry.AddOn) ([]inventory.AddOnIn
 		}
 	}
 
+	// The claims of one (namespace, image) are the same for every pod
+	// running it, so they are settled once, not once per pod.
+	settled := map[nsImage][]imageClaim{}
 	for _, img := range ev.images {
 		ref := parseImage(img.Image)
-		claims := imageClaims(ref, addons)
-		if c, ok := untaggedClaim(ref, append(slices.Clone(labelNamed[img]), releaseNamed[img.Namespace]...), addons); ok {
-			claims = []imageClaim{c}
-		}
-		for _, c := range claims {
-			// An image that names no version (a digest, ":latest") is the
-			// version its pod's labels give the same add-on (#301), the
-			// oldest where pods sharing the image differ. A tag always
-			// decides; a component image's line is never guessed.
-			if c.version == "" && c.byTag {
-				for _, n := range labelNamed[img] {
-					if n.id == c.id {
-						c.version = olderVersion(c.version, n.version)
-					}
+		claims, done := settled[img]
+		if !done {
+			claims = slices.Clone(imageClaims(ref, addons))
+			if ref.tag == "" {
+				if c, ok := untaggedClaim(ref, append(slices.Clone(labelNamed[img]), releaseNamed[img.Namespace]...), addons); ok {
+					claims = []imageClaim{c}
 				}
 			}
+			// An image that names no version (a digest, ":latest") is the
+			// version its pods' labels give the same add-on (#301), the
+			// oldest where pods sharing the image differ. A tag always
+			// decides; a component image's line is never guessed.
+			for i, c := range claims {
+				if c.version == "" && c.byTag {
+					claims[i].version = labelVersion[nsImageAddOn{img, c.id}]
+				}
+			}
+			settled[img] = claims
+		}
+		for _, c := range claims {
 			in := install{c.id, img.Namespace}
 			byInstall[in] = append(byInstall[in], evidence{source: "image", version: c.version})
 		}
