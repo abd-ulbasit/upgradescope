@@ -1479,15 +1479,40 @@ components:
         matchers:
           type: object
           properties:
-            images: {type: array, items: {type: string}}
+            images:
+              description: Repository paths without the registry host; one may end in a tag pattern ("rancher/nginx-ingress-controller:*-hardened*") that claims only the tags it matches.
+              type: array
+              items: {type: string}
             charts: {type: array, items: {type: string}}
             runtimes: {type: array, items: {type: string}}
+            components:
+              description: Images versioned on their own, each release line mapped to the product release line that ships it.
+              type: array
+              items:
+                type: object
+                required: [image, lines, citations]
+                properties:
+                  image: {type: string}
+                  lines:
+                    type: array
+                    items:
+                      type: object
+                      required: [component, product]
+                      properties:
+                        component: {type: string}
+                        product: {type: string}
+                  citations: {$ref: "#/components/schemas/Citations"}
         support:
           type: object
           required: [status, citations]
           properties:
             status: {type: string, enum: [supported, eol, unknown]}
             eol_date: {type: string, format: date}
+            extended_eol_date:
+              description: Support lasts until this date only if extended_support_condition holds; it ends for everyone on eol_date.
+              type: string
+              format: date
+            extended_support_condition: {type: string}
             citations: {$ref: "#/components/schemas/Citations"}
         cycles:
           type: array

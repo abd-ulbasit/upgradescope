@@ -442,9 +442,13 @@ func (s *server) registryLookup(_ context.Context, _ *mcpsdk.CallToolRequest, in
 }
 
 // addOnMatches reports whether the lower-case query q is part of the add-on's
-// id, name or any of its matchers.
+// id, name or any of its matchers, component images included.
 func addOnMatches(a registry.AddOn, q string) bool {
-	for _, field := range slices.Concat([]string{a.ID, a.DisplayName}, a.Matchers.Charts, a.Matchers.Images, a.Matchers.Runtimes) {
+	fields := slices.Concat([]string{a.ID, a.DisplayName}, a.Matchers.Charts, a.Matchers.Images, a.Matchers.Runtimes)
+	for _, c := range a.Matchers.Components {
+		fields = append(fields, c.Image)
+	}
+	for _, field := range fields {
 		if strings.Contains(strings.ToLower(field), q) {
 			return true
 		}

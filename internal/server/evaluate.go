@@ -494,7 +494,7 @@ func (s *Server) outboxFor(cluster store.Cluster, deltas *changeMerger, now time
 	}
 	payload, err := json.Marshal(n)
 	if err != nil {
-		log.Printf("server: encoding notification (cluster %s): %v", cluster.Name, err)
+		log.Printf("server: encoding notification (cluster %q): %v", cluster.Name, err)
 		return nil
 	}
 	msgs := make([]store.OutboxMessage, 0, len(s.sinks))

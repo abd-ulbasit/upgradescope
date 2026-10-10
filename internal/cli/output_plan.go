@@ -23,10 +23,10 @@ func writePlan(w io.Writer, r engine.Report) {
 		fmt.Fprintf(w, "  %s → %s  %-7s  %s, %s, %d info\n", h.From, h.To, h.Verdict,
 			plural(h.Count(engine.SevBlocker), "blocker"), plural(h.Count(engine.SevWarning), "warning"), h.Count(engine.SevInfo))
 		for _, f := range h.Findings {
-			fmt.Fprintf(w, "      + %-7s  [%s] %s\n", f.Severity, f.Category, f.Title)
+			fmt.Fprintf(w, "      + %-7s  [%s] %s\n", f.Severity, esc(string(f.Category)), esc(f.Title))
 		}
 		for _, c := range h.Changed {
-			fmt.Fprintf(w, "      ~ %s → %s  %s (listed at %s)\n", c.Was, c.Severity, c.Title, c.Since)
+			fmt.Fprintf(w, "      ~ %s → %s  %s (listed at %s)\n", c.Was, c.Severity, esc(c.Title), c.Since)
 		}
 		switch carried := len(h.Carried); {
 		case carried > 0 && len(h.Findings)+len(h.Changed) == 0:

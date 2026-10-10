@@ -69,11 +69,36 @@ function AddOnCard({ a }: { a: AddOn }) {
       <p className="muted">
         <code>{a.id}</code>
       </p>
-      {(a.matchers.images?.length || a.matchers.charts?.length) ? (
+      {a.support.extended_eol_date && (
+        <p className="support-split">
+          {a.support.status === "eol" ? "Support ended" : "Supported"}
+          {" until "}
+          {a.support.extended_eol_date}
+          {a.support.extended_support_condition
+            ? ` only if ${a.support.extended_support_condition}`
+            : ""}
+          {a.support.eol_date
+            ? `; for everyone else support ends ${a.support.eol_date}`
+            : ""}
+          .
+        </p>
+      )}
+      {(a.matchers.images?.length ||
+        a.matchers.components?.length ||
+        a.matchers.charts?.length) ? (
         <p className="chips">
           {a.matchers.images?.map((m) => (
             <span key={`i-${m}`} className="chip" title="image prefix matcher">
               {m}
+            </span>
+          ))}
+          {a.matchers.components?.map((c) => (
+            <span
+              key={`k-${c.image}`}
+              className="chip"
+              title="component image, versioned on its own"
+            >
+              {c.image}
             </span>
           ))}
           {a.matchers.charts?.map((m) => (
