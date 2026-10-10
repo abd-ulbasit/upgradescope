@@ -71,7 +71,7 @@ func evalVolumePlugins(inv inventory.Inventory, k kb.KB, target inventory.Versio
 			default:
 				f.Severity = SevInfo
 				if p.Deprecated != nil {
-					f.Title = fmt.Sprintf("In-tree volume plugin %s deprecated since %s, removed in %s (%s)", u.Plugin, p.Deprecated, p.Removed, count)
+					f.Title = fmt.Sprintf("In-tree volume plugin %s %s, removed in %s (%s)", u.Plugin, deprecatedWhen(*p.Deprecated, target), p.Removed, count)
 				}
 			}
 		case kb.VolumeCSIMigration:
@@ -82,7 +82,7 @@ func evalVolumePlugins(inv inventory.Inventory, k kb.KB, target inventory.Versio
 				f.Severity = SevWarning
 			}
 		default: // kb.VolumeDeprecated
-			f.Title = fmt.Sprintf("In-tree volume plugin %s deprecated since %s (%s)", u.Plugin, p.Deprecated, count)
+			f.Title = fmt.Sprintf("In-tree volume plugin %s %s (%s)", u.Plugin, deprecatedWhen(*p.Deprecated, target), count)
 			consequence = "It still works; upstream has not scheduled its removal."
 			f.Severity = SevInfo
 		}
@@ -101,4 +101,13 @@ func evalVolumePlugins(inv inventory.Inventory, k kb.KB, target inventory.Versio
 		}
 	}
 	return out
+}
+
+// deprecatedWhen says when a plugin was deprecated relative to target:
+// "deprecated since 1.28" at or after it, "deprecated in 1.28" before.
+func deprecatedWhen(deprecated, target inventory.Version) string {
+	if deprecated.Compare(target) > 0 {
+		return "deprecated in " + deprecated.String()
+	}
+	return "deprecated since " + deprecated.String()
 }

@@ -66,7 +66,7 @@
       ],
       "remediation": "redeploy the workload on a volume of the CephFS CSI driver (ceph-csi); there is no CSI migration for cephfs",
       "severity": "info",
-      "title": "In-tree volume plugin cephfs deprecated since 1.28, removed in 1.31 (1 object)"
+      "title": "In-tree volume plugin cephfs deprecated in 1.28, removed in 1.31 (1 object)"
     },
     {
       "category": "volume-plugin",
