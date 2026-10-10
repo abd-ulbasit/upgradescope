@@ -268,7 +268,8 @@ becomes "2 objects"). Examples:
 
 | Finding | Key |
 |---|---|
-| Removed or deprecated API | `removed-api/networking.k8s.io/v1beta1/Ingress`, `deprecated-api/core/v1/ComponentStatus` (the core group is `core`) |
+| Removed or deprecated API | `removed-api/networking.k8s.io/v1beta1/Ingress`, `deprecated-api/core/v1/ComponentStatus` (the core group is `core`). The same key is the removal blocker (the API is gone at the target) and the warning for a removal in the next minor |
+| API the target does not serve yet (`--files` and the gate: "not served until 1.31") | `removed-api/<group>/<version>/<kind>/unserved`, e.g. `removed-api/networking.k8s.io/v1beta1/ServiceCIDR/unserved`; a key without `/unserved` never accepts it (see [One API, two keys](#one-api-two-keys)) |
 | Objects of a flagged API nothing can be attributed to | `deprecated-api/<group>/<version>/<kind>/authorship-unknown` (info) |
 | Deprecated API still requested | `deprecated-api-in-use/<group>/<version>/<resource>` |
 | EOL add-on | `eol-addon/ingress-nginx`, or `eol-addon/<id>/<cycle>` for a release line |
@@ -280,6 +281,47 @@ becomes "2 objects"). Examples:
 
 `--output json` shows the key of every finding, and the SARIF output uses
 it as the rule id.
+
+### One API, two keys
+
+An API in a manifest can be a problem in two opposite ways, and each has its
+own key, so accepting one never accepts the other:
+
+- **Not served yet.** The target is older than the release that introduces
+  the API version (`networking.k8s.io/v1beta1` ServiceCIDR is served from
+  1.31; `--target 1.30` reads "not served until 1.31"). Applying the
+  manifest fails today and works after the upgrade. Key:
+  `removed-api/networking.k8s.io/v1beta1/ServiceCIDR/unserved`.
+- **Removed.** The target no longer serves the API version (the same
+  ServiceCIDR is removed in 1.37; `--target 1.37` reads "removed in 1.37").
+  Key: `removed-api/networking.k8s.io/v1beta1/ServiceCIDR`.
+
+A rule written for "apply this once the cluster is on 1.31" (the first key)
+therefore stops applying at `--target 1.37`, where the manifest fails for
+the opposite reason, and the removal blocker is back. A baseline written at
+`--target 1.30` marks the removal at `--target 1.37` as new for the same
+reason.
+
+The warning for a removal in the next minor and the removal blocker itself
+**share** the key `removed-api/<group>/<version>/<kind>`: it is the same
+API about to go and gone. An ignore rule accepts a key whatever the
+finding's severity, so a rule for the key written while the finding is the
+warning (`--target 1.36`) goes on accepting the blocker at `--target 1.37`.
+To accept only the warning, give the rule an `expires` date before you
+move the target to the removal release; a baseline is stricter, since it
+marks a finding as new when its severity rises.
+
+A rule with the key of an API whose finding is the not-served-yet one
+(without `/unserved`) matches nothing, and `scan` prints a warning naming
+the key to write. That warning is printed only while the finding exists: a
+bare-key rule that is waiting for a later target draws none, and when that
+target arrives it accepts the removal.
+
+A baseline written by a release before the `/unserved` key held the
+not-served-yet blocker under the removal's key. Reading it, upgradescope
+drops those entries (it recognises them by the "is not served until"
+title), so the blocker comes back once as new under its own key; write the
+baseline again (`--write-baseline`) after you have decided to accept it.
 
 ## Who can turn the gate off
 

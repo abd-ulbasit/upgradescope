@@ -203,6 +203,35 @@ func (i Index) ServedAlternative(e APILifecycleEntry, target inventory.Version) 
 	return GVK{Group: best.Group, Version: best.Version, Kind: best.Kind}, true
 }
 
+// ServedSuccessor returns the newest version of e's group and kind that
+// target serves and that was introduced after e: where to move a manifest
+// of a deprecated or removed e when its replacement chain names nothing
+// target serves (scheduling.k8s.io/v1alpha2 Workload, removed in 1.37,
+// moves to v1beta1, served from 1.37; coordination.k8s.io/v1alpha1
+// LeaseCandidate, removed in 1.32, to v1alpha2, as v1beta1 is served only
+// from 1.33). The successor may be pre-GA (PreGA), and may itself be
+// removed later (its Removed says). Newest, and ties, as ServedAlternative.
+// It reports false when the KB knows no such version.
+func (i Index) ServedSuccessor(e APILifecycleEntry, target inventory.Version) (APILifecycleEntry, bool) {
+	var best *APILifecycleEntry
+	for _, c := range i.byKind[GVK{Group: e.Group, Kind: e.Kind}] {
+		if c.Version == e.Version || !servedAt(c, target) || c.Introduced.Compare(e.Introduced) <= 0 {
+			continue
+		}
+		if best == nil {
+			best = &c
+			continue
+		}
+		if cmpIntro := c.Introduced.Compare(best.Introduced); cmpIntro > 0 || cmpIntro == 0 && preferVersion(c.Version, best.Version) {
+			best = &c
+		}
+	}
+	if best == nil {
+		return APILifecycleEntry{}, false
+	}
+	return *best, true
+}
+
 // stability ranks a Kubernetes API version name: 2 for GA (v1), 1 for beta
 // (v1beta1), 0 for alpha (v1alpha1).
 func stability(version string) int {

@@ -19,7 +19,31 @@ Replace the binary through the channel you installed it with
 request of its own, so a change in verdicts shows up as the effect of the
 upgrade and not of an unrelated change. A baseline written by an older
 release stays usable: finding keys are stable across releases, except for
-the one change below.
+the two changes below.
+
+### The not-served-yet key ends in `/unserved`
+
+A manifest at an API version the target does not serve yet (`scan --files`
+and the gate: "networking.k8s.io/v1beta1 ServiceCIDR is not served until
+1.31, after target 1.30") used to have the key of the API's removal,
+`removed-api/<group>/<version>/<kind>`. A rule or baseline that accepted it
+("apply it once the cluster is on 1.31") then also accepted the removal
+blocker at a later target, where the manifest fails for the opposite
+reason. Its key is now `removed-api/<group>/<version>/<kind>/unserved`; the
+removal blocker and the next-minor warning keep the key they had. What to
+do after the upgrade:
+
+- **Ignore rules** for a not-served-yet API need the new key. A rule with the
+  old key matches nothing for that finding, so the blocker is back until the
+  rule is rewritten, and `scan` prints a warning naming the key to write. Rules for
+  removals are unaffected.
+- **Baselines.** The not-served-yet blocker is new once against a baseline
+  written before, because its key changed; the removal findings in it are
+  unchanged. Write the baseline again (`--write-baseline`) after you have
+  decided to accept the finding.
+- **Other consumers of the key.** SARIF rule ids, JUnit test names, GitLab
+  Code Quality check names and fingerprints for those findings change with
+  the key.
 
 ### The support-lifecycle key names its phase
 

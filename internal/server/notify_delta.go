@@ -145,8 +145,9 @@ func computeDelta(prev []findingHead, curr engine.Report, unassessed func(findin
 // a minute inside the ingest slot (#241). Each entry is keyed by every
 // resource name the engine may derive from the finding's kind (the kind
 // itself and its plurals, a superset of what kindMatchesResource
-// accepts), and FoldsInto confirms the match, so the answer is FoldsInto's
-// exactly. One entry per (group, version, lower-cased kind) is kept: the
+// accepts, and the key of a not-served-yet finding is read as its removal's,
+// as FoldsInto reads it), and FoldsInto confirms the match, so the answer is
+// FoldsInto's exactly. One entry per (group, version, lower-cased kind) is kept: the
 // match ignores the kind's case, so at most a handful of kinds share a
 // resource name.
 type carriedFolds map[string][]string
@@ -156,6 +157,9 @@ func newCarriedFolds(carried []findingHead) carriedFolds {
 	seen := map[string]bool{}
 	for _, h := range carried {
 		usage := h.key()
+		if base, ok := engine.BaseOfUnservedKey(usage); ok {
+			usage = base // the API of an unserved finding is its base key's
+		}
 		cat, tail, _ := strings.Cut(usage, "/")
 		switch engine.Category(cat) {
 		case engine.CatRemovedAPI, engine.CatDeprecatedAPI, engine.CatUnknownAPI:

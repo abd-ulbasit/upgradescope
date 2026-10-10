@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"slices"
+	"strings"
 
 	"github.com/abd-ulbasit/upgradescope/internal/engine"
 )
@@ -52,6 +53,9 @@ func ReadBaseline(r io.Reader, schemaVersion int) (Baseline, error) {
 	}
 	b := Baseline{findings: map[string]baselineEntry{}}
 	for _, f := range *doc.Findings {
+		if legacyUnservedFinding(f) {
+			continue
+		}
 		e, ok := b.findings[findingID(f)]
 		if !ok {
 			e = baselineEntry{objects: map[objectID]bool{}}
@@ -64,6 +68,20 @@ func ReadBaseline(r io.Reader, schemaVersion int) (Baseline, error) {
 		b.findings[findingID(f)] = e
 	}
 	return b, nil
+}
+
+// legacyUnservedFinding reports whether f is a "not served until X"
+// blocker a release before #300 wrote, under the key of the API's removal
+// (removed-api/<group>/<version>/<kind>, without /unserved). Recorded as
+// is, it would hold the removal blocker of the same API at a later target
+// (the same key, severity and objects); it is dropped instead, so that
+// the blocker resurfaces once under its new key and the removal is new.
+func legacyUnservedFinding(f engine.Finding) bool {
+	if f.Category != engine.CatRemovedAPI || !strings.Contains(f.Title, " is not served until ") {
+		return false
+	}
+	_, unservedKey := engine.BaseOfUnservedKey(f.Key)
+	return !unservedKey && !strings.HasPrefix(f.Key, string(engine.CatRemovedAPI)+"/helm-release/")
 }
 
 // Mark returns r with every finding's BaselineState set: unchanged when

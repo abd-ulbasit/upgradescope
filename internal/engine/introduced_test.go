@@ -77,7 +77,7 @@ func TestFilesModeUnservedAPIIsABlocker(t *testing.T) {
 			if f.Severity != SevBlocker || f.Title != c.wantTitle || !strings.HasPrefix(f.Remediation, c.wantFix) {
 				t.Errorf("finding = %s %q, remediation %q; want a blocker %q with remediation starting %q", f.Severity, f.Title, f.Remediation, c.wantTitle, c.wantFix)
 			}
-			if !strings.Contains(f.Detail, "fails with \"no matches for kind\"") || f.Key != "removed-api/"+apiKey(c.us.Group, c.us.Version, c.us.Kind) {
+			if !strings.Contains(f.Detail, "fails with \"no matches for kind\"") || f.Key != "removed-api/"+apiKey(c.us.Group, c.us.Version, c.us.Kind)+"/unserved" {
 				t.Errorf("key %q detail %q", f.Key, f.Detail)
 			}
 			if r.Verdict != VerdictBlocked {
