@@ -173,16 +173,16 @@ their own line too: that is the version running.
 | Add-on (`id`) | Release lines | Kubernetes ranges | Synced from endoflife.date |
 |---|---|---|---|
 | `argo-cd` | yes | — | yes |
-| `calico` | yes | — | yes |
-| `cert-manager` | yes | — | yes |
-| `cilium` | yes | — | yes |
+| `calico` | yes | minimum per release line (compat rows) | yes |
+| `cert-manager` | yes | compat rows, minimum and maximum | yes |
+| `cilium` | yes | minimum for 1.13 and 1.14 (compat rows) | yes |
 | `containerd` (node runtime) | yes | compat rows | yes |
 | `etcd` | yes | — | yes |
 | `fluent-bit` | yes | — | yes |
 | `flux` | yes | — | yes |
 | `gatekeeper` | yes | — | yes |
 | `istio` | yes | per release line | yes |
-| `karpenter` | yes | — | yes |
+| `karpenter` | yes | maximum per release line (compat rows) | yes |
 | `keda` | yes | per release line | yes |
 | `kyverno` | yes | per release line | yes |
 | `traefik` | yes | — | yes |
@@ -194,11 +194,11 @@ their own line too: that is the version running.
 | `external-dns` | — | compat rows | — |
 | `rke2-ingress-nginx` | community builds ended 2026-03-31; Prime LTS only until 2027-11-30 | compat rows | — |
 | `aks-app-routing-nginx` | product end of life 2026-11-30 | — | — |
-| `coredns` | — | — | — |
+| `coredns` | — | — (no support range published) | — |
 | `kube-state-metrics` | — | — | — |
-| `metrics-server` | — | — | — |
-| `prometheus-operator` | — | — | — |
-| `velero` | — | — | — |
+| `metrics-server` | — | compat rows (0.3.x maximum, minimum of 0.6+) | — |
+| `prometheus-operator` | — | compat rows (minimum) | — |
+| `velero` | — | compat row (minimum) | — |
 
 So: 14 entries carry release-line EOL data kept in sync with
 [endoflife.date](https://endoflife.date), five are retired as a whole
@@ -208,11 +208,42 @@ for the product as a whole (the AKS application routing NGINX build), one
 carries an end date for everyone and a later one under a condition (RKE2's
 Ingress NGINX build, supported until 2027-11-30 only with a SUSE Rancher
 Prime LTS subscription),
-6 carry Kubernetes compatibility ranges, and for the 5 entries with
+13 carry Kubernetes compatibility ranges, and for the 2 entries with
 none of these, a detected install is reported as `addon-no-data` (info)
-rather than judged. ExternalDNS has compatibility ranges but no
-end-of-life data, which is reported the same way. The
+rather than judged. ExternalDNS, Metrics Server, Velero and Prometheus
+Operator have compatibility ranges but no end-of-life data, which is
+reported the same way unless the range excludes the target. The
 registry is small on purpose: every row needs a source.
+
+### Which Kubernetes ranges are encoded
+
+A range is encoded only as far as the upstream page states it. Each row
+cites the page it was read from, with the date read in the entry's
+comments, and the ranges of an entry that endoflife.date syncs live in its
+`compat` rows, which `tools/eol-sync` does not rewrite (see
+[CONTRIBUTING](https://github.com/abd-ulbasit/upgradescope/blob/main/registry/CONTRIBUTING.md)).
+
+- **A maximum** (the line is unsupported above it) is encoded where upstream
+  says so: cert-manager's supported range per release line, Metrics Server
+  0.3.x (Kubernetes 1.8 to 1.21), and Karpenter, whose matrix lists the oldest
+  Karpenter that runs each Kubernetes minor, so a line's maximum is the newest
+  minor it can run. At Kubernetes 1.37 that makes cert-manager 1.21, Karpenter
+  up to 1.14 and Metrics Server 0.3.x blockers, because no release the
+  registry knows supports 1.37 yet.
+- **A minimum** is encoded where upstream says older Kubernetes is
+  unsupported: Calico 3.25 to 3.32 ("will not work" below 1.16 or 1.21),
+  Cilium 1.13 and 1.14, Metrics Server 0.6 and later, Velero 1.14 to 1.18,
+  Prometheus Operator. A forward-upgrade scan cannot trip a minimum, since the
+  target is newer than the cluster; a target below one can.
+- **A tested-with list is not a range.** Argo CD, Cilium 1.15 and later,
+  Calico's tested versions (so Calico has no maximum) and the client-go
+  version kube-state-metrics is built with state what upstream runs its
+  tests on, and say nothing, or say "may work", about Kubernetes versions
+  outside it, so none of them is a bound: encoding the lowest or highest
+  tested version would call a working install incompatible.
+- **No matrix**: Flux, Traefik and Gatekeeper publish only a policy relative to
+  upstream Kubernetes's own support window, and CoreDNS only the version
+  kubeadm installs. Their entries say so in a comment.
 
 An image is matched by the repository path an entry declares. A path of two
 or more segments is a suffix on whole path segments: `ingress-nginx/controller` is
@@ -244,6 +275,28 @@ exactly: a mirror that adds a prefix
 (`myregistry.corp/k8s/kubernetes-dashboard-amd64`) is not recognized, and
 the image is listed as unrecognized; add the mirror's path to a
 `--registry-dir` copy of the entry.
+As an example, CoreDNS is found at every one of these (`coredns.yaml`):
+
+| Where | Image path | Tag |
+|---|---|---|
+| Docker Hub, `registry.k8s.io`, a mirror | `coredns/coredns` | `v1.11.3` |
+| EKS add-on, EKS Distro (public ECR) | `eks/coredns`, `eks-distro/coredns/coredns` | `v1.11.1-eksbuild.4`, `v1.13.2-eks-1-36-1` |
+| AKS | `mcr.microsoft.com/oss/kubernetes/coredns`, `mcr.microsoft.com/oss/v2/kubernetes/coredns` | `v1.9.4`, `v1.9.4-hotfix.20240704`, `v1.9.4-7` |
+| RKE2, k3s | `rancher/mirrored-coredns-coredns` | `1.9.4` |
+
+Metrics Server and kube-state-metrics are found the same way, and also at
+GKE's `gcr.io/gke-release/<name>` (alias `gke.gcr.io/<name>`, tag
+`v0.8.0-gke.13`) and at Bitnami's rebuilds (`bitnami/` and `bitnamilegacy/`,
+tag `0.8.0-debian-12-r4`). Each path was read from the registry that serves
+it, and its tag's build suffix never reaches the version. Where a managed
+distribution's build follows the provider's own support policy and the
+registry has no entry for that policy, the image stays unrecognized rather
+than be judged by upstream's release-line dates: AKS's Cilium and Calico
+(`mcr.microsoft.com/oss/cilium/*`, `oss/calico/*`), GKE's Cilium and Calico,
+and Rancher's `hardened-*` rebuilds are listed under `unrecognizedImages`.
+Rancher's `mirrored-*` images are verbatim copies and match like the upstream
+image.
+
 Add-ons that endoflife.date does not track and that no entry covers yet
 (cluster-autoscaler, the AWS Load Balancer Controller and the other EKS
 add-ons) are not judged; the report lists their images as unrecognized.

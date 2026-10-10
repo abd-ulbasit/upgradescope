@@ -29,6 +29,15 @@ quote them.
 
 ## The short answers
 
+- **Evaluation grows linearly with the number of namespaces.** The engine
+  built its namespace-to-team map once per finding, Helm release and CRD,
+  so `Evaluate` cost their product. `go test ./internal/engine -bench
+  EvaluateLargeInventory` (as many namespaces as Helm releases and CRDs, on
+  an Apple M1 Pro with a load average of about 7, 11 October 2026) took 1.20
+  s at 5,000 and 18.6 s at 20,000 on main `3c86046e`, and takes 26 ms and
+  104 ms at `dfee7c01`, the commit of this change (one run each of 2 and 5
+  iterations, a loaded shared machine, so an upper bound). This is the
+  evaluate step only, not the collector.
 - **With the pod pass reused (the default since
   [#228](https://github.com/abd-ulbasit/upgradescope/issues/228)'s option
   b), a steady agent tick at 2,001 nodes, about 14,000 pods and 1,000 Helm

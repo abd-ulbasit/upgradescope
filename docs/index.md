@@ -53,7 +53,7 @@ READY  no
 
 BLOCKER (2)
   [removed-api] batch/v1beta1 CronJob removed in 1.25 (1 object)
-      1 manifest object(s) use this API: namespace unset (1).
+      1 manifest object(s) use this API: no namespace set (1).
       - nightly  rendered/all.yaml:12
       fix: migrate to batch/v1 CronJob
       see: https://kubernetes.io/docs/reference/using-api/deprecation-guide/

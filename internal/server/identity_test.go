@@ -48,7 +48,7 @@ func TestIngestRejectsClusterUIDChange(t *testing.T) {
 			continue
 		}
 		msg, _ := out["error"].(string)
-		for _, hint := range []string{`"prod-eu-1"`, "uid-123", "uid-other", "--cluster-name", "upgradescope clusters delete prod-eu-1"} {
+		for _, hint := range []string{`"prod-eu-1"`, "uid-123", "uid-other", "--cluster-name", "upgradescope clusters delete prod-eu-1 --server-url"} {
 			if !strings.Contains(msg, hint) {
 				t.Errorf("409 message %q does not mention %s", msg, hint)
 			}

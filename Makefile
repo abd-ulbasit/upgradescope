@@ -37,17 +37,25 @@ web-test:
 	./hack/web-test.sh
 
 # The CI unit gate: gofmt, go vet, go test -race -count=1, for the main
-# module and every tools/ module. Needs only Go.
+# module and every tools/ module. Needs only Go. CI runs it as two shards
+# (TEST_SHARD=1/2, 2/2: every package in exactly one, balanced by
+# hack/test-durations.txt); TEST_SCOPE=readers runs only the packages whose
+# tests read the repository outside Go code (hack/test-readers.txt), for a
+# pull request that changes no Go code. With neither, everything runs.
+TEST_SHARD ?=
+TEST_SCOPE ?= all
 test:
-	./hack/test.sh
+	./hack/test.sh $(if $(TEST_SHARD),--shard $(TEST_SHARD)) $(if $(filter readers,$(TEST_SCOPE)),--readers)
 
 # The heap-bound tests (the proofs of the server's and the Helm collector's
 # memory bounds), without the race detector, under which they skip or
 # shrink; CI's test-heap job runs this, apart from the test job. Needs
-# only Go.
+# only Go. CI runs it as four shards in parallel (TEST_HEAP_SHARD=1/4 ...
+# 4/4, balanced by hack/test-heap-durations.txt); with none, every test runs.
+TEST_HEAP_SHARD ?=
 .PHONY: test-heap
 test-heap:
-	./hack/test-heap.sh
+	./hack/test-heap.sh $(if $(TEST_HEAP_SHARD),--shard $(TEST_HEAP_SHARD))
 
 # it writes to a cluster (the agent IT installs a CRD), so the tests refuse
 # any context that is not a kind-* context on a loopback API server; set
@@ -337,7 +345,7 @@ examples-test:
 	./hack/examples-test.sh
 
 # Every test, e2e gate, CI job, make target and file docs/claims.md names
-# exists, so a public claim cannot lose its proof silently (CI's test job).
+# exists, so a public claim cannot lose its proof silently (CI's repo-checks job).
 .PHONY: claims-check
 claims-check:
 	./hack/claims-check.sh
@@ -347,7 +355,9 @@ claims-check:
 .PHONY: hack-test
 hack-test:
 	./hack/claims-check_test.sh
+	./hack/shard_test.sh
 	./hack/test-heap_test.sh
+	./hack/test_test.sh
 	./hack/cross-build_test.sh
 	./hack/dashboard-smoke_test.sh
 	./hack/vulncheck_test.sh
@@ -362,7 +372,9 @@ hack-test:
 	./hack/e2e_test.sh
 	./hack/ci-concurrency_test.sh
 	./hack/ci-ok_test.sh
+	./hack/ci-gates_test.sh
 	./hack/ci-sarif_test.sh
+	./hack/docs-sarif-guard_test.sh
 	./hack/release-ci-permissions_test.sh
 	./hack/release-caches_test.sh
 	./hack/kb-refresh-ci_test.sh

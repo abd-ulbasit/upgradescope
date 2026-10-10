@@ -50,7 +50,7 @@ func collectHelmCached(t *testing.T, cache *HelmCache, lifecycle []kb.APILifecyc
 	t.Helper()
 	kube, meta := helmClients(t, objs...)
 	var inv inventory.Inventory
-	err := collectHelmWith(context.Background(), kube, meta, lifecycle, cache, &inv)
+	err := collectHelmWith(context.Background(), kube, meta, lifecycle, cache, nil, &inv)
 	return inv, helmGets(kube), err
 }
 
@@ -142,7 +142,7 @@ func TestHelmCacheDoesNotRememberAFailedFetch(t *testing.T) {
 		return false, nil, nil
 	})
 	var inv inventory.Inventory
-	err := collectHelmWith(context.Background(), kube, meta, nil, cache, &inv)
+	err := collectHelmWith(context.Background(), kube, meta, nil, cache, nil, &inv)
 	var pe partialError
 	if !errors.As(err, &pe) || !pe.incomplete || len(inv.HelmReleases) != 1 {
 		t.Fatalf("err = %v, %d releases: want a partial result with one release", err, len(inv.HelmReleases))
@@ -150,7 +150,7 @@ func TestHelmCacheDoesNotRememberAFailedFetch(t *testing.T) {
 	fail = false
 	kube.ClearActions()
 	inv = inventory.Inventory{}
-	if err := collectHelmWith(context.Background(), kube, meta, nil, cache, &inv); err != nil && !errors.As(err, new(partialError)) {
+	if err := collectHelmWith(context.Background(), kube, meta, nil, cache, nil, &inv); err != nil && !errors.As(err, new(partialError)) {
 		t.Fatal(err)
 	}
 	if got := helmGets(kube); len(got) != 1 || !strings.HasSuffix(got[0], "cert-manager.v1") {
@@ -279,7 +279,7 @@ func TestHelmCacheKeepsADriversEntriesWhenItsListFails(t *testing.T) {
 		return false, nil, nil
 	})
 	var inv inventory.Inventory
-	err := collectHelmWith(context.Background(), kube, meta, nil, cache, &inv)
+	err := collectHelmWith(context.Background(), kube, meta, nil, cache, nil, &inv)
 	if !errors.As(err, new(partialError)) || len(inv.HelmReleases) != 1 {
 		t.Fatalf("err = %v, %d releases: want a partial result with the Secret release", err, len(inv.HelmReleases))
 	}
@@ -291,7 +291,7 @@ func TestHelmCacheKeepsADriversEntriesWhenItsListFails(t *testing.T) {
 	failList = false
 	kube.ClearActions()
 	inv = inventory.Inventory{}
-	if err := collectHelmWith(context.Background(), kube, meta, nil, cache, &inv); err != nil && !errors.As(err, new(partialError)) {
+	if err := collectHelmWith(context.Background(), kube, meta, nil, cache, nil, &inv); err != nil && !errors.As(err, new(partialError)) {
 		t.Fatal(err)
 	}
 	if got := helmGets(kube); len(got) != 0 {
@@ -344,7 +344,7 @@ func TestHelmCacheKeepsWhatAPartialStepDecoded(t *testing.T) {
 		}
 		ss := []step{{cap: inventory.CapHelm, run: func(ctx context.Context, inv *inventory.Inventory) error {
 			stepDone = ctx.Done()
-			return collectHelmStep(ctx, Clients{Kube: kube, Metadata: meta}, nil, cache, nil, inv)
+			return collectHelmStep(ctx, Clients{Kube: kube, Metadata: meta}, nil, cache, nil, nil, inv)
 		}}}
 		for range nSteps - 1 {
 			ss = append(ss, step{cap: inventory.CapCRDs, run: func(context.Context, *inventory.Inventory) error { return nil }})

@@ -1,0 +1,140 @@
+{
+  "clusterId": "files",
+  "findings": [
+    {
+      "category": "volume-plugin",
+      "citations": [
+        "https://github.com/kubernetes/kubernetes/blob/master/CHANGELOG/CHANGELOG-1.31.md",
+        "https://github.com/kubernetes/kubernetes/pull/124544",
+        "https://github.com/kubernetes/kubernetes/pull/118143"
+      ],
+      "detail": "1 object names it, in: no namespace set (1). From 1.31 a pod that names it does not start.",
+      "key": "volume-plugin/cephfs",
+      "objects": [
+        {
+          "file": "f.yaml",
+          "line": 29,
+          "name": "data"
+        }
+      ],
+      "remediation": "redeploy the workload on a volume of the CephFS CSI driver (ceph-csi); there is no CSI migration for cephfs",
+      "severity": "blocker",
+      "title": "In-tree volume plugin cephfs removed in 1.31 (1 object)"
+    },
+    {
+      "category": "volume-plugin",
+      "citations": [
+        "https://github.com/kubernetes/kubernetes/blob/master/CHANGELOG/CHANGELOG-1.33.md",
+        "https://github.com/kubernetes/kubernetes/pull/129923",
+        "https://github.com/kubernetes/kubernetes/pull/136400",
+        "https://github.com/kubernetes/kubernetes/pull/63445"
+      ],
+      "detail": "2 objects name it, in: no namespace set (1), shop (1). From 1.33 a pod that names it does not start. Upstream: disabled by default in 1.33, where the GitRepoVolumeDriver feature gate can still turn it back on, and locked off in 1.36.",
+      "key": "volume-plugin/gitRepo",
+      "namespaces": [
+        "shop"
+      ],
+      "objects": [
+        {
+          "file": "f.yaml",
+          "line": 1,
+          "name": "web",
+          "namespace": "shop"
+        },
+        {
+          "file": "f.yaml",
+          "line": 16,
+          "name": "sync"
+        }
+      ],
+      "remediation": "clone the repository into an emptyDir volume from an init container, and mount that emptyDir",
+      "severity": "blocker",
+      "title": "In-tree volume plugin gitRepo removed in 1.33 (2 objects)"
+    },
+    {
+      "category": "volume-plugin",
+      "citations": [
+        "https://github.com/kubernetes/kubernetes/blob/master/CHANGELOG/CHANGELOG-1.26.md",
+        "https://github.com/kubernetes/kubernetes/pull/112015",
+        "https://github.com/kubernetes/kubernetes/pull/111485"
+      ],
+      "detail": "1 object names it, in: shop (1). From 1.26 a pod that names it does not start.",
+      "key": "volume-plugin/glusterfs",
+      "namespaces": [
+        "shop"
+      ],
+      "objects": [
+        {
+          "file": "f.yaml",
+          "line": 1,
+          "name": "web",
+          "namespace": "shop"
+        }
+      ],
+      "remediation": "migrate the volumes to another storage solution before the upgrade; there is no CSI migration for GlusterFS",
+      "severity": "blocker",
+      "title": "In-tree volume plugin glusterfs removed in 1.26 (1 object)"
+    },
+    {
+      "category": "volume-plugin",
+      "citations": [
+        "https://github.com/kubernetes/kubernetes/blob/master/CHANGELOG/CHANGELOG-1.27.md",
+        "https://github.com/kubernetes/kubernetes/pull/115838"
+      ],
+      "detail": "1 object names it, in: shop (1). From 1.27 the ebs.csi.aws.com CSI driver serves every operation on these volumes: a cluster without it installed cannot mount them, one with it is fine.",
+      "key": "volume-plugin/awsElasticBlockStore",
+      "namespaces": [
+        "shop"
+      ],
+      "objects": [
+        {
+          "file": "f.yaml",
+          "line": 1,
+          "name": "web",
+          "namespace": "shop"
+        }
+      ],
+      "remediation": "install the ebs.csi.aws.com CSI driver (aws-ebs-csi-driver) before the upgrade",
+      "severity": "warning",
+      "title": "In-tree volume plugin awsElasticBlockStore needs CSI driver ebs.csi.aws.com from 1.27 (1 object)"
+    },
+    {
+      "category": "volume-plugin",
+      "citations": [
+        "https://github.com/kubernetes/kubernetes/blob/master/CHANGELOG/CHANGELOG-1.23.md",
+        "https://kubernetes.io/docs/concepts/storage/volumes/#flexvolume"
+      ],
+      "detail": "1 object names it, in: no namespace set (1). It still works; upstream has not scheduled its removal.",
+      "key": "volume-plugin/flexVolume",
+      "objects": [
+        {
+          "file": "pv/flex.yaml",
+          "line": 1,
+          "name": "flex"
+        }
+      ],
+      "remediation": "move to a CSI driver for the same storage",
+      "severity": "info",
+      "title": "In-tree volume plugin flexVolume deprecated since 1.23 (1 object)"
+    }
+  ],
+  "kbVersion": "test-kb-1",
+  "notAssessed": [
+    {
+      "capability": "deprecated-calls",
+      "reason": "files mode"
+    },
+    {
+      "capability": "helm",
+      "reason": "files mode"
+    },
+    {
+      "capability": "versions",
+      "reason": "files mode"
+    }
+  ],
+  "ready": false,
+  "score": 20,
+  "target": "1.36",
+  "verdict": "blocked"
+}

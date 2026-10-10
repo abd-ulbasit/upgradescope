@@ -11,6 +11,7 @@ import (
 	"io/fs"
 	"maps"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -47,6 +48,9 @@ type manifestObject struct {
 	// defines, set on every such object counted (see attachCRDs); an
 	// unreadable one is empty.
 	crd *inventory.CRD
+	// volumes are the in-tree volume plugins it names (manifestVolumePlugins),
+	// set on kubectl's objects and copied onto the walk's (attachVolumes).
+	volumes []string
 }
 
 // podTemplate is what add-on detection reads of a pod template: its
@@ -382,6 +386,7 @@ func (p *streamParser) settle(root *yaml.Node, yerr error, text []byte, first in
 	}
 	p.bad = append(p.bad, warnings...)
 	attachCRDs(objs, kubectl)
+	attachVolumes(objs, kubectl)
 	p.objs = append(p.objs, objs...)
 	p.addEvidence(kubectl)
 }
@@ -466,6 +471,7 @@ func kubectlSends(raw []byte) ([]manifestObject, error) {
 		}
 		if u, ok := o.(*unstructured.Unstructured); ok {
 			mo.template = podTemplateOf(k.GroupKind(), u.Object)
+			mo.volumes = manifestVolumePlugins(k.GroupKind(), u.Object)
 			if k.GroupKind() == (schema.GroupKind{Group: "networking.k8s.io", Kind: "IngressClass"}) {
 				mo.ingressController, _, _ = unstructured.NestedString(u.Object, "spec", "controller")
 			}
@@ -1034,6 +1040,9 @@ func CollectManifests(r io.Reader, addons []registry.AddOn) (inventory.Inventory
 	inv := manifestInventory("manifests", "manifests mode", counts)
 	assessAddOns(&inv, ev, addons)
 	assessCRDs(&inv, crdsOf(objs))
+	var vols volumeTally
+	vols.addObjects(objs)
+	assessVolumes(&inv, vols, 0)
 	return inv, nil
 }
 
@@ -1052,6 +1061,23 @@ type FilesSummary struct {
 	Skipped  int           // files that held no Kubernetes object
 	Objects  int           // Kubernetes objects found (List items, not wrappers)
 	Warnings []FileWarning // in walk order
+
+	// Charts lists the directories holding a Chart.yaml (the outermost one
+	// of a nested chart) under which files could not be decoded and
+	// contain "{{": unrendered Helm templates. Their per-file warnings are
+	// not in Warnings, and api-usage is not assessed (see CollectFiles).
+	Charts []UnrenderedChart
+	// Templated counts the files outside any chart directory that could
+	// not be decoded and contain "{{". They are not in Warnings either, and
+	// do not change what is assessed.
+	Templated int
+}
+
+// UnrenderedChart is a chart directory scanned unrendered: Templates files
+// under it could not be decoded and contain "{{".
+type UnrenderedChart struct {
+	Dir       string // relative to the scanned root, slash-separated; "." for the root itself
+	Templates int
 }
 
 // FileWarning is a problem with part of a file: a document that could not
@@ -1134,9 +1160,14 @@ func CollectFiles(root string, k kb.KB) (inventory.Inventory, FilesSummary, erro
 	slices.SortFunc(removed, compareGVK)
 	var hiding []string // "file:line (group/version Kind)" per unassessed part naming a removed API
 	var crds []inventory.CRD
+	var vols volumeTally
+	unassessed := 0 // documents not decoded, whose volumes went unchecked
 	counts := map[gvk]*inventory.APIUsage{}
 	var ev addOnEvidence
 	var sum FilesSummary
+	givenRoot := filepath.ToSlash(root)
+	var chartDirs []string // outermost chart directories found so far, relative to root
+	chartIdx := map[string]int{}
 	if fi, err := os.Lstat(root); err == nil && fi.Mode()&fs.ModeSymlink != 0 {
 		if st, err := os.Stat(root); err == nil && st.IsDir() { // WalkDir would read it as a file
 			if root, err = filepath.EvalSymlinks(root); err != nil {
@@ -1157,6 +1188,7 @@ func CollectFiles(root string, k kb.KB) (inventory.Inventory, FilesSummary, erro
 		rel = filepath.ToSlash(rel)
 		if d.IsDir() {
 			if path == root {
+				noteChart(&chartDirs, path, ".")
 				return nil
 			}
 			if skip, why := skipDir(path, d.Name()); skip {
@@ -1165,6 +1197,7 @@ func CollectFiles(root string, k kb.KB) (inventory.Inventory, FilesSummary, erro
 				}
 				return filepath.SkipDir
 			}
+			noteChart(&chartDirs, path, rel)
 			return nil
 		}
 		if d.Type()&fs.ModeSymlink != 0 && path != root {
@@ -1186,15 +1219,49 @@ func CollectFiles(root string, k kb.KB) (inventory.Inventory, FilesSummary, erro
 		if err != nil {
 			return err
 		}
-		objs, fileEv, bad, err := parseManifestStream(f)
+		data, err := io.ReadAll(f)
 		f.Close()
 		if err != nil {
 			return fmt.Errorf("%s: %w", path, err)
 		}
+		parsed := readStream(data)
+		objs, fileEv, bad := parsed.objs, parsed.ev, parsed.bad
+		templated := false
 		for _, b := range bad {
-			sum.Warnings = append(sum.Warnings, FileWarning{File: rel, Line: b.line, Err: b.err, Unassessed: b.unassessed != nil})
+			// A document that could not be decoded and holds "{{" is an
+			// unrendered template: one hint or count per chart or scan
+			// replaces a warning per file (see FilesSummary.Charts).
+			if b.unassessed != nil && bytes.Contains(b.unassessed, []byte("{{")) {
+				templated = true
+			} else {
+				sum.Warnings = append(sum.Warnings, FileWarning{File: rel, Line: b.line, Err: b.err, Unassessed: b.unassessed != nil})
+			}
+			if b.unassessed != nil {
+				unassessed++
+			}
 			if g, ok := b.names(removed); ok {
 				hiding = append(hiding, fmt.Sprintf("%s:%d (%s)", rel, b.line, g))
+			}
+		}
+		chart := chartOf(chartDirs, rel)
+		if !templated && len(objs) == 0 && chart != "" && inTemplates(chart, rel) && bytes.Contains(data, []byte("{{")) {
+			// A template that reads as no Kubernetes object at all, such as
+			// one whose apiVersion is `{{ include ... }}`, was not read
+			// either: it can carry any apiVersion, and any volume.
+			templated = true
+			unassessed++
+		}
+		if templated {
+			if dir := chart; dir != "" {
+				i, ok := chartIdx[dir]
+				if !ok {
+					i = len(sum.Charts)
+					chartIdx[dir] = i
+					sum.Charts = append(sum.Charts, UnrenderedChart{Dir: dir})
+				}
+				sum.Charts[i].Templates++
+			} else {
+				sum.Templated++
 			}
 		}
 		if len(objs) == 0 {
@@ -1206,6 +1273,7 @@ func CollectFiles(root string, k kb.KB) (inventory.Inventory, FilesSummary, erro
 		}
 		sum.Objects += len(objs)
 		accumulate(counts, objs)
+		vols.addObjects(objs)
 		crds = append(crds, crdsOf(objs)...)
 		ev.images = append(ev.images, fileEv.images...)
 		ev.labelled = append(ev.labelled, fileEv.labelled...)
@@ -1218,15 +1286,83 @@ func CollectFiles(root string, k kb.KB) (inventory.Inventory, FilesSummary, erro
 	inv := manifestInventory("files", "files mode", counts)
 	assessAddOns(&inv, ev, k.AddOns)
 	assessCRDs(&inv, crds)
+	assessVolumes(&inv, vols, unassessed)
+	var reasons []string
+	if len(sum.Charts) > 0 {
+		reasons = append(reasons, unrenderedReason(givenRoot, sum.Charts))
+	}
 	if len(hiding) > 0 {
 		listed := hiding[:min(len(hiding), 5)]
 		more := ""
 		if n := len(hiding) - len(listed); n > 0 {
 			more = fmt.Sprintf(" and %d more", n)
 		}
-		inv.Capabilities[inventory.CapAPIUsage] = inventory.CapabilityStatus{Reason: fmt.Sprintf(
+		reasons = append(reasons, fmt.Sprintf(
 			"%d document(s) that name a removed API could not be decoded, so their objects were not assessed: %s%s",
-			len(hiding), strings.Join(listed, ", "), more)}
+			len(hiding), strings.Join(listed, ", "), more))
+	}
+	if len(reasons) > 0 {
+		inv.Capabilities[inventory.CapAPIUsage] = inventory.CapabilityStatus{Reason: strings.Join(reasons, "; ")}
 	}
 	return inv, sum, nil
+}
+
+// noteChart records dir (rel, relative to the root) as a chart directory
+// when it holds a Chart.yaml and no chart found earlier contains it: the
+// walk is in lexical order, so a directory comes before what is below it.
+func noteChart(chartDirs *[]string, dir, rel string) {
+	if chartOf(*chartDirs, rel+"/x") != "" {
+		return
+	}
+	if fi, err := os.Stat(filepath.Join(dir, "Chart.yaml")); err == nil && fi.Mode().IsRegular() {
+		*chartDirs = append(*chartDirs, rel)
+	}
+}
+
+// inTemplates reports whether the file rel is in the templates directory of
+// the chart at dir (or of a subchart of it).
+func inTemplates(dir, rel string) bool {
+	if dir != "." {
+		rel = strings.TrimPrefix(rel, dir+"/")
+	}
+	return strings.HasPrefix(rel, "templates/") || strings.Contains(rel, "/templates/")
+}
+
+// chartOf returns the outermost chart directory containing the file rel,
+// or "".
+func chartOf(chartDirs []string, rel string) string {
+	for _, c := range chartDirs {
+		if c == "." || strings.HasPrefix(rel, c+"/") {
+			return c
+		}
+	}
+	return ""
+}
+
+// unrenderedReason is the api-usage reason of a scan that left unrendered
+// chart templates unread: the count, and where.
+func unrenderedReason(root string, charts []UnrenderedChart) string {
+	where := func(c UnrenderedChart) string { return path.Join(root, c.Dir) }
+	total := 0
+	for _, c := range charts {
+		total += c.Templates
+	}
+	files, verb := "Helm template files", "were"
+	if total == 1 {
+		files, verb = "Helm template file", "was"
+	}
+	if len(charts) == 1 {
+		return fmt.Sprintf("%d %s under %s %s not read; render the chart with helm template and scan that", total, files, where(charts[0]), verb)
+	}
+	listed := charts[:min(len(charts), 5)]
+	parts := make([]string, len(listed))
+	for i, c := range listed {
+		parts[i] = fmt.Sprintf("%s (%d)", where(c), c.Templates)
+	}
+	more := ""
+	if n := len(charts) - len(listed); n > 0 {
+		more = fmt.Sprintf(" and %d more", n)
+	}
+	return fmt.Sprintf("%d %s under %d charts %s not read, so their objects were not assessed: %s%s; render each chart with helm template and scan that",
+		total, files, len(charts), verb, strings.Join(parts, ", "), more)
 }

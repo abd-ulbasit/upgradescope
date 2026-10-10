@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,6 +17,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/abd-ulbasit/upgradescope/internal/inventory"
+	"github.com/abd-ulbasit/upgradescope/internal/mcp"
 	"github.com/abd-ulbasit/upgradescope/internal/server/store"
 )
 
@@ -27,10 +29,13 @@ func newClustersCmd() *cobra.Command {
 		Use:   "clusters",
 		Short: "List, delete and rename the clusters a server knows",
 		Long: "List, delete and rename the clusters an upgradescope server knows.\n" +
-			"With --server, the commands call the server's API: list needs the read token (or the\n" +
-			"admin token), delete and rename the admin token (serve --admin-token). Without --server\n" +
-			"they open the server's database directly (--db or --db-url), e.g. while it is stopped;\n" +
-			"one of the two is required.",
+			"With --server-url, the commands call the server's API: list needs the read token (or the\n" +
+			"admin token), delete and rename the admin token (serve --admin-token). A server whose\n" +
+			"https certificate a private CA issued needs --server-ca-file; a token sent over plain http\n" +
+			"to a host that is not loopback crosses the network in the clear, and the command warns.\n" +
+			"Without --server-url they open the server's database directly (--db or --db-url), e.g.\n" +
+			"while it is stopped; one of the two is required. (--server is the former name of\n" +
+			"--server-url and still works.)",
 	}
 	cmd.AddCommand(newClustersListCmd())
 	cmd.AddCommand(newClustersDeleteCmd())
@@ -62,24 +67,34 @@ type errNoCluster string
 
 func (e errNoCluster) Error() string { return fmt.Sprintf("no cluster %q", string(e)) }
 
-// clusterTarget is the shared --server/--db selection plus the token the
-// subcommand needs in server mode.
+// clusterTarget is the shared --server-url/--db selection plus the token
+// the subcommand needs in server mode.
 type clusterTarget struct {
-	db        dbFlags
-	server    string
-	token     string
-	tokenFlag *secretFlag
+	db           dbFlags
+	server       string
+	serverCAFile string
+	token        string
+	tokenFlag    *secretFlag
+	tokenName    string // the token flag's name, for the cleartext warning
 }
 
 // register adds the flags; tokenName/tokenEnv name the token flag
 // ("read-token"/"admin-token").
 func (c *clusterTarget) register(cmd *cobra.Command, tokenName, tokenEnv, tokenUsage string) {
 	c.db.register(cmd)
-	cmd.Flags().StringVar(&c.server, "server", "", "base URL of a running upgradescope server, e.g. https://upgradescope.example.com (instead of --db/--db-url)")
+	cmd.Flags().StringVar(&c.server, "server-url", "", "base URL of a running upgradescope server, e.g. https://upgradescope.example.com (instead of --db/--db-url)")
+	// --server, this flag's name before --server-url (the name agent and mcp
+	// use): the same value, hidden, with cobra's deprecation note.
+	cmd.Flags().StringVar(&c.server, "server", "", "former name of --server-url")
+	_ = cmd.Flags().MarkDeprecated("server", "use --server-url")
+	registerServerCAFlag(cmd, &c.serverCAFile)
 	c.tokenFlag = addSecretFlag(cmd, &c.token, tokenName, tokenEnv, tokenUsage)
+	c.tokenName = tokenName
 	for _, f := range []string{"db", "db-url", "db-url-file"} {
+		cmd.MarkFlagsMutuallyExclusive("server-url", f)
 		cmd.MarkFlagsMutuallyExclusive("server", f)
 	}
+	cmd.MarkFlagsMutuallyExclusive("server-url", "server")
 }
 
 // open returns the server or database client the flags select. There is
@@ -88,11 +103,14 @@ func (c *clusterTarget) register(cmd *cobra.Command, tokenName, tokenEnv, tokenU
 // real one.
 func (c *clusterTarget) open(cmd *cobra.Command) (clusterAdmin, error) {
 	if c.server == "" {
+		if c.serverCAFile != "" {
+			return nil, errors.New("--server-ca-file needs --server-url: it only verifies the server the commands call")
+		}
 		if err := c.db.resolve(cmd); err != nil {
 			return nil, err
 		}
 		if !cmd.Flags().Changed("db") && c.db.dbURL == "" {
-			return nil, errors.New("name the fleet: --server URL for a running server, or its database with --db PATH, --db-url, --db-url-file or $UPGRADESCOPE_DB_URL")
+			return nil, errors.New("name the fleet: --server-url URL for a running server, or its database with --db PATH, --db-url, --db-url-file or $UPGRADESCOPE_DB_URL")
 		}
 		st, err := c.db.openStore()
 		if err != nil {
@@ -105,16 +123,37 @@ func (c *clusterTarget) open(cmd *cobra.Command) (clusterAdmin, error) {
 	}
 	u, err := url.Parse(c.server)
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-		return nil, fmt.Errorf("--server %q: want an http(s) URL such as https://upgradescope.example.com", c.server)
+		return nil, fmt.Errorf("--server-url %q: want an http(s) URL such as https://upgradescope.example.com", c.server)
 	}
-	return &serverAdmin{base: strings.TrimSuffix(c.server, "/"), token: c.token, client: &http.Client{
+	if err := validateServerCA(c.serverCAFile, "--server-url", c.server); err != nil {
+		return nil, err
+	}
+	roots, err := loadServerCA(c.serverCAFile)
+	if err != nil {
+		return nil, err
+	}
+	if host, ok := mcp.CleartextHost(c.server, c.token); ok {
+		// A warning, not a refusal: refusing would break scripts that work
+		// today. The token itself never appears in it.
+		fmt.Fprintf(cmd.ErrOrStderr(), "warning: %s\n", esc(fmt.Sprintf(
+			"sending the --%s to %s over plain http: the bearer token crosses the network unencrypted, "+
+				"so anyone on the path can replay it; serve the server over https (--tls-cert-file, the chart's server.tls, "+
+				"or a TLS Ingress) and use an https --server-url (--server-ca-file for a private CA)", c.tokenName, host)))
+	}
+	client := &http.Client{
 		Timeout: clusterAdminTimeout,
 		// Never follow a redirect: Go turns a 301, 302 or 303 DELETE or
 		// PATCH into a GET, which the admin token reads, so a load
 		// balancer's http→https redirect made a delete that never happened
 		// look done. do reports any 3xx instead, as the agent's push does.
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
-	}}, nil
+	}
+	if roots != nil {
+		tr := http.DefaultTransport.(*http.Transport).Clone() // keeps the proxy, dial and idle settings
+		tr.TLSClientConfig = &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12}
+		client.Transport = tr
+	}
+	return &serverAdmin{base: strings.TrimSuffix(c.server, "/"), token: c.token, client: client}, nil
 }
 
 func newClustersListCmd() *cobra.Command {
@@ -124,7 +163,7 @@ func newClustersListCmd() *cobra.Command {
 		Short: "List clusters: id, name, UID, last push and staleness",
 		Long: "List the clusters a server (or its database) knows: id, name, cluster UID, the last push\n" +
 			"and, when asked through a server, whether the cluster is stale (no push within --stale-after).",
-		Example: "  upgradescope clusters list --server https://upgradescope.example.com\n" +
+		Example: "  upgradescope clusters list --server-url https://upgradescope.example.com\n" +
 			"  upgradescope clusters list --db upgradescope.db",
 		Args:          cobra.NoArgs,
 		SilenceUsage:  true,
@@ -155,7 +194,7 @@ func newClustersListCmd() *cobra.Command {
 		},
 	}
 	target.register(cmd, "read-token", "UPGRADESCOPE_READ_TOKEN",
-		"with --server: the server's read token (or its admin token); omit for an open read API")
+		"with --server-url: the server's read token (or its admin token); omit for an open read API")
 	return cmd
 }
 
@@ -171,7 +210,7 @@ func newClustersDeleteCmd() *cobra.Command {
 			"Delete the old record and the next push registers the new one; an agent that used a\n" +
 			"per-cluster token needs a new one ('upgradescope tokens create').\n" +
 			"An agent that keeps pushing under the name registers it again.",
-		Example: "  upgradescope clusters delete prod-eu --server https://upgradescope.example.com\n" +
+		Example: "  upgradescope clusters delete prod-eu --server-url https://upgradescope.example.com\n" +
 			"  upgradescope clusters delete prod-eu --db upgradescope.db",
 		Args:          cobra.ExactArgs(1),
 		SilenceUsage:  true,
@@ -194,7 +233,7 @@ func newClustersDeleteCmd() *cobra.Command {
 			return nil
 		},
 	}
-	target.register(cmd, "admin-token", "UPGRADESCOPE_ADMIN_TOKEN", "with --server: the server's admin token (serve --admin-token)")
+	target.register(cmd, "admin-token", "UPGRADESCOPE_ADMIN_TOKEN", "with --server-url: the server's admin token (serve --admin-token)")
 	return cmd
 }
 
@@ -210,7 +249,7 @@ func newClustersRenameCmd() *cobra.Command {
 			"The new name must be an RFC 1123 subdomain (lowercase alphanumerics, '-' and '.', at most\n" +
 			"253 bytes), as pushes require: renaming is how a cluster a v0.1 server registered under\n" +
 			"another name (Prod_EU) moves to one its agent can push under.",
-		Example:       "  upgradescope clusters rename prod-eu prod-eu-1 --server https://upgradescope.example.com",
+		Example:       "  upgradescope clusters rename prod-eu prod-eu-1 --server-url https://upgradescope.example.com",
 		Args:          cobra.ExactArgs(2),
 		SilenceUsage:  true,
 		SilenceErrors: true,
@@ -238,7 +277,7 @@ func newClustersRenameCmd() *cobra.Command {
 			return nil
 		},
 	}
-	target.register(cmd, "admin-token", "UPGRADESCOPE_ADMIN_TOKEN", "with --server: the server's admin token (serve --admin-token)")
+	target.register(cmd, "admin-token", "UPGRADESCOPE_ADMIN_TOKEN", "with --server-url: the server's admin token (serve --admin-token)")
 	return cmd
 }
 
@@ -320,7 +359,7 @@ func (a *serverAdmin) do(ctx context.Context, method, path string, body, out any
 	}
 	if resp.StatusCode >= 300 && resp.StatusCode <= 399 {
 		return fmt.Errorf("%s %s: the server answered %s, a redirect to %q, which is never followed "+
-			"(a DELETE or PATCH would arrive as a GET): use that URL as --server", method, path, resp.Status, resp.Header.Get("Location"))
+			"(a DELETE or PATCH would arrive as a GET): use that URL as --server-url", method, path, resp.Status, resp.Header.Get("Location"))
 	}
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		var e struct {

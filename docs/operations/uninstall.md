@@ -13,6 +13,21 @@ the chart rendered. The kind end-to-end test checks that nothing else is
 left behind (`e2e:uninstall_leaves_nothing` in the
 [claims ledger](../claims.md)).
 
+To keep the server's SQLite history across an uninstall (to reinstall
+later, or to copy it off first), choose before you uninstall:
+
+- `server.persistence.retain=true` annotates the chart's PVC
+  `helm.sh/resource-policy: keep`, so `helm uninstall` leaves it. Set it with
+  a `helm upgrade` first: the annotation must be on the PVC when you
+  uninstall. A reinstall under the same release name and namespace mounts
+  it again; delete it with `kubectl -n upgradescope delete pvc
+  upgradescope-server-data` once it is no longer wanted.
+- `server.persistence.existingClaim=<pvc>` mounts a PVC you created, and the
+  chart renders none, so the claim is never the chart's to delete.
+
+A Postgres database (`server.database.existingSecret`) is never the chart's
+either ([A fleet server](#a-fleet-server)).
+
 Two things stay, by design:
 
 - the `ClusterReadiness` CRD, because Helm never deletes what it installed
@@ -47,7 +62,7 @@ record, history and ingest tokens:
 
 ```sh
 UPGRADESCOPE_ADMIN_TOKEN=... upgradescope clusters delete prod-eu-1 \
-  --server https://upgradescope.example.com
+  --server-url https://upgradescope.example.com
 ```
 
 An agent that keeps pushing under the name registers it again.

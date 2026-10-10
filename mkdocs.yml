@@ -75,6 +75,7 @@ nav:
       - Knowledge base: concepts/knowledge-base.md
       - Add-on registry: concepts/addon-registry.md
       - Deprecated-API detection: concepts/api-usage-detection.md
+      - In-tree volume plugins: concepts/volume-plugins.md
       - Version skew: concepts/version-skew.md
       - Managed-provider support: concepts/support-lifecycle.md
   - Guides:
@@ -85,6 +86,7 @@ nav:
       - Prometheus and Grafana: guides/prometheus-grafana.md
       - Suppressions and baselines: guides/suppressions-and-baselines.md
       - Other CI systems: guides/other-ci.md
+      - The dashboard: guides/dashboard.md
   - Operations:
       - Install: operations/install.md
       - Upgrade: operations/upgrade.md

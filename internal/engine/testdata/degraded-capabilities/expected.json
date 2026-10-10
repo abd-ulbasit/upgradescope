@@ -14,6 +14,10 @@
     {
       "capability": "helm",
       "reason": "secrets list forbidden in namespace kube-system"
+    },
+    {
+      "capability": "volumes",
+      "reason": "not reported by the collector, which predates in-tree volume plugin checks; upgrade it to assess volume plugins"
     }
   ],
   "ready": true,

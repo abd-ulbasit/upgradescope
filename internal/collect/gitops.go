@@ -157,8 +157,8 @@ func (s gitopsToolState) present() (evidence string, ok bool) {
 // release storage decides the capability's availability, as before; what
 // the tools add (their charts, and notes on what is not assessed) only
 // ever makes an available capability partial, never unavailable.
-func collectHelmStep(ctx context.Context, c Clients, lifecycle []kb.APILifecycleEntry, helm *HelmCache, gitops *GitOpsCache, inv *inventory.Inventory) error {
-	err := collectHelmWith(ctx, c.Kube, c.Metadata, lifecycle, helm, inv)
+func collectHelmStep(ctx context.Context, c Clients, lifecycle []kb.APILifecycleEntry, helm *HelmCache, namespaces []string, gitops *GitOpsCache, inv *inventory.Inventory) error {
+	err := collectHelmWith(ctx, c.Kube, c.Metadata, lifecycle, helm, namespaces, inv)
 	var pe partialError
 	available := errors.As(err, &pe)
 	states := collectGitOps(ctx, c, available && len(inv.HelmReleases) == 0, gitops, inv)

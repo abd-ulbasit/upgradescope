@@ -38,7 +38,7 @@ func testReport() engine.Report {
 				Category: engine.CatRemovedAPI, Severity: engine.SevBlocker,
 				Key:            "removed-api/networking.k8s.io/v1beta1/Ingress",
 				Title:          "networking.k8s.io/v1beta1 Ingress removed in 1.22 (10 objects)",
-				Detail:         "10 manifest object(s) use this API: namespace unset (1), shop (9).",
+				Detail:         "10 manifest object(s) use this API: no namespace set (1), shop (9).",
 				Remediation:    "migrate to networking.k8s.io/v1 Ingress",
 				ObjectsOmitted: 7,
 				Citations:      []string{deprecationGuide},

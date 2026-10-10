@@ -64,7 +64,7 @@ func TestWriteMarkdownGolden(t *testing.T) {
 		"**Not assessed**\n" +
 		"\n" +
 		"- versions: files mode\n"
-	if got := buf.String(); got != want {
+	if got := buf.String(); got != want+mdScope {
 		t.Errorf("markdown output mismatch\n--- got ---\n%s\n--- want ---\n%s", got, want)
 	}
 }
@@ -84,7 +84,7 @@ func TestWriteMarkdownNoFindings(t *testing.T) {
 		"Target **1.36** · score **100/100** · 0 blockers, 0 warnings, 0 info · KB `test-kb`\n" +
 		"\n" +
 		"No findings.\n"
-	if got := buf.String(); got != want {
+	if got := buf.String(); got != want+mdScope {
 		t.Errorf("markdown output mismatch\n--- got ---\n%s\n--- want ---\n%s", got, want)
 	}
 }
@@ -216,7 +216,7 @@ func TestWriteMarkdownSuppressed(t *testing.T) {
 		"|---|---|---|---|---|\n" +
 		"| blocker | networking.k8s.io/v1beta1 Ingress removed in 1.22 (1 object) | `rendered/all.yaml:2` shop/web | shop's Ingress is replaced in PLAT-7 | `ci/upgradescope.yaml` until 2099-12-31 |\n" +
 		"| blocker | batch/v1beta1 CronJob removed in 1.25 (1 object) | `rendered/all.yaml:12` nightly | retired with the batch cluster | `upgradescope.basit.engineer/ignore` annotation |\n"
-	if got := buf.String(); got != want {
+	if got := buf.String(); got != want+mdScope {
 		t.Errorf("markdown output mismatch\n--- got ---\n%s\n--- want ---\n%s", got, want)
 	}
 }
@@ -259,7 +259,7 @@ func TestWriteMarkdownBaseline(t *testing.T) {
 		"|---|---|---|---|---|\n" +
 		"| blocker | unchanged | batch/v1beta1 CronJob removed in 1.25 (1 object) | `rendered/all.yaml:12` nightly | migrate to batch/v1 CronJob |\n" +
 		"| blocker | **new** | networking.k8s.io/v1beta1 Ingress removed in 1.22 (1 object) | `rendered/all.yaml:2` shop/web | migrate to networking.k8s.io/v1 Ingress |\n"
-	if got := buf.String(); got != want {
+	if got := buf.String(); got != want+mdScope {
 		t.Errorf("markdown output mismatch\n--- got ---\n%s\n--- want ---\n%s", got, want)
 	}
 
@@ -290,7 +290,7 @@ func TestWriteMarkdownSuppressedEscapes(t *testing.T) {
 	var buf bytes.Buffer
 	WriteMarkdown(&buf, r)
 	want := `| warning | t |  | see \<script\>x\</script\> \| \*now\*\\nsecond line | ` + "``dir/we`ird\\|.yaml`` until 2099-12-31 |\n"
-	if !strings.HasSuffix(buf.String(), want) {
+	if !strings.HasSuffix(buf.String(), want+mdScope) {
 		t.Errorf("suppressed row\n got: %s\nwant suffix: %s", buf.String(), want)
 	}
 }
@@ -316,7 +316,7 @@ func TestWriteMarkdownNamesTheCluster(t *testing.T) {
 		"Context `prod\\|eu` · API server `https://10.0.0.1:6443`\n" +
 		"\n" +
 		"No findings.\n"
-	if got := buf.String(); got != want {
+	if got := buf.String(); got != want+mdScope {
 		t.Errorf("markdown output mismatch\n--- got ---\n%s\n--- want ---\n%s", got, want)
 	}
 }

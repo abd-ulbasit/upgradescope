@@ -1,0 +1,260 @@
+{
+  "1.22": [
+    {
+      "category": "removed-api",
+      "citations": [
+        "https://kubernetes.io/docs/reference/using-api/deprecation-guide/"
+      ],
+      "detail": "1 manifest object(s) use this API: web (1).",
+      "key": "removed-api/admissionregistration.k8s.io/v1beta1/MutatingWebhookConfiguration",
+      "namespaces": [
+        "web"
+      ],
+      "objects": [
+        {
+          "line": 3,
+          "name": "x",
+          "namespace": "web"
+        }
+      ],
+      "remediation": "migrate to admissionregistration.k8s.io/v1 MutatingWebhookConfiguration; admissionregistration.k8s.io/v1 is not a rename of the apiVersion: webhooks[*].sideEffects (None or NoneOnDryRun) and webhooks[*].admissionReviewVersions (v1 and v1beta1 are supported) are required and have no default, webhooks[*].name must be unique in the list, and the defaults change: failurePolicy Fail (was Ignore), matchPolicy Equivalent (was Exact), timeoutSeconds 10 (was 30)",
+      "severity": "blocker",
+      "title": "admissionregistration.k8s.io/v1beta1 MutatingWebhookConfiguration removed in 1.22 (1 object)"
+    },
+    {
+      "category": "removed-api",
+      "citations": [
+        "https://kubernetes.io/docs/reference/using-api/deprecation-guide/"
+      ],
+      "detail": "1 manifest object(s) use this API: web (1).",
+      "key": "removed-api/admissionregistration.k8s.io/v1beta1/ValidatingWebhookConfiguration",
+      "namespaces": [
+        "web"
+      ],
+      "objects": [
+        {
+          "line": 3,
+          "name": "x",
+          "namespace": "web"
+        }
+      ],
+      "remediation": "migrate to admissionregistration.k8s.io/v1 ValidatingWebhookConfiguration; admissionregistration.k8s.io/v1 is not a rename of the apiVersion: webhooks[*].sideEffects (None or NoneOnDryRun) and webhooks[*].admissionReviewVersions (v1 and v1beta1 are supported) are required and have no default, webhooks[*].name must be unique in the list, and the defaults change: failurePolicy Fail (was Ignore), matchPolicy Equivalent (was Exact), timeoutSeconds 10 (was 30)",
+      "severity": "blocker",
+      "title": "admissionregistration.k8s.io/v1beta1 ValidatingWebhookConfiguration removed in 1.22 (1 object)"
+    },
+    {
+      "category": "removed-api",
+      "citations": [
+        "https://kubernetes.io/docs/reference/using-api/deprecation-guide/"
+      ],
+      "detail": "1 manifest object(s) use this API: web (1).",
+      "key": "removed-api/apiextensions.k8s.io/v1beta1/CustomResourceDefinition",
+      "namespaces": [
+        "web"
+      ],
+      "objects": [
+        {
+          "line": 3,
+          "name": "x",
+          "namespace": "web"
+        }
+      ],
+      "remediation": "migrate to apiextensions.k8s.io/v1 CustomResourceDefinition; apiextensions.k8s.io/v1 is not a rename of the apiVersion: spec.scope must be set (it no longer defaults to Namespaced), spec.version, spec.validation, spec.subresources and spec.additionalPrinterColumns move under spec.versions[*], each version needs a structural spec.versions[*].schema.openAPIV3Schema, spec.preserveUnknownFields: true is disallowed (use x-kubernetes-preserve-unknown-fields: true in the schema), and spec.conversion.webhookClientConfig moves to spec.conversion.webhook.clientConfig",
+      "severity": "blocker",
+      "title": "apiextensions.k8s.io/v1beta1 CustomResourceDefinition removed in 1.22 (1 object)"
+    },
+    {
+      "category": "removed-api",
+      "citations": [
+        "https://kubernetes.io/docs/reference/using-api/deprecation-guide/"
+      ],
+      "detail": "1 manifest object(s) use this API: web (1).",
+      "key": "removed-api/extensions/v1beta1/Ingress",
+      "namespaces": [
+        "web"
+      ],
+      "objects": [
+        {
+          "line": 3,
+          "name": "x",
+          "namespace": "web"
+        }
+      ],
+      "remediation": "migrate to networking.k8s.io/v1 Ingress; networking.k8s.io/v1 is not a rename of the apiVersion: spec.backend becomes spec.defaultBackend, a backend's serviceName becomes service.name and its servicePort becomes service.port.number (numeric) or service.port.name (string), and pathType (Prefix, Exact or ImplementationSpecific, which matches the undefined v1beta1 behaviour) is required on every path",
+      "severity": "blocker",
+      "title": "extensions/v1beta1 Ingress removed in 1.22 (1 object)"
+    },
+    {
+      "category": "removed-api",
+      "citations": [
+        "https://kubernetes.io/docs/reference/using-api/deprecation-guide/"
+      ],
+      "detail": "1 manifest object(s) use this API: web (1).",
+      "key": "removed-api/networking.k8s.io/v1beta1/Ingress",
+      "namespaces": [
+        "web"
+      ],
+      "objects": [
+        {
+          "line": 3,
+          "name": "x",
+          "namespace": "web"
+        }
+      ],
+      "remediation": "migrate to networking.k8s.io/v1 Ingress; networking.k8s.io/v1 is not a rename of the apiVersion: spec.backend becomes spec.defaultBackend, a backend's serviceName becomes service.name and its servicePort becomes service.port.number (numeric) or service.port.name (string), and pathType (Prefix, Exact or ImplementationSpecific, which matches the undefined v1beta1 behaviour) is required on every path",
+      "severity": "blocker",
+      "title": "networking.k8s.io/v1beta1 Ingress removed in 1.22 (1 object)"
+    },
+    {
+      "category": "deprecated-api",
+      "citations": [
+        "https://kubernetes.io/docs/reference/using-api/deprecation-guide/",
+        "https://kubernetes.io/docs/tasks/configure-pod-container/migrate-from-psp/"
+      ],
+      "detail": "1 manifest object(s) use this API: web (1).",
+      "key": "deprecated-api/policy/v1beta1/PodSecurityPolicy",
+      "namespaces": [
+        "web"
+      ],
+      "objects": [
+        {
+          "line": 3,
+          "name": "x",
+          "namespace": "web"
+        }
+      ],
+      "remediation": "Pod Security Admission replaces PodSecurityPolicy and has no manifest to convert to: label each namespace with a Pod Security Standards level (privileged, baseline or restricted), check it in audit and warn modes first, then enforce it and disable PodSecurityPolicy; use a validating or mutating admission webhook (a policy engine) for rules the standards do not cover",
+      "severity": "info",
+      "title": "policy/v1beta1 PodSecurityPolicy deprecated since 1.21 (1 object)"
+    }
+  ],
+  "1.25": [
+    {
+      "category": "removed-api",
+      "citations": [
+        "https://kubernetes.io/docs/reference/using-api/deprecation-guide/"
+      ],
+      "detail": "1 manifest object(s) use this API: web (1).",
+      "key": "removed-api/admissionregistration.k8s.io/v1beta1/MutatingWebhookConfiguration",
+      "namespaces": [
+        "web"
+      ],
+      "objects": [
+        {
+          "line": 3,
+          "name": "x",
+          "namespace": "web"
+        }
+      ],
+      "remediation": "migrate to admissionregistration.k8s.io/v1 MutatingWebhookConfiguration; admissionregistration.k8s.io/v1 is not a rename of the apiVersion: webhooks[*].sideEffects (None or NoneOnDryRun) and webhooks[*].admissionReviewVersions (v1 and v1beta1 are supported) are required and have no default, webhooks[*].name must be unique in the list, and the defaults change: failurePolicy Fail (was Ignore), matchPolicy Equivalent (was Exact), timeoutSeconds 10 (was 30)",
+      "severity": "blocker",
+      "title": "admissionregistration.k8s.io/v1beta1 MutatingWebhookConfiguration removed in 1.22 (1 object)"
+    },
+    {
+      "category": "removed-api",
+      "citations": [
+        "https://kubernetes.io/docs/reference/using-api/deprecation-guide/"
+      ],
+      "detail": "1 manifest object(s) use this API: web (1).",
+      "key": "removed-api/admissionregistration.k8s.io/v1beta1/ValidatingWebhookConfiguration",
+      "namespaces": [
+        "web"
+      ],
+      "objects": [
+        {
+          "line": 3,
+          "name": "x",
+          "namespace": "web"
+        }
+      ],
+      "remediation": "migrate to admissionregistration.k8s.io/v1 ValidatingWebhookConfiguration; admissionregistration.k8s.io/v1 is not a rename of the apiVersion: webhooks[*].sideEffects (None or NoneOnDryRun) and webhooks[*].admissionReviewVersions (v1 and v1beta1 are supported) are required and have no default, webhooks[*].name must be unique in the list, and the defaults change: failurePolicy Fail (was Ignore), matchPolicy Equivalent (was Exact), timeoutSeconds 10 (was 30)",
+      "severity": "blocker",
+      "title": "admissionregistration.k8s.io/v1beta1 ValidatingWebhookConfiguration removed in 1.22 (1 object)"
+    },
+    {
+      "category": "removed-api",
+      "citations": [
+        "https://kubernetes.io/docs/reference/using-api/deprecation-guide/"
+      ],
+      "detail": "1 manifest object(s) use this API: web (1).",
+      "key": "removed-api/apiextensions.k8s.io/v1beta1/CustomResourceDefinition",
+      "namespaces": [
+        "web"
+      ],
+      "objects": [
+        {
+          "line": 3,
+          "name": "x",
+          "namespace": "web"
+        }
+      ],
+      "remediation": "migrate to apiextensions.k8s.io/v1 CustomResourceDefinition; apiextensions.k8s.io/v1 is not a rename of the apiVersion: spec.scope must be set (it no longer defaults to Namespaced), spec.version, spec.validation, spec.subresources and spec.additionalPrinterColumns move under spec.versions[*], each version needs a structural spec.versions[*].schema.openAPIV3Schema, spec.preserveUnknownFields: true is disallowed (use x-kubernetes-preserve-unknown-fields: true in the schema), and spec.conversion.webhookClientConfig moves to spec.conversion.webhook.clientConfig",
+      "severity": "blocker",
+      "title": "apiextensions.k8s.io/v1beta1 CustomResourceDefinition removed in 1.22 (1 object)"
+    },
+    {
+      "category": "removed-api",
+      "citations": [
+        "https://kubernetes.io/docs/reference/using-api/deprecation-guide/"
+      ],
+      "detail": "1 manifest object(s) use this API: web (1).",
+      "key": "removed-api/extensions/v1beta1/Ingress",
+      "namespaces": [
+        "web"
+      ],
+      "objects": [
+        {
+          "line": 3,
+          "name": "x",
+          "namespace": "web"
+        }
+      ],
+      "remediation": "migrate to networking.k8s.io/v1 Ingress; networking.k8s.io/v1 is not a rename of the apiVersion: spec.backend becomes spec.defaultBackend, a backend's serviceName becomes service.name and its servicePort becomes service.port.number (numeric) or service.port.name (string), and pathType (Prefix, Exact or ImplementationSpecific, which matches the undefined v1beta1 behaviour) is required on every path",
+      "severity": "blocker",
+      "title": "extensions/v1beta1 Ingress removed in 1.22 (1 object)"
+    },
+    {
+      "category": "removed-api",
+      "citations": [
+        "https://kubernetes.io/docs/reference/using-api/deprecation-guide/"
+      ],
+      "detail": "1 manifest object(s) use this API: web (1).",
+      "key": "removed-api/networking.k8s.io/v1beta1/Ingress",
+      "namespaces": [
+        "web"
+      ],
+      "objects": [
+        {
+          "line": 3,
+          "name": "x",
+          "namespace": "web"
+        }
+      ],
+      "remediation": "migrate to networking.k8s.io/v1 Ingress; networking.k8s.io/v1 is not a rename of the apiVersion: spec.backend becomes spec.defaultBackend, a backend's serviceName becomes service.name and its servicePort becomes service.port.number (numeric) or service.port.name (string), and pathType (Prefix, Exact or ImplementationSpecific, which matches the undefined v1beta1 behaviour) is required on every path",
+      "severity": "blocker",
+      "title": "networking.k8s.io/v1beta1 Ingress removed in 1.22 (1 object)"
+    },
+    {
+      "category": "removed-api",
+      "citations": [
+        "https://kubernetes.io/docs/reference/using-api/deprecation-guide/",
+        "https://kubernetes.io/docs/tasks/configure-pod-container/migrate-from-psp/"
+      ],
+      "detail": "1 manifest object(s) use this API: web (1).",
+      "key": "removed-api/policy/v1beta1/PodSecurityPolicy",
+      "namespaces": [
+        "web"
+      ],
+      "objects": [
+        {
+          "line": 3,
+          "name": "x",
+          "namespace": "web"
+        }
+      ],
+      "remediation": "Pod Security Admission replaces PodSecurityPolicy and has no manifest to convert to: label each namespace with a Pod Security Standards level (privileged, baseline or restricted), check it in audit and warn modes first, then enforce it and disable PodSecurityPolicy; use a validating or mutating admission webhook (a policy engine) for rules the standards do not cover",
+      "severity": "blocker",
+      "title": "policy/v1beta1 PodSecurityPolicy removed in 1.25 (1 object)"
+    }
+  ]
+}

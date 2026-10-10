@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "clusterId": "77777777-7777-7777-7777-777777777777",
+  "collectorSchema": 1,
+  "source": "cluster",
+  "collectedAt": "2026-06-10T00:00:00Z",
+  "serverVersion": "v1.31.4",
+  "capabilities": {
+    "volumes": {"available": true},
+    "crds": {"available": true},
+    "api-usage": {"available": true},
+    "deprecated-calls": {"available": true},
+    "helm": {"available": true},
+    "addons": {"available": true},
+    "versions": {"available": true}
+  },
+  "nodes": [{"name": "node-a", "kubeletVersion": "v1.31.4"}],
+  "namespaces": [{"name": "shop", "team": "payments"}, {"name": "kube-system"}, {"name": "ci", "team": "platform"}],
+  "volumePlugins": [
+    {"plugin": "awsElasticBlockStore", "count": 3, "namespaces": {"shop": 3}},
+    {"plugin": "gitRepo", "count": 2, "namespaces": {"ci": 1, "kube-system": 1}},
+    {"plugin": "glusterfs", "count": 4, "namespaces": {"shop": 4}}
+  ]
+}

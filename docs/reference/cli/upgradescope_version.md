@@ -25,7 +25,7 @@ upgradescope version [flags]
 
 ```
   -h, --help            help for version
-      --output string   output format: text|json (default "text")
+  -o, --output string   output format: text|json (default "text")
 ```
 
 ### SEE ALSO

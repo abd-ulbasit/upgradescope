@@ -3,6 +3,11 @@
 # "supports" the current and the previous major.minor release (its Release
 # Management document); the Helm chart and the image share the version
 # (appVersion v3.x.y).
+#
+# No Kubernetes range is recorded: Gatekeeper publishes no matrix, only a
+# policy that it "is assumed to be compatible with the current Kubernetes
+# Supported Versions" (Release_Management.md, read on 2026-10-10), a window
+# that moves with Kubernetes rather than a range per Gatekeeper line.
 schema_version: 2
 id: gatekeeper
 display_name: OPA Gatekeeper

@@ -241,7 +241,7 @@ To accept a finding for now, with a reason and an expiry, use an
 - **A push gets 409: `cluster name ... is registered to clusterId ...`.**
   Another cluster already uses this `--cluster-name`, or the cluster was
   rebuilt. Give the agent a distinct name, or delete the old record with
-  `upgradescope clusters delete <name> --server ...` (admin token); the
+  `upgradescope clusters delete <name> --server-url ...` (admin token); the
   message spells out both.
 - **A push gets 401 or 403.** 401: the token is missing or unknown. 403: a
   per-cluster token pushing as another cluster name.
@@ -292,6 +292,29 @@ To accept a finding for now, with a reason and an expiry, use an
   cluster access cannot look up the chart's generated token. Set
   `server.ingestToken` or `server.existingSecret`
   ([GitOps](guides/gitops-argo-flux.md)).
+
+### Dashboard blank or assets 404 behind a proxy
+
+The page loads empty, or its script and stylesheet answer 404, when the
+dashboard is served through a reverse proxy or Ingress at a path prefix such
+as `https://ops.example.com/upgradescope/`. Check, in order
+([The dashboard](guides/dashboard.md#serving-under-a-path-prefix)):
+
+- **The URL has no trailing slash.** Open `/upgradescope/`, not
+  `/upgradescope`: the page's asset and API URLs are relative, so without the
+  slash the browser asks the parent path for them.
+- **The proxy does not strip the prefix.** `serve` sees `/` and `/assets/...`,
+  never `/upgradescope/assets/...`. In nginx the trailing slash on
+  `proxy_pass http://server:8080/;` strips it; with the ingress-nginx
+  annotations use `rewrite-target: /$2` with the path
+  `/upgradescope(/|$)(.*)`.
+- **A pasted nested link lands at the wrong place.** The server redirects a
+  nested path such as `/cluster/3` with a relative `Location`
+  (`../#/cluster/3`) that the browser resolves under the prefix. Make sure
+  the proxy passes `Location` through unchanged and does not turn it into an
+  absolute URL.
+- **The page answers `421`.** The Host the proxy forwards is not an
+  `--allowed-host` ([The Host check](operations/auth.md#the-host-check-dns-rebinding)).
 
 ## Still stuck
 

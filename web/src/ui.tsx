@@ -300,3 +300,50 @@ export function Citations({ urls }: { urls: string[] }) {
     </p>
   );
 }
+
+// formatClock renders a time of day as HH:MM:SS in local time.
+export function formatClock(ms: number): string {
+  const d = new Date(ms);
+  const two = (n: number) => String(n).padStart(2, "0");
+  return `${two(d.getHours())}:${two(d.getMinutes())}:${two(d.getSeconds())}`;
+}
+
+// Freshness: when the page's data arrived, a Refresh button, and an inline
+// spinner while a refetch runs (the data stays on screen meanwhile). A
+// failed refetch keeps the old data and says so here instead of replacing
+// the page with an error.
+export function Freshness({
+  updatedAt,
+  refreshing,
+  error,
+  onRefresh,
+}: {
+  updatedAt?: number;
+  refreshing: boolean;
+  error?: Error;
+  onRefresh: () => void;
+}) {
+  return (
+    <div className="freshness">
+      {refreshing && (
+        <span className="spinner" role="status" aria-label="Refreshing" />
+      )}
+      {updatedAt !== undefined && (
+        <span className="muted">updated {formatClock(updatedAt)}</span>
+      )}
+      {error && (
+        <span className="field-error" role="alert">
+          Refresh failed: {error.message}
+        </span>
+      )}
+      <button
+        type="button"
+        className="btn btn-ghost"
+        disabled={refreshing}
+        onClick={onRefresh}
+      >
+        Refresh
+      </button>
+    </div>
+  );
+}

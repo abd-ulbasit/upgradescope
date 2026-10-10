@@ -20,30 +20,21 @@ After any change here run `make web` from the repository root and commit
 `internal/server/webdist`: the binary embeds that copy, and CI fails when
 it differs from a fresh build.
 
-## Read token
+## Operating the dashboard
 
-With `serve --read-token`, set the token in the dashboard header. It is
-sent as a bearer header and kept in `sessionStorage`, so it is gone when
-the tab closes. Ticking **Remember on this device** keeps it in
-`localStorage` instead; saving with it unticked, or clearing the token,
-removes it from there. A token stored in `localStorage` by an older
-dashboard is still read.
+Screens and hash routes (including the Fleet and Cluster query parameters),
+token entry and storage, the team-scoped banner, and serving under a path
+prefix behind a proxy are documented for operators in
+[docs/guides/dashboard.md](../docs/guides/dashboard.md). In short: open the
+trailing-slash URL under a prefix, and the proxy must strip the prefix; asset
+and API URLs are relative on purpose.
 
-## Serving under a path prefix
+## Layout
 
-Asset and API URLs are relative, so the dashboard also works under a path
-prefix, for example `https://ops.example.com/upgradescope/`, behind a
-reverse proxy that strips the prefix before forwarding to `serve`. Open it
-with the trailing slash: without it the browser resolves the relative
-asset URLs against the parent path and they fail to load.
-
-Because the URLs are relative, the server serves the page itself only where
-they resolve: at `/`, `/index.html` and one extensionless segment such as
-`/teams`. The dashboard routes by URL hash (`#/cluster/3`), so it has no
-other path of its own; at a nested path such as `/cluster/3`, `/cluster/3/`
-or `/foo/` (a link someone typed or pasted) the server answers `302` with a
-relative `Location` (`../#/cluster/3`), which the browser resolves against
-the URL it asked for, so the dashboard opens at the root, on that route,
-under the prefix too. It is written by hand and relative on purpose: an
-absolute redirect would drop the proxy's prefix. A path with a file
-extension that is not a file, and anything under `/assets/`, is a JSON 404.
+- `src/views/`: one file per screen (`Fleet`, `Cluster`, `Teams`, `Registry`).
+- `src/fleet.ts`: the pure functions behind the Fleet toolbar and summary
+  (buckets, filters, sorts); unit-tested through the views.
+- `src/hooks.ts`: `useAsync` (stale-while-revalidate: a refetch keeps the data
+  on screen; a hidden tab refetches on return when its data is over 60 s old),
+  and the hash-route helpers `useRouteQuery` / `setRouteQuery`, which views use
+  to keep their filters in the URL.

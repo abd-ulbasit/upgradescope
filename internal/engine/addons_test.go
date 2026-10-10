@@ -304,7 +304,7 @@ func TestEvalAddOnsWithoutNamespace(t *testing.T) {
 	// Files mode: a manifest object without metadata.namespace.
 	inv.AddOns = []inventory.AddOnInstance{{ID: "ingress-nginx", Version: "1.8.1", Namespaces: []string{""}, Source: "image"}}
 	fs = evalAddOns(inv, testRegistryKB(), inventory.Version{Major: 1, Minor: 30}, testNow)
-	if want := "Detected ingress-nginx version 1.8.1 via image in namespace(s): namespace unset. Upstream support has ended."; len(fs) != 1 || fs[0].Detail != want {
+	if want := "Detected ingress-nginx version 1.8.1 via image in namespace(s): no namespace set. Upstream support has ended."; len(fs) != 1 || fs[0].Detail != want {
 		t.Errorf("findings = %+v\nwant detail %q", fs, want)
 	} else if fs[0].Namespaces != nil {
 		t.Errorf("namespaces = %q, want none", fs[0].Namespaces)

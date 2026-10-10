@@ -40,7 +40,8 @@ const (
 // inventory.AddOnEvidenceAgeSeconds.
 //
 // What is reused is the images and labels of the pods outside kube-system,
-// the evidence matchAddOns reads, never a verdict: the registry is applied
+// the evidence matchAddOns reads, and how many of them name each in-tree
+// volume plugin (the volumes capability, #351), never a verdict: the registry is applied
 // to it every time, so a knowledge-base update takes effect at once. Not
 // reused, read in every collection: the kube-system pods (the versions
 // capability lists them for the control-plane components and kube-proxy
@@ -85,6 +86,10 @@ type PodPassCache struct {
 	sig    string    // installSignature of the releases and charts it was taken with
 	images []nsImage
 	labels []labelledPod
+	// volumes counts, per in-tree volume plugin and namespace, the pods
+	// outside kube-system whose volumes name it (#351): a few counters,
+	// never the pods.
+	volumes volumeTally
 }
 
 // NewPodPassCache returns an empty cache that reuses a full pass for the
@@ -165,6 +170,7 @@ func (c *PodPassCache) record(ev addOnEvidence, start time.Time, sig string) {
 		seenPod[key] = true
 		c.labels = append(c.labels, labelledPod{Namespace: p.Namespace, Labels: p.Labels, Images: slices.Clone(p.Images)})
 	}
+	c.volumes = ev.volumes.without(metav1.NamespaceSystem)
 	c.have, c.at, c.sig = true, start, sig
 }
 

@@ -77,6 +77,66 @@ var taggedRemovalFixes = map[gvkOut]version{
 	{Group: "storage.k8s.io", Version: "v1alpha1", Kind: "VolumeAttachment"}: {Major: 1, Minor: 23},
 }
 
+// introducedFix is a corrected Introduced and the changelog that states it.
+type introducedFix struct {
+	introduced version
+	citation   string // the Kubernetes changelog that announces the API
+}
+
+// changelog is the Kubernetes changelog of minor m.
+func changelog(m int) string {
+	return fmt.Sprintf("https://github.com/kubernetes/kubernetes/blob/master/CHANGELOG/CHANGELOG-1.%d.md", m)
+}
+
+// introducedFixes overrides the Introduced of an entry whose recorded one
+// is wrong, with the release whose changelog announces the API:
+//
+//   - a type k8s.io/api deleted before the oldest release gen-kb reads
+//     (v0.17.0, historyFrom) and never tagged has only the first release
+//     that holds it, so its Introduced is clamped to 1.17 (deletedTypes).
+//     A target below 1.17 then reads "not served until 1.17" for an API it
+//     serves, and a remediation reaches for the alpha as if it were the
+//     newest API there (#332);
+//   - discovery.k8s.io/v1beta1 EndpointSlice is tagged 1.16, the release
+//     of v1alpha1, though v1beta1 shipped in 1.17.
+//
+// Each value is the release whose changelog (cited per entry) announces the
+// API. TestIntroducedFixesAreCitedAndInTheDataset holds the citations and the
+// committed dataset to the table.
+var introducedFixes = map[gvkOut]introducedFix{
+	// CHANGELOG-1.5: "batch/v2alpha1.ScheduledJob has been renamed, use
+	// batch/v2alpha1.CronJob instead" and "Rename ScheduledJobs to CronJobs"
+	// (kubernetes/kubernetes#36021). ScheduledJob itself was batch/v2alpha1
+	// from 1.3.
+	{Group: "batch", Version: "v2alpha1", Kind: "CronJob"}: {version{Major: 1, Minor: 5}, changelog(5)},
+	// CHANGELOG-1.8: "Add PriorityClass API object under new "scheduling"
+	// API group" (#48377), "[alpha] This version now supports pod priority
+	// and creation of PriorityClasses".
+	{Group: "scheduling.k8s.io", Version: "v1alpha1", Kind: "PriorityClass"}: {version{Major: 1, Minor: 8}, changelog(8)},
+	// CHANGELOG-1.6: "Adds a new API resource PodPreset and admission
+	// controller" ([alpha], #41931); CHANGELOG-1.7 names its group version,
+	// settings.k8s.io/v1alpha1, as disabled by default.
+	{Group: "settings.k8s.io", Version: "v1alpha1", Kind: "PodPreset"}: {version{Major: 1, Minor: 6}, changelog(6)},
+	// CHANGELOG-1.13: "Adds DynamicAuditing feature which allows for the
+	// configuration of audit webhooks through the use of an AuditSink API
+	// object" (#67257).
+	{Group: "auditregistration.k8s.io", Version: "v1alpha1", Kind: "AuditSink"}: {version{Major: 1, Minor: 13}, changelog(13)},
+	// CHANGELOG-1.16: "Add Endpoint Slice Controller for managing new
+	// EndpointSlice resource, disabled by default" (#81048), the alpha,
+	// discovery.k8s.io/v1alpha1.
+	{Group: "discovery.k8s.io", Version: "v1alpha1", Kind: "EndpointSlice"}: {version{Major: 1, Minor: 16}, changelog(16)},
+	// CHANGELOG-1.17: "EndpointSlices are now beta" (#84390): v1beta1 is
+	// served from 1.17, not 1.16 as k8s.io/api's tag says.
+	{Group: "discovery.k8s.io", Version: "v1beta1", Kind: "EndpointSlice"}: {version{Major: 1, Minor: 17}, changelog(17)},
+}
+
+// fixIntroduced applies introducedFixes to e in place.
+func fixIntroduced(e *entry) {
+	if f, ok := introducedFixes[e.gvk()]; ok {
+		e.Introduced = f.introduced
+	}
+}
+
 // untaggedLifecycle is the lifecycle of a type k8s.io/api registers without
 // APILifecycle* markers, from the Kubernetes release notes.
 type untaggedLifecycle struct {

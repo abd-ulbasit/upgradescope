@@ -128,6 +128,9 @@ func TestArgoHealthScriptAgainstWrittenStatus(t *testing.T) {
 	ready := []TargetStatus{{Target: "1.36", Score: 100, Ready: true, Verdict: "ready"}}
 	blocked := []TargetStatus{{Target: "1.36", Score: 40, Verdict: "blocked", Blockers: 1}}
 	unknown := []TargetStatus{{Target: "1.36", Score: 90, Verdict: "unknown"}}
+	twoBlocked := []TargetStatus{ready[0], {Target: "1.37", Score: 30, Verdict: "blocked", Blockers: 2}}
+	twoUnknown := []TargetStatus{ready[0], {Target: "1.37", Score: 90, Verdict: "unknown"}}
+	twoReady := []TargetStatus{ready[0], {Target: "1.37", Score: 100, Ready: true, Verdict: "ready"}}
 	cases := []struct {
 		name         string
 		targets      []TargetStatus
@@ -135,6 +138,7 @@ func TestArgoHealthScriptAgainstWrittenStatus(t *testing.T) {
 		age          time.Duration
 		observedGen  int64 // 0: the object's generation
 		noStatus     bool
+		olderAgent   bool // status as an agent before v0.2.0 wrote it: no AllTargetsReady
 		wantStatus   string
 		wantContains string
 	}{
@@ -145,6 +149,10 @@ func TestArgoHealthScriptAgainstWrittenStatus(t *testing.T) {
 		{name: "blocked, stale", targets: blocked, age: time.Hour, wantStatus: "Degraded", wantContains: "status is stale"},
 		{name: "unknown", targets: unknown, age: time.Minute, wantStatus: "Degraded", wantContains: ReasonNotAssessed + ": 1.36"},
 		{name: "no target resolved", notAssessed: []string{"targets: no spec targets and server version unknown"}, age: time.Minute, wantStatus: "Degraded", wantContains: ReasonNotAssessed + ": no target evaluated"},
+		{name: "two targets, all ready", targets: twoReady, age: time.Minute, wantStatus: "Healthy"},
+		{name: "first ready, second blocked", targets: twoBlocked, age: time.Minute, wantStatus: "Degraded", wantContains: "AllTargetsReady Blocked: 1.37 blocked (2 blockers)"},
+		{name: "first ready, second unknown", targets: twoUnknown, age: time.Minute, wantStatus: "Degraded", wantContains: "AllTargetsReady " + ReasonNotAssessed + ": 1.37 not assessed"},
+		{name: "older agent, second target blocked: only Ready decides", targets: twoBlocked, olderAgent: true, age: time.Minute, wantStatus: "Healthy"},
 		{name: "spec edited since the last tick", targets: ready, age: time.Minute, observedGen: 2, wantStatus: "Progressing", wantContains: "spec changed"},
 		{name: "no status yet", noStatus: true, wantStatus: "Progressing", wantContains: "first evaluation"},
 	}
@@ -176,6 +184,16 @@ func TestArgoHealthScriptAgainstWrittenStatus(t *testing.T) {
 			var obj map[string]any
 			if err := json.Unmarshal(raw, &obj); err != nil {
 				t.Fatal(err)
+			}
+			if tc.olderAgent {
+				st := obj["status"].(map[string]any)
+				var kept []any
+				for _, c := range st["conditions"].([]any) {
+					if c.(map[string]any)["type"] != ConditionAllTargetsReady {
+						kept = append(kept, c)
+					}
+				}
+				st["conditions"] = kept
 			}
 			status, message := argoHealth(t, script, now, obj)
 			if status != tc.wantStatus || !strings.Contains(message, tc.wantContains) {

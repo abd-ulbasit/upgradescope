@@ -76,8 +76,9 @@ type mcpOptions struct {
 	allowRemote bool
 	httpToken   string
 
-	serverURL string
-	readToken string
+	serverURL    string
+	readToken    string
+	serverCAFile string
 }
 
 func newMCPCmd() *cobra.Command {
@@ -120,7 +121,10 @@ no ignore file is looked up. With --server-url, get_report and list_findings
 can read a cluster from an upgradescope server and fleet_summary summarises
 the fleet, using the server's read token (--read-token, --read-token-file
 or $UPGRADESCOPE_READ_TOKEN); a server that requires one rejects calls
-without it, and the tool shows that error.`,
+without it, and the tool shows that error. A server whose https certificate
+a private CA issued needs --server-ca-file (the CA bundle, trusted on top of
+the system roots); the read token over plain http to a host that is not
+loopback is sent in the clear, and the command warns.`,
 		Example: `  # What an MCP client starts (see docs/getting-started/mcp.md for its configuration)
   upgradescope mcp
 
@@ -170,6 +174,11 @@ without it, and the tool shows that error.`,
 				if err != nil {
 					return err
 				}
+				roots, err := loadServerCA(opts.serverCAFile)
+				if err != nil {
+					return err
+				}
+				fleet.TrustRoots(roots)
 				if w := mcp.CleartextWarning(opts.serverURL, opts.readToken); w != "" {
 					fmt.Fprintf(stderr, "warning: %s\n", esc(w))
 				}
@@ -195,6 +204,7 @@ without it, and the tool shows that error.`,
 	cmd.Flags().StringVar(&opts.serverURL, "server-url", "", "fleet mode: base URL of an upgradescope server, e.g. https://upgradescope.example.com")
 	readToken = addSecretFlag(cmd, &opts.readToken, "read-token", "UPGRADESCOPE_READ_TOKEN",
 		"with --server-url: the server's read token; omit it for an open read API")
+	registerServerCAFlag(cmd, &opts.serverCAFile)
 	return cmd
 }
 
@@ -204,6 +214,9 @@ func validateMCPOptions(cmd *cobra.Command, opts *mcpOptions) error {
 	}
 	if opts.serverURL == "" && (cmd.Flags().Changed("read-token") || cmd.Flags().Changed("read-token-file")) {
 		return errors.New("--read-token needs --server-url")
+	}
+	if err := validateServerCA(opts.serverCAFile, "--server-url", opts.serverURL); err != nil {
+		return err
 	}
 	if opts.httpAddr == "" {
 		if opts.allowRemote {

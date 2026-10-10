@@ -48,6 +48,12 @@ func shuffleInventory(r *rand.Rand, inv *inventory.Inventory) {
 		shuffle(len(c.StoredVersions), func(i, j int) { c.StoredVersions[i], c.StoredVersions[j] = c.StoredVersions[j], c.StoredVersions[i] })
 		usage(c.Usage)
 	}
+	shuffle(len(inv.VolumePlugins), func(i, j int) {
+		inv.VolumePlugins[i], inv.VolumePlugins[j] = inv.VolumePlugins[j], inv.VolumePlugins[i]
+	})
+	for _, v := range inv.VolumePlugins {
+		shuffle(len(v.Objects), func(i, j int) { v.Objects[i], v.Objects[j] = v.Objects[j], v.Objects[i] })
+	}
 }
 
 // Evaluate gives the same bytes for the same inventory whatever the order

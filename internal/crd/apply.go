@@ -271,7 +271,7 @@ var ErrStatusErrorNotCleared = errors.New("status written, marker not cleared")
 // fresh read each attempt. st.ObservedGeneration should be the generation
 // whose spec was evaluated (from ReadSpec or SetTargets), so a spec edited
 // since is not claimed as observed; zero stamps the generation of the
-// object being written. It sets the Ready condition from st, keeping the
+// object being written. It sets the Ready and AllTargetsReady conditions from st, keeping the
 // stored condition's lastTransitionTime while its status is unchanged.
 // Whatever st holds, notAssessed is bounded here (boundNotAssessed), the
 // one place every source of notes passes.
@@ -308,6 +308,9 @@ func WriteStatusOver(ctx context.Context, dyn dynamic.Interface, name string, st
 		ready := ReadyCondition(st)
 		ready.ObservedGeneration = out.ObservedGeneration
 		meta.SetStatusCondition(&out.Conditions, ready)
+		all := AllTargetsReadyCondition(st)
+		all.ObservedGeneration = out.ObservedGeneration
+		meta.SetStatusCondition(&out.Conditions, all)
 		stMap, cerr := runtime.DefaultUnstructuredConverter.ToUnstructured(&out)
 		if cerr != nil {
 			return fmt.Errorf("convert status: %w", cerr)

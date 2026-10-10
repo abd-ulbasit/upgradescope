@@ -1,4 +1,9 @@
 # registry/data/kube-state-metrics.yaml
+# No compat rows. The README's "Compatibility matrix" (read on 2026-10-10) maps
+# each kube-state-metrics release to the Kubernetes client-go version it is built
+# with (v2.20.0 to v1.36, v2.19.0 to v1.35, ..., v2.16.0 to v1.32) and says "All
+# additional compatibility is only best effort, or happens to still/already be
+# supported": a build dependency, not a minimum or a maximum.
 schema_version: 2
 id: kube-state-metrics
 display_name: kube-state-metrics
@@ -6,6 +11,19 @@ matchers:
   images:
     - kube-state-metrics/kube-state-metrics
     - coreos/kube-state-metrics # legacy quay.io/coreos image
+    # AKS: Microsoft's builds, tagged v<ksm> or v<ksm>-<build>.
+    - mcr.microsoft.com/oss/kubernetes/kube-state-metrics
+    - mcr.microsoft.com/oss/v2/kubernetes/kube-state-metrics
+    # GKE: Google's build, tagged v<ksm>-gke.<n>.
+    - gcr.io/gke-release/kube-state-metrics
+    - gke.gcr.io/kube-state-metrics
+    # RKE2, k3s and Rancher Monitoring: Rancher's verbatim mirror, the upstream tag.
+    - rancher/mirrored-kube-state-metrics-kube-state-metrics
+    # Bitnami's rebuild, tagged <ksm>-debian-12-r<n>. The repositories on
+    # public.ecr.aws/bitnami and docker.io/bitnami are empty since 2025 (checked
+    # 2026-10-10); the matchers keep recognising pinned references and mirrors.
+    - bitnami/kube-state-metrics
+    - bitnamilegacy/kube-state-metrics
   charts:
     - kube-state-metrics
 support:

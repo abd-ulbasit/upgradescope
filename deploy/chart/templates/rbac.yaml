@@ -22,12 +22,14 @@ rules:
   # whether any client still calls deprecated APIs, not which).
   - nonResourceURLs: ["/version", "/metrics"]
     verbs: ["get"]
-  {{- if .Values.rbac.helmSecrets }}
+  {{- if and .Values.rbac.helmSecrets (not .Values.rbac.helmSecretsNamespaces) }}
   # Helm release detection lists Secrets labelled owner=helm metadata-only
   # and GETs one per release (Helm's default secrets driver). RBAC cannot
   # filter Secrets by label or type, so this is get/list on EVERY Secret in
   # the cluster. rbac.helmSecrets=false drops it and the ConfigMap rule
   # below; Helm releases are then reported as not assessed.
+  # rbac.helmSecretsNamespaces replaces both with a Role per namespace (end
+  # of this file).
   - apiGroups: [""]
     resources: ["secrets"]
     verbs: ["get", "list"]
@@ -98,4 +100,44 @@ subjects:
   - kind: ServiceAccount
     name: {{ include "upgradescope.serviceAccountName" . }}
     namespace: {{ .Release.Namespace }}
+{{- if .Values.rbac.helmSecrets }}
+{{- range .Values.rbac.helmSecretsNamespaces }}
+---
+# rbac.helmSecretsNamespaces: Helm release detection in this namespace only
+# (the agent's --helm-namespaces), in place of the cluster-wide rules. Still
+# get/list on EVERY Secret and ConfigMap of the namespace: RBAC cannot
+# filter them by label or type.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "upgradescope.derived" (dict "root" $ "suffix" "-agent-helm") }}
+  namespace: {{ . }}
+  labels: {{- include "upgradescope.labels" $ | nindent 4 }}
+rules:
+  # Releases stored by Helm's secrets driver (the default), listed
+  # metadata-only by the label owner=helm and read one GET per release.
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list"]
+  # Releases stored by Helm's configmaps driver, read the same way.
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "upgradescope.derived" (dict "root" $ "suffix" "-agent-helm") }}
+  namespace: {{ . }}
+  labels: {{- include "upgradescope.labels" $ | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "upgradescope.derived" (dict "root" $ "suffix" "-agent-helm") }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "upgradescope.serviceAccountName" $ }}
+    namespace: {{ $.Release.Namespace }}
+{{- end }}
+{{- end }}
 {{- end }}

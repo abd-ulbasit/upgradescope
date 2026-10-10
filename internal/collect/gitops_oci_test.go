@@ -308,7 +308,7 @@ func TestGitOpsListFailingOtherwiseIsAskedForEveryCall(t *testing.T) {
 			for call := 1; call <= 3; call++ {
 				f.dyn.ClearActions()
 				var inv inventory.Inventory
-				pe := partial(t, collectHelmStep(context.Background(), f.clients(), nil, nil, cache, &inv))
+				pe := partial(t, collectHelmStep(context.Background(), f.clients(), nil, nil, nil, cache, &inv))
 				if lists, gets := ociReads(f); len(lists) != 1 || len(gets) != 0 {
 					t.Errorf("call %d: lists %q and %d GETs; want the list asked for again, and no GET", call, lists, len(gets))
 				}

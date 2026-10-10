@@ -42,6 +42,11 @@ import (
 //     An image tag is a pod creator's, so a version can be 17 KiB of digits
 //     and pods in any number of namespaces make as many such installs; the
 //     one-at-a-time net below could not keep up;
+//   - a volume plugin entry (volumePlugins): its objects and namespace keys
+//     as an API usage entry's; an entry whose plugin is not a field name,
+//     or whose counts are negative, is dropped (dropElement), and the
+//     entries beyond MaxVolumePlugins are dropped, each named in volumes'
+//     Skipped by its plugin, quoted and cut where it is not a field name;
 //   - unrecognizedImages over MaxStringBytes, or beyond MaxUnrecognizedImages:
 //     dropped and counted in unrecognizedImagesOmitted;
 //   - whatever else Admit's identifier and limit checks still refuse, one
@@ -63,6 +68,7 @@ func (inv *Inventory) Conform() (notes []string, err error) {
 	}
 	inv.conformAddOns(r)
 	inv.conformImages(r)
+	inv.conformVolumes(r)
 	// What is left is not a shape a collector is known to produce: drop the
 	// element Admit names, until nothing is, or one cannot be dropped. Each
 	// drop validates the whole inventory again, so the cost is the number
@@ -269,32 +275,41 @@ func shortIdentifier(s string, problems func(string) []string) string {
 func conformUsages(us []APIUsage, c Capability, r *repairs) {
 	for i := range us {
 		u := &us[i]
-		for ns := range u.Namespaces {
-			if problemsWith(ns, namespaceProblems) != nil || len(ns) > MaxStringBytes {
-				delete(u.Namespaces, ns)
-				r.add(c, "namespace key(s) of an API usage count dropped for not being a namespace name", "")
-			}
-		}
-		kept := u.Objects[:0]
-		for _, o := range u.Objects {
-			if why := objectProblem(o); why != "" {
-				u.ObjectsOmitted++
-				r.add(c, "object(s) of API usage dropped for "+why, "")
-				continue
-			}
-			kept = append(kept, o)
-		}
-		clear(u.Objects[len(kept):])
-		u.Objects = kept
-		if len(u.Objects) == 0 {
-			u.Objects = nil
-		}
-		if n := len(u.Objects) - MaxObjectRefs; n > 0 {
-			clear(u.Objects[MaxObjectRefs:])
-			u.Objects, u.ObjectsOmitted = u.Objects[:MaxObjectRefs], u.ObjectsOmitted+n
-			r.add(c, "object(s) of API usage beyond the cap counted, not listed", "")
+		u.Objects = conformRefs(u.Namespaces, u.Objects, &u.ObjectsOmitted, c, "API usage", r)
+	}
+}
+
+// conformRefs drops the namespace keys of counts that are not namespace
+// names, and the objects Admit would refuse or beyond MaxObjectRefs,
+// counting those in *omitted, recording each kind of repair in capability c
+// as what ("API usage", "volume plugin use"). It returns the
+// objects kept, sharing objs's array.
+func conformRefs(counts map[string]int, objs []ObjectRef, omitted *int, c Capability, what string, r *repairs) []ObjectRef {
+	for ns := range counts {
+		if problemsWith(ns, namespaceProblems) != nil || len(ns) > MaxStringBytes {
+			delete(counts, ns)
+			r.add(c, "namespace key(s) of "+article(what)+" "+what+" count dropped for not being a namespace name", "")
 		}
 	}
+	kept := objs[:0]
+	for _, o := range objs {
+		if why := objectProblem(o); why != "" {
+			*omitted++
+			r.add(c, "object(s) of "+what+" dropped for "+why, "")
+			continue
+		}
+		kept = append(kept, o)
+	}
+	clear(objs[len(kept):])
+	if len(kept) == 0 {
+		kept = nil
+	}
+	if n := len(kept) - MaxObjectRefs; n > 0 {
+		clear(kept[MaxObjectRefs:])
+		kept, *omitted = kept[:MaxObjectRefs], *omitted+n
+		r.add(c, "object(s) of "+what+" beyond the cap counted, not listed", "")
+	}
+	return kept
 }
 
 // objectProblem says why an object ref would be refused, or "".
@@ -458,6 +473,12 @@ func (inv *Inventory) dropElement(err error, r *repairs) bool {
 		}
 		r.add(CapVersions, "namespace(s) dropped for a value Admit refuses", "")
 		inv.Namespaces = slices.Delete(inv.Namespaces, i, i+1)
+	case "volumePlugins":
+		if i >= len(inv.VolumePlugins) {
+			return false
+		}
+		r.add(CapVolumes, "volume plugin entr(ies) dropped for a value Admit refuses", volumeLabel(inv.VolumePlugins[i]))
+		inv.VolumePlugins = slices.Delete(inv.VolumePlugins, i, i+1)
 	case "unrecognizedImages":
 		if i >= len(inv.UnrecognizedImages) {
 			return false

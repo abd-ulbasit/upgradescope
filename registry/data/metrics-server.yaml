@@ -5,9 +5,36 @@ display_name: Kubernetes Metrics Server
 matchers:
   images:
     - metrics-server/metrics-server
+    - kubernetes-sigs/metrics-server # public.ecr.aws/eks-distro/kubernetes-sigs/metrics-server, v<ms>-eks-<k8s>-<n>
+    # AKS: Microsoft's builds, tagged v<ms> or v<ms>-<build>.
+    - mcr.microsoft.com/oss/kubernetes/metrics-server
+    - mcr.microsoft.com/oss/v2/kubernetes/metrics-server
+    # GKE: Google's build, tagged v<ms>-gke.<n>. No release-line end dates, so
+    # nothing here raises an upstream end of life for it.
+    - gcr.io/gke-release/metrics-server
+    - gke.gcr.io/metrics-server
+    # RKE2 and k3s: Rancher's verbatim mirror, the upstream tag.
+    - rancher/mirrored-metrics-server
+    # Bitnami's rebuild, tagged <ms>-debian-12-r<n>.
+    - bitnami/metrics-server
+    - bitnamilegacy/metrics-server
   charts:
     - metrics-server
 support:
   status: supported
   citations:
     - https://github.com/kubernetes-sigs/metrics-server#compatibility-matrix
+# The README's "Compatibility Matrix" (column "Supported Kubernetes version"),
+# read on 2026-10-10 at the commit pinned below:
+#   0.9.x 1.34+   0.8.x 1.31+   0.7.x 1.27+   0.6.x 1.25+
+#   0.5.x *1.8+   0.4.x *1.8+   0.3.x 1.8-1.21
+# 0.3.x is the only line with an upper bound: it stops at 1.21. Every other
+# cell is a minimum ("N+"), which a forward-upgrade scan cannot trip but a
+# target below it can. 0.4.x and 0.5.x (1.8+, with a flag for Kubernetes below
+# 1.16) are left out: their minimum is older than anything still run.
+compat:
+  - {range: ">=0.3.0 <0.4.0", k8s_min: "1.8", k8s_max: "1.21", citations: ["https://github.com/kubernetes-sigs/metrics-server/blob/e32f7808d40e6f743c4111c9a746a88a99878765/README.md#compatibility-matrix"]}
+  - {range: ">=0.6.0 <0.7.0", k8s_min: "1.25", citations: ["https://github.com/kubernetes-sigs/metrics-server/blob/e32f7808d40e6f743c4111c9a746a88a99878765/README.md#compatibility-matrix"]}
+  - {range: ">=0.7.0 <0.8.0", k8s_min: "1.27", citations: ["https://github.com/kubernetes-sigs/metrics-server/blob/e32f7808d40e6f743c4111c9a746a88a99878765/README.md#compatibility-matrix"]}
+  - {range: ">=0.8.0 <0.9.0", k8s_min: "1.31", citations: ["https://github.com/kubernetes-sigs/metrics-server/blob/e32f7808d40e6f743c4111c9a746a88a99878765/README.md#compatibility-matrix"]}
+  - {range: ">=0.9.0 <0.10.0", k8s_min: "1.34", citations: ["https://github.com/kubernetes-sigs/metrics-server/blob/e32f7808d40e6f743c4111c9a746a88a99878765/README.md#compatibility-matrix"]}

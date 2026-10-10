@@ -6,11 +6,15 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
+	"maps"
 	"net/url"
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -70,6 +74,10 @@ func ErrorText(err error) string {
 }
 
 func writeError(b *strings.Builder, err error) {
+	if u, ok := err.(*unknownCommandError); ok {
+		b.WriteString(u.text())
+		return
+	}
 	msg := err.Error()
 	switch u := err.(type) {
 	case interface{ Unwrap() []error }:
@@ -171,10 +179,15 @@ var runScan = func(opts scanOptions) (engine.Report, error) {
 				fmt.Fprintf(stderr, "warning: %s\n", esc(w.String()))
 			}
 		}
+		writeTemplateHints(stderr, opts.fileBase, sum)
 		// Nothing scanned is not "nothing to fix": an empty render, a wrong
 		// path or an unexpected extension must not report 100/100.
 		if sum.Objects == 0 {
-			return engine.Report{}, fmt.Errorf("no Kubernetes manifests found under %s (%d files skipped)", opts.filesDir, sum.Skipped)
+			msg := fmt.Sprintf("no Kubernetes manifests found under %s (%d files skipped)", opts.filesDir, sum.Skipped)
+			if n := templateFiles(sum); n > 0 {
+				msg += fmt.Sprintf("; files containing {{ }} (%d) look like unrendered Helm templates: render the chart first (helm template NAME <chart dir> --output-dir rendered) and scan the output", n)
+			}
+			return engine.Report{}, errors.New(msg)
 		}
 	} else {
 		inv, cluster, err := collectCluster(context.Background(), kbData, opts)
@@ -187,6 +200,34 @@ var runScan = func(opts scanOptions) (engine.Report, error) {
 	}
 
 	return evaluateScan(inv, kbData, opts, time.Now()), nil
+}
+
+// templateFiles is how many files of a files scan could not be read because
+// they are unrendered templates (see collect.FilesSummary.Charts).
+func templateFiles(sum collect.FilesSummary) int {
+	n := sum.Templated
+	for _, c := range sum.Charts {
+		n += c.Templates
+	}
+	return n
+}
+
+// writeTemplateHints prints the one line per unrendered chart that stands for
+// its templates' warnings, and the one count line for templated files outside
+// a chart. base is the scan root as the user sees it (see manifestBase).
+func writeTemplateHints(w io.Writer, base string, sum collect.FilesSummary) {
+	for _, c := range sum.Charts {
+		dir := esc(path.Join(base, c.Dir))
+		verb := "contain"
+		if c.Templates == 1 {
+			verb = "contains"
+		}
+		fmt.Fprintf(w, "warning: %s looks like an unrendered Helm chart (Chart.yaml found, %s %s {{ }}); render it first: helm template NAME %s --output-dir rendered\n",
+			dir, plural(c.Templates, "template"), verb, dir)
+	}
+	if sum.Templated > 0 {
+		fmt.Fprintf(w, "warning: skipped %s containing {{ }}, outside any Helm chart (Chart.yaml): unrendered templates?\n", plural(sum.Templated, "file"))
+	}
 }
 
 // collectCluster reads the live cluster opts names (--kubeconfig,
@@ -290,6 +331,14 @@ func scanRESTConfig(kubeconfig, kubecontext string, requestTimeout time.Duration
 	loader := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(rules, overrides)
 	cfg, err := loader.ClientConfig()
 	if err != nil {
+		if clientcmd.IsEmptyConfig(err) || (kubeconfig != "" && errors.Is(err, fs.ErrNotExist)) {
+			// A kubeconfig with contexts but no current-context reads as
+			// empty to client-go; it was found, so say what it lacks.
+			if raw, rerr := loader.RawConfig(); rerr == nil && kubecontext == "" && raw.CurrentContext == "" && len(raw.Contexts) > 0 {
+				return nil, "", &noCurrentContextError{checked: kubeconfigChecked(rules, kubeconfig), contexts: slices.Sorted(maps.Keys(raw.Contexts)), err: err}
+			}
+			return nil, "", &noKubeconfigError{checked: kubeconfigChecked(rules, kubeconfig), err: err}
+		}
 		return nil, "", fmt.Errorf("load kubeconfig: %w", err)
 	}
 	cfg.Timeout = requestTimeout
@@ -300,6 +349,84 @@ func scanRESTConfig(kubeconfig, kubecontext string, requestTimeout time.Duration
 		}
 	}
 	return cfg, ctxName, nil
+}
+
+// noKubeconfigError is the refusal of a live scan that found no kubeconfig
+// to read: it names where it looked and what to do instead. client-go's own
+// text for it points at an obscure environment variable (KUBERNETES_MASTER),
+// which is why the message is not wrapped into this one.
+type noKubeconfigError struct {
+	checked string // where it looked, as the message says it
+	err     error
+}
+
+func (e *noKubeconfigError) Error() string {
+	return fmt.Sprintf("no kubeconfig found (looked at %s); point to one with --kubeconfig <file> or $KUBECONFIG, pick a cluster in it with --context <name>, or scan rendered manifests without a cluster: upgradescope scan --files <dir> --target %s",
+		e.checked, targetExample())
+}
+
+func (e *noKubeconfigError) Unwrap() error { return e.err }
+
+// noCurrentContextError is the refusal of a live scan whose kubeconfig has
+// contexts but sets no current-context, and no --context picked one: it
+// lists them (at most five) and says how to pick one.
+type noCurrentContextError struct {
+	checked  string   // where it looked, as kubeconfigChecked says it
+	contexts []string // sorted
+	err      error
+}
+
+func (e *noCurrentContextError) Error() string {
+	listed := e.contexts[:min(len(e.contexts), 5)]
+	names := make([]string, len(listed))
+	for i, c := range listed {
+		names[i] = esc(c)
+	}
+	more := ""
+	if n := len(e.contexts) - len(listed); n > 0 {
+		more = fmt.Sprintf(" and %d more", n)
+	}
+	return fmt.Sprintf("the kubeconfig (%s) sets no current-context; pick one of its contexts with --context <name> (%s%s), or set one with kubectl config use-context <name>",
+		e.checked, strings.Join(names, ", "), more)
+}
+
+func (e *noCurrentContextError) Unwrap() error { return e.err }
+
+// kubeconfigChecked names the kubeconfig files a load looked at: the
+// --kubeconfig file, else the $KUBECONFIG entries, else ~/.kube/config.
+func kubeconfigChecked(rules *clientcmd.ClientConfigLoadingRules, explicit string) string {
+	var paths []string
+	for _, p := range rules.GetLoadingPrecedence() {
+		if p != "" {
+			paths = append(paths, esc(p))
+		}
+	}
+	list := strings.Join(paths, ", ")
+	switch {
+	case explicit != "":
+		return "--kubeconfig " + list
+	case os.Getenv(clientcmd.RecommendedConfigPathEnvVar) != "":
+		return "$KUBECONFIG: " + list
+	case list == "":
+		return "no default location"
+	}
+	return list + ", the default"
+}
+
+// targetExample is a --target a user can copy: the newest Kubernetes minor
+// this build's knowledge base covers (what `upgradescope version` calls the
+// kb horizon).
+var targetExample = sync.OnceValue(func() string {
+	v, err := kb.Horizon()
+	if err != nil {
+		return "<minor>"
+	}
+	return v.String()
+})
+
+// errTargetRequired is the refusal of a scan with no --target.
+func errTargetRequired() error {
+	return fmt.Errorf("--target is required: the Kubernetes minor to upgrade to, e.g. --target %s (the newest this build knows; see upgradescope version)", targetExample())
 }
 
 // buildClients builds the live-scan clients from scanRESTConfig. It also
@@ -372,6 +499,14 @@ func newScanCmd() *cobra.Command {
 		Args:          cobra.NoArgs,
 		SilenceUsage:  true,
 		SilenceErrors: true,
+		// Before cobra's own check of the required --target, whose message
+		// gives the newcomer nothing to type.
+		PreRunE: func(cmd *cobra.Command, _ []string) error {
+			if opts.target == "" {
+				return errTargetRequired()
+			}
+			return nil
+		},
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if opts.filesDir != "" && cmd.Flags().Changed("team-label") {
 				return errTeamLabelNeedsCluster
@@ -441,13 +576,13 @@ func newScanCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&opts.target, "target", "", "target Kubernetes minor version, e.g. 1.36 (required)")
+	cmd.Flags().StringVar(&opts.target, "target", "", "target Kubernetes minor version, e.g. "+targetExample()+" (required)")
 	cmd.Flags().StringVar(&opts.kubeconfig, "kubeconfig", "", "path to kubeconfig (default: standard loading rules)")
 	cmd.Flags().StringVar(&opts.kubecontext, "context", "", "kubeconfig context to use")
 	cmd.Flags().DurationVar(&opts.requestTimeout, "request-timeout", defaultRequestTimeout, "give up on a single API request after this long (0 = no per-request limit)")
 	cmd.Flags().StringVar(&opts.filesDir, "files", "", "scan rendered manifests in this file or directory (*.yaml, *.yml, *.json) instead of a live cluster")
 	cmd.Flags().StringVar(&opts.registryDir, "registry-dir", "", registryDirUsage)
-	cmd.Flags().StringVar(&opts.output, "output", "table", "output format: table|json|sarif|markdown|junit|gitlab-codequality")
+	cmd.Flags().StringVarP(&opts.output, "output", "o", "table", "output format: table|json|sarif|markdown|junit|gitlab-codequality")
 	cmd.Flags().StringVar(&opts.teamLabel, "team-label", "team", "namespace label used for team attribution (live scans only: --files mode reads no Namespace objects, so all its findings are unattributed)")
 	cmd.Flags().StringVar(&opts.failOn, "fail-on", "blocker", "exit 2 if findings at/above this severity, or the verdict is unknown: blocker|warning|never (never always exits 0, even for a --target that is not an upgrade)")
 	cmd.Flags().BoolVar(&opts.allowIncomplete, "allow-incomplete", false, "with --fail-on blocker|warning, do not fail when the verdict is unknown (required checks not assessed); a --target that is not an upgrade still fails")

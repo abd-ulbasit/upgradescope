@@ -64,6 +64,11 @@ spec:
             {{- with .Values.agent.clusterName }}
             - {{ printf "--cluster-name=%s" . | quote }}
             {{- end }}
+            {{- with .Values.rbac.helmSecretsNamespaces }}
+            # rbac.helmSecretsNamespaces: list Helm releases only there,
+            # where the Roles grant it, never across the cluster.
+            - {{ printf "--helm-namespaces=%s" (join "," .) | quote }}
+            {{- end }}
             {{- if include "upgradescope.pushEnabled" . }}
             - {{ printf "--server-url=%s" (include "upgradescope.serverUrl" .) | quote }}
             {{- end }}

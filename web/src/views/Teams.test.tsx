@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { fetchedUrls, mockApi } from "../test-utils";
 import type { FleetResponse, FleetTeamsResponse } from "../types";
@@ -26,6 +26,23 @@ const teams: FleetTeamsResponse = {
 };
 
 describe("Teams view", () => {
+  it("shows when it was loaded and refreshes in place", async () => {
+    const fetchMock = mockApi({
+      "api/v1/fleet": fleet,
+      "api/v1/fleet/teams?target=1.35": teams,
+    });
+    render(<Teams />);
+    await screen.findByRole("row", { name: /payments/ });
+    expect(screen.getByText(/^updated \d\d:\d\d:\d\d$/)).toBeTruthy();
+    const before = fetchedUrls(fetchMock).length;
+
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    // The table never gives way to the loading state.
+    expect(screen.queryByText("Rolling up teams…")).toBeNull();
+    expect(screen.getByRole("row", { name: /payments/ })).toBeTruthy();
+    await waitFor(() => expect(fetchedUrls(fetchMock).length).toBe(before + 2));
+  });
+
   it("lists the fleet team rollup with links to each filtered cluster view", async () => {
     const fetchMock = mockApi({
       "api/v1/fleet": fleet,

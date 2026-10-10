@@ -132,11 +132,16 @@ func TestCollectFilesSkipsNonManifests(t *testing.T) {
 			t.Errorf("warning %+v: want an error and a line", w)
 		}
 	}
-	if want := []string{"chart/templates/configmap.yaml", "tsconfig.json"}; !reflect.DeepEqual(warned, want) {
+	// The chart's template is not warned about file by file: it is one
+	// unrendered-chart entry, and api-usage is not assessed.
+	if want := []string{"tsconfig.json"}; !reflect.DeepEqual(warned, want) {
 		t.Errorf("warned files = %v, want %v", warned, want)
 	}
-	if s := sum.Warnings[0].String(); !strings.HasPrefix(s, "chart/templates/configmap.yaml:1: ") {
+	if s := sum.Warnings[0].String(); !strings.HasPrefix(s, "tsconfig.json:1: ") {
 		t.Errorf("warning string = %q, want file:line: error", s)
+	}
+	if want := []UnrenderedChart{{Dir: "chart", Templates: 1}}; !reflect.DeepEqual(sum.Charts, want) {
+		t.Errorf("charts = %+v, want %+v", sum.Charts, want)
 	}
 }
 
@@ -166,8 +171,10 @@ items:
 	if len(inv.APIUsage) != 0 || sum.Objects != 0 || sum.Skipped != 1 {
 		t.Errorf("api usage = %+v, summary %+v; want nothing counted", inv.APIUsage, sum)
 	}
-	if len(sum.Warnings) != 2 || sum.Warnings[0].Line != 1 || sum.Warnings[1].Line != 6 {
-		t.Errorf("warnings = %+v, want one per document (lines 1 and 6)", sum.Warnings)
+	// Both documents are templates, in one file outside any chart: one
+	// count, no warning.
+	if len(sum.Warnings) != 0 || sum.Templated != 1 || len(sum.Charts) != 0 {
+		t.Errorf("warnings = %+v, templated = %d, charts = %+v; want one templated file and no warning", sum.Warnings, sum.Templated, sum.Charts)
 	}
 }
 
@@ -193,7 +200,7 @@ func TestCollectFilesUnassessedRemovedAPI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if st := inv.Capabilities[inventory.CapAPIUsage]; !st.Available || len(sum.Warnings) != 3 {
+	if st := inv.Capabilities[inventory.CapAPIUsage]; !st.Available || len(sum.Warnings) != 2 || sum.Templated != 1 {
 		t.Fatalf("api-usage = %+v with warnings %v; want available: no undecodable document names a removed API", st, sum.Warnings)
 	}
 
@@ -698,5 +705,165 @@ func TestCollectFilesUnknownBuiltinGroup(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("unknown-api findings = %q, want %q", got, want)
+	}
+}
+
+const chartYAML = "apiVersion: v2\nname: demo\nversion: 0.1.0\n"
+
+// A directory with a Chart.yaml whose templates cannot be decoded is an
+// unrendered chart (#335): no per-file warning, one entry naming the count,
+// and api-usage not assessed, whatever apiVersion a template might carry.
+// One template is enough.
+func TestCollectFilesUnrenderedChart(t *testing.T) {
+	dir := writeTree(t, map[string]string{
+		"Chart.yaml":                chartYAML,
+		"values.yaml":               "replicaCount: 1\n",
+		"templates/deploy.yaml":     "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: {{ .Release.Name }}\n",
+		"templates/hpa.yaml":        "apiVersion: {{ include \"hpa.apiVersion\" . }}\nkind: HorizontalPodAutoscaler\n",
+		"templates/cm.yaml":         "{{- if .Values.enabled }}\napiVersion: v1\nkind: ConfigMap\n{{- end }}\n",
+		"templates/_helpers.tpl":    "{{- define \"x\" -}}x{{- end -}}\n",
+		"templates/tests/test.yaml": "apiVersion: v1\nkind: Pod\nmetadata:\n  name: ok\n",
+	})
+	inv, sum, err := CollectFiles(dir, kb.KB{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sum.Warnings) != 0 {
+		t.Errorf("warnings = %+v, want none: the chart is one entry", sum.Warnings)
+	}
+	if want := []UnrenderedChart{{Dir: ".", Templates: 3}}; !reflect.DeepEqual(sum.Charts, want) {
+		t.Errorf("charts = %+v, want %+v", sum.Charts, want)
+	}
+	st := inv.Capabilities[inventory.CapAPIUsage]
+	if st.Available {
+		t.Fatalf("api-usage = %+v, want not assessed", st)
+	}
+	if want := "3 Helm template files under " + filepath.ToSlash(dir) + " were not read"; !strings.Contains(st.Reason, want) {
+		t.Errorf("reason %q lacks %q", st.Reason, want)
+	}
+	if sum.Objects != 1 || len(inv.APIUsage) != 1 {
+		t.Errorf("the one plain manifest must still be counted: %+v %+v", sum, inv.APIUsage)
+	}
+
+	// One template is enough.
+	one := writeTree(t, map[string]string{
+		"Chart.yaml":            chartYAML,
+		"templates/deploy.yaml": "{{- if .Values.on }}\napiVersion: apps/v1\nkind: Deployment\n{{- end }}\n",
+	})
+	inv, sum, err = CollectFiles(one, kb.KB{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st := inv.Capabilities[inventory.CapAPIUsage]; st.Available || !strings.Contains(st.Reason, "1 Helm template file under ") || !strings.Contains(st.Reason, " was not read") {
+		t.Errorf("api-usage = %+v, want not assessed naming the one template", st)
+	}
+	if len(sum.Charts) != 1 || sum.Charts[0].Templates != 1 || sum.Skipped < 1 {
+		t.Errorf("summary = %+v", sum)
+	}
+}
+
+// A chart below the scan root is named by its directory, a subchart is
+// part of its outermost chart, and templated files outside every chart are
+// only counted.
+func TestCollectFilesUnrenderedChartBelowRoot(t *testing.T) {
+	tmpl := "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: {{ .Release.Name }}\n"
+	dir := writeTree(t, map[string]string{
+		"apps/web/Chart.yaml":                 chartYAML,
+		"apps/web/templates/a.yaml":           tmpl,
+		"apps/web/charts/db/Chart.yaml":       chartYAML,
+		"apps/web/charts/db/templates/b.yaml": tmpl,
+		"apps/api/Chart.yaml":                 chartYAML,
+		"apps/api/templates/c.yaml":           tmpl,
+		"snippets/loose.yaml":                 tmpl,
+		"manifests/app.yaml":                  "apiVersion: v1\nkind: ConfigMap\nmetadata: {name: ok}\n",
+	})
+	inv, sum, err := CollectFiles(dir, kb.KB{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []UnrenderedChart{{Dir: "apps/api", Templates: 1}, {Dir: "apps/web", Templates: 2}}
+	if !reflect.DeepEqual(sum.Charts, want) {
+		t.Errorf("charts = %+v, want %+v", sum.Charts, want)
+	}
+	if sum.Templated != 1 || len(sum.Warnings) != 0 {
+		t.Errorf("templated = %d, warnings = %+v; want the one loose file counted", sum.Templated, sum.Warnings)
+	}
+	st := inv.Capabilities[inventory.CapAPIUsage]
+	if st.Available || !strings.Contains(st.Reason, "3 Helm template files under 2 charts") {
+		t.Errorf("api-usage = %+v, want 3 templates under 2 charts", st)
+	}
+}
+
+// Templated files that are not under a Chart.yaml (a Helm values include, a
+// kustomize or Jinja template) are collapsed into a count and do not change
+// what is assessed.
+func TestCollectFilesTemplatedOutsideChart(t *testing.T) {
+	dir := writeTree(t, map[string]string{
+		"ok.yaml":         "apiVersion: v1\nkind: ConfigMap\nmetadata: {name: ok}\n",
+		"tmpl/one.yaml":   "{{- if .Values.on }}\nkind: X\n{{- end }}\n",
+		"tmpl/two.yaml":   "apiVersion: v1\nkind: Secret\nmetadata:\n  name: {{ .Values.kind }}\n",
+		"other/Chart.yml": chartYAML, // only Chart.yaml makes a chart
+		"other/t.yaml":    "{{- if y }}\nz: 1\n{{- end }}\n",
+		".github/ci.yml":  "on: push\nenv: ${{ secrets.X }}\n", // parses: not a template
+		"tmpl/plain.yaml": "name: {{ .Values.name }}\n",        // parses, no object: not counted
+	})
+	inv, sum, err := CollectFiles(dir, kb.KB{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sum.Templated != 3 || len(sum.Charts) != 0 || len(sum.Warnings) != 0 {
+		t.Errorf("summary = %+v, want 3 templated files, no chart, no warning", sum)
+	}
+	if st := inv.Capabilities[inventory.CapAPIUsage]; !st.Available {
+		t.Errorf("api-usage = %+v, want assessed: nothing hidden names a removed API", st)
+	}
+}
+
+// A file that is not a template and cannot be parsed is warned about on its
+// own, in a chart or out of it; the chart hint never hides it.
+func TestCollectFilesBadYAMLStillWarnedInChart(t *testing.T) {
+	dir := writeTree(t, map[string]string{
+		"Chart.yaml":            chartYAML,
+		"templates/deploy.yaml": "{{- if .Values.on }}\nkind: X\n{{- end }}\n",
+		"ci/broken.yaml":        "key: [unclosed\nother: value\n",
+		"ci/jsonc.json":         "/* c */\n{\"a\": 1}\n",
+	})
+	_, sum, err := CollectFiles(dir, kb.KB{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var warned []string
+	for _, w := range sum.Warnings {
+		warned = append(warned, w.File)
+	}
+	if want := []string{"ci/broken.yaml", "ci/jsonc.json"}; !reflect.DeepEqual(warned, want) {
+		t.Errorf("warned files = %v, want %v", warned, want)
+	}
+	if len(sum.Charts) != 1 || sum.Charts[0].Templates != 1 {
+		t.Errorf("charts = %+v, want the one template", sum.Charts)
+	}
+}
+
+// An unrendered template that names a removed API is still named in the
+// api-usage reason next to the chart's count.
+func TestCollectFilesUnrenderedChartAndRemovedAPI(t *testing.T) {
+	k, err := kb.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := writeTree(t, map[string]string{
+		"chart/Chart.yaml":            chartYAML,
+		"chart/templates/deploy.yaml": "{{- if .Values.on }}\nkind: X\n{{- end }}\n",
+		"loose/pdb.yaml":              "apiVersion: policy/v1beta1\nkind: PodDisruptionBudget\nmetadata:\n  name: {{ x }}\n",
+	})
+	inv, _, err := CollectFiles(dir, k)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := inv.Capabilities[inventory.CapAPIUsage]
+	for _, want := range []string{"1 Helm template file under ", "1 document(s) that name a removed API", "loose/pdb.yaml:1"} {
+		if st.Available || !strings.Contains(st.Reason, want) {
+			t.Errorf("api-usage = %+v, want not assessed with %q", st, want)
+		}
 	}
 }

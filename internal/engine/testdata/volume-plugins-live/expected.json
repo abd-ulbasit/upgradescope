@@ -1,0 +1,69 @@
+{
+  "clusterId": "77777777-7777-7777-7777-777777777777",
+  "findings": [
+    {
+      "category": "volume-plugin",
+      "citations": [
+        "https://github.com/kubernetes/kubernetes/blob/master/CHANGELOG/CHANGELOG-1.26.md",
+        "https://github.com/kubernetes/kubernetes/pull/112015",
+        "https://github.com/kubernetes/kubernetes/pull/111485"
+      ],
+      "detail": "4 pods name it, in: shop (4). From 1.26 a pod that names it does not start.",
+      "key": "volume-plugin/glusterfs",
+      "namespaces": [
+        "shop"
+      ],
+      "remediation": "migrate the volumes to another storage solution before the upgrade; there is no CSI migration for GlusterFS",
+      "severity": "blocker",
+      "teams": [
+        "payments"
+      ],
+      "title": "In-tree volume plugin glusterfs removed in 1.26 (4 pods)"
+    },
+    {
+      "category": "volume-plugin",
+      "citations": [
+        "https://github.com/kubernetes/kubernetes/blob/master/CHANGELOG/CHANGELOG-1.27.md",
+        "https://github.com/kubernetes/kubernetes/pull/115838"
+      ],
+      "detail": "3 pods name it, in: shop (3). From 1.27 the ebs.csi.aws.com CSI driver serves every operation on these volumes: a cluster without it installed cannot mount them, one with it is fine.",
+      "key": "volume-plugin/awsElasticBlockStore",
+      "namespaces": [
+        "shop"
+      ],
+      "remediation": "install the ebs.csi.aws.com CSI driver (aws-ebs-csi-driver) before the upgrade",
+      "severity": "warning",
+      "teams": [
+        "payments"
+      ],
+      "title": "In-tree volume plugin awsElasticBlockStore needs CSI driver ebs.csi.aws.com from 1.27 (3 pods)"
+    },
+    {
+      "category": "volume-plugin",
+      "citations": [
+        "https://github.com/kubernetes/kubernetes/blob/master/CHANGELOG/CHANGELOG-1.33.md",
+        "https://github.com/kubernetes/kubernetes/pull/129923",
+        "https://github.com/kubernetes/kubernetes/pull/136400",
+        "https://github.com/kubernetes/kubernetes/pull/63445"
+      ],
+      "detail": "2 pods name it, in: ci (1), kube-system (1). From 1.33 a pod that names it does not start. Upstream: disabled by default in 1.33, where the GitRepoVolumeDriver feature gate can still turn it back on, and locked off in 1.36.",
+      "key": "volume-plugin/gitRepo",
+      "namespaces": [
+        "ci",
+        "kube-system"
+      ],
+      "remediation": "clone the repository into an emptyDir volume from an init container, and mount that emptyDir",
+      "severity": "warning",
+      "teams": [
+        "platform"
+      ],
+      "title": "In-tree volume plugin gitRepo removed in 1.33 (2 pods)"
+    }
+  ],
+  "kbVersion": "test-kb-1",
+  "ready": false,
+  "score": 65,
+  "serverVersion": "v1.31.4",
+  "target": "1.32",
+  "verdict": "blocked"
+}

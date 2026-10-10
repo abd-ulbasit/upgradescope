@@ -32,6 +32,13 @@ A required check could not run, so a blocker may have been missed: most
 often a target past the knowledge base's horizon.
 [Troubleshooting](troubleshooting.md#the-verdict-is-unknown-and-the-gate-fails).
 
+**Why does the report list unrecognized images?**
+Those are images that no add-on in the registry claims, such as a plain
+`busybox`. It is a gap in add-on detection, not a finding: it never changes
+the score or the verdict. If one is an add-on you expected to be judged, see
+[the add-on registry](concepts/addon-registry.md) for how to add it.
+[Read the result](getting-started/cli.md#read-the-result).
+
 **How fresh is the knowledge base, and does it phone home?**
 It is compiled into the binary and nothing is fetched at runtime; it is as
 fresh as the release you run. [Knowledge base](concepts/knowledge-base.md).

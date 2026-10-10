@@ -137,7 +137,7 @@ func TestEvalCRDVersionsUnservedInUse(t *testing.T) {
 	if !ok || f.Severity != SevBlocker {
 		t.Fatalf("version missing from the CRD: %+v (found %v), want a blocker", f, ok)
 	}
-	for _, want := range []string{"1 manifest object(s) use this version: namespace unset (1).", "CRD certificates.cert-manager.io does not list v1beta1"} {
+	for _, want := range []string{"1 manifest object(s) use this version: no namespace set (1).", "CRD certificates.cert-manager.io does not list v1beta1"} {
 		if !strings.Contains(f.Detail, want) {
 			t.Errorf("Detail lacks %q:\n%s", want, f.Detail)
 		}
@@ -249,12 +249,12 @@ func TestCRDUsageManifestsInAClusterRow(t *testing.T) {
 		Objects: []inventory.ObjectRef{{Namespace: "pay-prod", Name: "pr", Line: 1}}, ObjectsOmitted: 2,
 	}
 	var f Finding
-	if got, want := crdUsage(&f, u, clusterInv()), "3 object(s) use this version: pay-prod (3)."; got != want {
+	if got, want := crdUsage(&f, u, clusterInv(), nil), "3 object(s) use this version: pay-prod (3)."; got != want {
 		t.Errorf("crdUsage = %q, want %q", got, want)
 	}
 	files := clusterInv()
 	files.Source = inventory.SourceFiles
-	if got, want := crdUsage(&f, u, files), "3 manifest object(s) use this version: pay-prod (3)."; got != want {
+	if got, want := crdUsage(&f, u, files, nil), "3 manifest object(s) use this version: pay-prod (3)."; got != want {
 		t.Errorf("files-mode crdUsage = %q, want %q", got, want)
 	}
 }

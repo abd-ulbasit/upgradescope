@@ -17,8 +17,8 @@ there are no wildcard groups, resources or verbs, so no subresource
 |---|---|---|
 | `get`, `list` on `namespaces`, `nodes`, `pods` | the cluster ID (kube-system UID), team labels, kubelet versions and container runtimes, control-plane pod versions, add-on images and labels | — |
 | `get` on non-resource URLs `/version`, `/metrics` | the server version; `apiserver_requested_deprecated_apis` | — |
-| `get`, `list` on `secrets` | Helm releases (Helm's default storage driver): a metadata-only list of `owner=helm` Secrets, then one `get` per release | `rbac.helmSecrets=false` |
-| `get`, `list` on `configmaps` | Helm releases stored by the configmaps driver, read the same way | `rbac.helmSecrets=false` |
+| `get`, `list` on `secrets` | Helm releases (Helm's default storage driver): a metadata-only list of `owner=helm` Secrets, then one `get` per release | `rbac.helmSecrets=false`; moved into a Role per namespace by `rbac.helmSecretsNamespaces` |
+| `get`, `list` on `configmaps` | Helm releases stored by the configmaps driver, read the same way | `rbac.helmSecrets=false`; moved into a Role per namespace by `rbac.helmSecretsNamespaces` |
 | `get`, `list` on `applications.argoproj.io`; `get`, `list` on `helmreleases.helm.toolkit.fluxcd.io`; `get`, `list` on `ocirepositories.source.toolkit.fluxcd.io` | the charts GitOps tools deploy: chart, version and repository of each Application source and HelmRelease, and the OCIRepository a HelmRelease's `chartRef` names, for add-on detection. The OCIRepositories are listed (of the one namespace the chartRefs point into, else cluster-wide, else per namespace), and fetched by name only where the list is refused (#248); the agent asks for a refused list again only once an hour, not on every tick. Only these resources: no AppProjects, ApplicationSets or the Secrets that hold repository credentials. A repository URL is recorded without userinfo, query string or fragment, so a credential there in a `repoURL` or an OCIRepository `url` never reaches the inventory, the server or the CLI's output. A token embedded in the URL path (Cloudsmith's `dl.cloudsmith.io/<token>/...`) cannot be told from a path and is recorded: use userinfo or a Secret-backed repository for such tokens. Not granted by default | `rbac.gitops.argocd` and `rbac.gitops.flux` are off unless you set them |
 | `get`, `list` on every group/resource the knowledge base flags as deprecated or removed (one rule per API group, from `files/kb-rbac-rules.yaml`) | the API-usage collector's metadata-only lists. Generated from the embedded knowledge base; a test fails when it drifts. Its `networking.k8s.io` rule also covers the add-on collector's `list` of `ingressclasses` (an Ingress NGINX IngressClass is add-on evidence), and its `apiextensions.k8s.io` rule the CRD collector's `list` of `customresourcedefinitions` (CRD versions and `status.storedVersions`); `rbac_test.go` pins both so a knowledge-base change cannot drop them. No custom resource is granted, so the agent cannot check which custom resources use a deprecated or unserved CRD version, and reports `crds` as partial for such CRDs | — |
 | `get`, `update`, `patch` on `customresourcedefinitions`, `resourceNames: [clusterreadinesses.upgradescope.basit.engineer]` | keeping its own CRD's schema in step with the binary (server-side apply). No `create`: the chart's `crds/` installs it | `agent.manageCRD=false` |
@@ -28,7 +28,9 @@ there are no wildcard groups, resources or verbs, so no subresource
 `deploy/chart/rbac_test.go` renders this role and checks it with the
 upstream RBAC rule matcher: every call the collectors make is allowed, and
 `nodes/proxy`, `pods/log`, `pods/exec`, other CRDs, other `ClusterReadiness`
-objects, `watch`, and Secrets with `rbac.helmSecrets=false` are denied. The
+objects, `watch`, and Secrets with `rbac.helmSecrets=false` are denied.
+With `rbac.helmSecretsNamespaces` it checks that Secrets and ConfigMaps are
+granted only by a Role in each listed namespace, never cluster-wide. The
 kind end-to-end test reads the API server's audit log of a real install and
 fails if the agent writes anything but its object and CRD, or reads Secrets
 other than through Helm's label selector.
@@ -50,6 +52,58 @@ require Helm. Releases kept by Helm's SQL driver have no object in the cluster,
 and charts that Argo CD renders with `helm template` leave no release
 object either; the [GitOps page](../guides/gitops-argo-flux.md#charts-your-gitops-tool-deploys)
 says what the agent reads of those, and how to grant it.
+
+### Namespaced Helm reads: `rbac.helmSecretsNamespaces`
+
+Most clusters keep their add-on releases in a few namespaces. List them in
+`rbac.helmSecretsNamespaces` (empty by default, which keeps the cluster-wide
+rule above) and, with `rbac.helmSecrets=true`, the chart renders:
+
+- no `secrets` or `configmaps` rule in the ClusterRole;
+- in each listed namespace, a Role `<release>-agent-helm` with `get` and
+  `list` on `secrets` and `configmaps` (nothing else: no other verb, no
+  wildcard), and a RoleBinding of it to the agent's ServiceAccount;
+- `--helm-namespaces=<the list>` on the agent, which then lists Helm's
+  storage (metadata only, `owner=helm`) in each listed namespace and never
+  across the cluster. The chart passes the flag whenever the list is set,
+  `rbac.create=false` included, for a role of your own that grants the
+  same. `--helm-namespaces` and `$UPGRADESCOPE_HELM_NAMESPACES` take
+  namespace names (RFC 1123 labels) only.
+
+```yaml
+rbac:
+  helmSecretsNamespaces: [kube-system, ingress-nginx, cert-manager]
+```
+
+What it does not do:
+
+- **It is not least privilege inside a namespace.** RBAC still cannot
+  filter by label or type, so each Role reads **every** Secret and
+  ConfigMap of its namespace. `kube-system` holds many sensitive ones
+  (kubeadm's bootstrap tokens, and often cloud-provider or CNI credentials): listing it
+  keeps much of what the cluster-wide rule exposed. The gain is the
+  namespaces you leave out, such as those of your applications.
+- **Releases in other namespaces are not assessed.** Helm keeps a
+  release's storage in the namespace it was installed into
+  (`helm install -n <ns>`), not where the chart's objects go, so the list
+  must name every namespace that holds an add-on release. The helm
+  capability is reported partial, with the reason `Helm releases read only
+  in namespaces a, b (rbac.helmSecretsNamespaces); releases in other
+  namespaces were not assessed`. `helm` is not a required capability, so
+  the verdict means what it does without it: an add-on released elsewhere
+  is still found by its container images and pod labels, and its chart
+  `kubeVersion` and stored-manifest checks are what goes missing, as with
+  `rbac.helmSecrets=false`.
+- **Each namespace must exist** when the chart is installed: a Role cannot
+  be created in a namespace that does not. A listed namespace whose list is
+  refused (its Role deleted) makes the Secrets driver unread, and the helm
+  capability not assessed, naming that namespace.
+
+The hardened settings are therefore `rbac.helmSecrets=false` (no Secret or
+ConfigMap read at all; Helm chart findings go missing), or
+`rbac.helmSecretsNamespaces` listing only the namespaces that hold add-on
+releases. Keep the default only where reading every Secret is acceptable for
+a read-only scanner's token.
 
 `rbac.create=false` lets you bind a role of your own; each collector that
 lacks access degrades to "not assessed" with the reason.
@@ -202,7 +256,7 @@ cannot read is reported as not assessed.
   `last_error`, with the URL's scheme and host only
   (`https://hooks.slack.com/…`).
 - **Admin commands never follow redirects.** `clusters delete|rename
-  --server` treat any 3xx as an error naming its status and Location:
+  --server-url` treat any 3xx as an error naming its status and Location:
   Go would follow a 301 or 302 with a GET, which the admin token reads,
   and report a delete that never happened.
 - **Rotating a secret needs no restart, and takes up to about two minutes.**

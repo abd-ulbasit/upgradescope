@@ -559,6 +559,13 @@ func TestMCPScanTargetsAndErrors(t *testing.T) {
 // "prod" that has pushed the fixture inventory.
 func fleetServer(t *testing.T, readToken string) *httptest.Server {
 	t.Helper()
+	return fleetServerWith(t, readToken, false)
+}
+
+// fleetServerWith is fleetServer over TLS (a certificate no system root
+// vouches for) when useTLS.
+func fleetServerWith(t *testing.T, readToken string, useTLS bool) *httptest.Server {
+	t.Helper()
 	st, err := store.Open(filepath.Join(t.TempDir(), "srv.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -572,7 +579,12 @@ func fleetServer(t *testing.T, readToken string) *httptest.Server {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ts := httptest.NewServer(srv.Handler())
+	ts := httptest.NewUnstartedServer(srv.Handler())
+	if useTLS {
+		ts.StartTLS()
+	} else {
+		ts.Start()
+	}
 	t.Cleanup(ts.Close)
 
 	inv, err := os.ReadFile(mixedInventory)
@@ -583,7 +595,7 @@ func fleetServer(t *testing.T, readToken string) *httptest.Server {
 	req, _ := http.NewRequest(http.MethodPost, ts.URL+"/api/v1/snapshots", bytes.NewReader(body))
 	req.Header.Set("Authorization", "Bearer ingest-tok")
 	req.Header.Set("Content-Type", "application/json")
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := ts.Client().Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -942,5 +954,73 @@ func TestMCPScanMarksTheClustersText(t *testing.T) {
 		if n := strings.Count(mcpText(res), injected); n == 0 || n > 2<<10/len(injected) {
 			t.Errorf("%s: the reason appears %d times in the text, want it once, cut to 2 KiB", call.tool, n)
 		}
+	}
+}
+
+// TestMCPFleetTrustsServerCAFile: fleet mode reaches an https server whose
+// certificate a private CA issued with --server-ca-file, and cannot without
+// it (an x509 error in the tool's result; verification is never skipped).
+// Modeled on TestPushTrustsServerCAFile.
+func TestMCPFleetTrustsServerCAFile(t *testing.T) {
+	t.Setenv("UPGRADESCOPE_READ_TOKEN", "")
+	ts := fleetServerWith(t, "read-tok", true)
+	ca := writeCABundle(t, ts)
+
+	cs := startMCP(t, "--server-url", ts.URL, "--read-token", "read-tok", "--server-ca-file", ca)
+	if res := callMCP(t, cs, mcp.ToolFleetSummary, nil); res.IsError || !strings.Contains(mcpText(res), "prod") {
+		t.Errorf("fleet_summary with the CA file: isError=%v %q", res.IsError, mcpText(res))
+	}
+	if res := callMCP(t, cs, mcp.ToolGetReport, map[string]any{"cluster": "prod"}); res.IsError {
+		t.Errorf("get_report with the CA file: %s", mcpText(res))
+	}
+
+	cs = startMCP(t, "--server-url", ts.URL, "--read-token", "read-tok")
+	res := callMCP(t, cs, mcp.ToolFleetSummary, nil)
+	if !res.IsError || !strings.Contains(mcpText(res), "certificate") {
+		t.Errorf("fleet_summary without the CA file: isError=%v %q, want a certificate verification error", res.IsError, mcpText(res))
+	}
+}
+
+// --server-ca-file needs an https --server-url, and a bundle with no
+// certificate stops the command before it serves.
+func TestMCPServerCAFileIsChecked(t *testing.T) {
+	ca := writeCABundle(t, httptest.NewTLSServer(http.NotFoundHandler()))
+	empty := filepath.Join(t.TempDir(), "empty.pem")
+	if err := os.WriteFile(empty, []byte("not a certificate\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for name, tc := range map[string]struct {
+		args []string
+		want string
+	}{
+		"no server url": {[]string{"--server-ca-file", ca}, "--server-ca-file needs --server-url"},
+		"http url":      {[]string{"--server-url", "http://hub.internal", "--server-ca-file", ca}, "needs an https --server-url"},
+		"HTTP url":      {[]string{"--server-url", "HTTP://hub.internal", "--server-ca-file", ca}, "needs an https --server-url"},
+		"no cert":       {[]string{"--server-url", "https://hub.internal", "--server-ca-file", empty}, "no PEM certificate"},
+		"missing":       {[]string{"--server-url", "https://hub.internal", "--server-ca-file", filepath.Join(t.TempDir(), "nope")}, "--server-ca-file"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			cmd := Root()
+			cmd.SetArgs(append([]string{"mcp"}, tc.args...))
+			cmd.SetIn(strings.NewReader(""))
+			cmd.SetOut(io.Discard)
+			cmd.SetErr(io.Discard)
+			if err := cmd.Execute(); err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("err = %v, want one containing %q", err, tc.want)
+			}
+		})
+	}
+}
+
+// TestMCPWarnsOfCleartextReadToken: the read token over plain http to a
+// non-loopback host is warned about on stderr, once, without the token.
+func TestMCPWarnsOfCleartextReadToken(t *testing.T) {
+	t.Setenv("UPGRADESCOPE_READ_TOKEN", "")
+	var stderr syncBuffer
+	cs := startMCPStderr(t, &stderr, "--server-url", "http://192.0.2.1:8080", "--read-token", "s3cret-read-token")
+	_ = cs
+	got := stderr.String()
+	if strings.Count(got, "warning:") != 1 || !strings.Contains(got, "plain http") || strings.Contains(got, "s3cret-read-token") {
+		t.Errorf("stderr = %q, want one cleartext warning without the token", got)
 	}
 }

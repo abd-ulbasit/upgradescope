@@ -10,7 +10,10 @@ upgradescope tells you what blocks a Kubernetes cluster, or a directory of
 rendered manifests, from moving to the next minor: APIs that are removed or
 deprecated at the target (found by who still writes them, and by what the
 apiserver is still asked for), add-ons past end of life, version skew
-outside the upstream policy, and Helm charts that exclude the target. The
+outside the upstream policy, Helm charts that exclude the target, and
+[in-tree volume plugins](https://abd-ulbasit.github.io/upgradescope/concepts/volume-plugins/)
+(`glusterfs`, `gitRepo`, `awsElasticBlockStore`) that the target removed or
+serves only through a CSI driver. The
 answer is a verdict (`ready`, `blocked` or `unknown` when a required check
 could not run), a 0–100 score and cited findings, as a table, JSON, SARIF,
 Markdown, JUnit or GitLab Code Quality, an exit code for CI, and a
@@ -75,9 +78,18 @@ provenance verifies: the release workflow built it at that tag
         id: gate
         with: {path: rendered, target: "1.37", version: v0.2.0}
       - uses: github/codeql-action/upload-sarif@v4
-        if: ${{ !cancelled() && steps.gate.outputs.sarif-file != '' }}
+        # also when the gate failed; not on a fork PR, whose token is read-only
+        if: ${{ !cancelled() && steps.gate.outputs.sarif-file != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
         with: {sarif_file: "${{ steps.gate.outputs.sarif-file }}"}
 ```
+
+On a pull request from a fork the `if:` skips the upload, since a fork's
+token cannot write code-scanning alerts: the gate still runs and fails the
+job only when it fails, and the job summary and annotations are the report.
+Never switch the trigger to `pull_request_target` to get the upload back: it
+runs with a write token on files the pull request controls. If the gate runs
+on Dependabot's pull requests, whose token is read-only too, add
+`&& github.actor != 'dependabot[bot]'` to the condition.
 
 Code scanning places an alert on a pull request's diff only when its file is
 committed. Alerts for a render like `rendered/` above appear in the Security
@@ -93,8 +105,11 @@ Quality reports (`--output junit|gitlab-codequality`): see
 
 ```sh
 helm install upgradescope deploy/chart -n upgradescope --create-namespace
-kubectl get ucr        # NAME  TARGET  SCORE  READY  LASTEVALUATED  AGE
+kubectl get ucr        # NAME  TARGET  SCORE  READY  BLOCKERS  LASTEVALUATED  AGE
 ```
+
+The columns and the `Ready` condition read the first target; with several
+targets, the `AllTargetsReady` condition covers all of them.
 
 The agent re-evaluates every 10 minutes and writes a `ClusterReadiness`
 object with a standard `Ready` condition, for `kubectl wait`, alerts,
@@ -112,6 +127,11 @@ terminate at an ingress (`server.ingress`), or let `serve` terminate it
 renewal), and point agents at a private CA with `agent.serverCA`. Over plain
 http an agent's bearer token and inventories cross the network in cleartext.
 [Exposing the server to remote agents](https://abd-ulbasit.github.io/upgradescope/getting-started/fleet/#exposing-the-server-to-remote-agents).
+The server embeds a web dashboard at `/`: the fleet's clusters by targets
+with a name search, filters and a sort, a summary strip that counts the
+clusters ready, blocked, unknown or stale for a target, a Refresh button, and a `#` link
+on every finding to paste into a ticket.
+[The dashboard](https://abd-ulbasit.github.io/upgradescope/guides/dashboard/).
 
 **Ask an AI assistant**: `upgradescope mcp` gives Claude Code (`claude mcp add upgradescope -- upgradescope mcp`), or any MCP client, read-only tools that return these reports; setup for Claude Desktop is in [AI assistants (MCP)](https://abd-ulbasit.github.io/upgradescope/getting-started/mcp/).
 
@@ -160,6 +180,15 @@ release; `upgradescope version` prints the newest Kubernetes minor it
 covers. A target past that is `unknown`, by design.
 [Knowledge base](https://abd-ulbasit.github.io/upgradescope/concepts/knowledge-base/).
 
+**Not checked by this version**: field-level removals other than in-tree
+volume plugins. The engine judges the `apiVersion` and `kind` of an object,
+and the in-tree volume plugins its pods and PersistentVolumes name; another
+removed field or annotation inside a served API (the seccomp alpha
+annotations, `Service.spec.externalIPs`, `beta.kubernetes.io/os`) is not
+flagged, and a `READY` with a score of 100 does not cover it. The table and
+Markdown reports say so in a closing line; the score, verdict, exit code and
+JSON are not affected.
+
 Tested against Kubernetes 1.24 to the newest minor: 1.29 and up as whole
 kind clusters, 1.24 to 1.28 as real kube-apiservers through envtest (the
 collector and engine only; 1.24 and 1.28 on every pull request, every
@@ -179,8 +208,10 @@ scheduler skew are then not checked; kubelets and kube-proxy still are).
 It reads with `get` and `list`, never `watch`, and writes only its own
 `ClusterReadiness` object, its status and (by default) that object's CRD.
 To read Helm releases it needs `get`/`list` on Secrets and ConfigMaps
-cluster-wide, which RBAC cannot narrow; `rbac.helmSecrets=false` removes that
-at the cost of Helm findings.
+cluster-wide, which RBAC cannot narrow by label. `rbac.helmSecretsNamespaces`
+narrows it to a Role in each namespace that holds releases (still every
+Secret and ConfigMap there, and releases elsewhere go unassessed);
+`rbac.helmSecrets=false` removes it at the cost of Helm findings.
 [Security model and RBAC](https://abd-ulbasit.github.io/upgradescope/operations/security-model-and-rbac/).
 
 ## Measured

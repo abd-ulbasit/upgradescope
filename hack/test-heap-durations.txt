@@ -1,0 +1,40 @@
+# Seconds each heap-bound test takes on a hosted runner, for hack/test-heap.sh
+# --shard (greedy longest-first, see hack/shard.sh). One line per test:
+# "<package dir> <TestName> <seconds>". A test missing from here counts 30 s,
+# so a new heap test is placed without a line; adding one sharpens the
+# balance, and a stale line (a renamed test) only costs balance, never a
+# test: every discovered test runs in exactly one shard.
+#
+# Source: the test-heap job of run 38038631216 (pull request, 2026-10-10,
+# main at ee6f526d plus a one-line ci.yml change), each test's own
+# "--- PASS" time, rounded up to whole seconds. The run was serial, one
+# `go test` per package: internal/server 1050 s, internal/collect 152 s,
+# internal/server/store 7 s. Refresh when a test's cost changes much:
+#   gh run view <run> --log --job <test-heap job id> | grep -- '--- PASS: Test'
+internal/server TestStoredSnapshotHeapIsBounded 278
+internal/server TestUnreadFleetResponsesAreBounded 225
+internal/server TestReadHeapIsBounded 207
+internal/server TestFleetReadsOfTheWidestGapsAreBounded 109
+internal/server TestIngestDecodeHeapIsBounded 62
+internal/server TestGateDecodeHeapIsBounded 60
+internal/server TestGateAnswerHeapIsBounded 36
+internal/server TestGateAliasCheckWaitsForTheSlot 30
+internal/server TestFleetReadsLoadNoReport 19
+internal/server TestUnreadResponsesAreBounded 10
+internal/server TestGateClusterRefsAtEveryGVKHeapIsBounded 9
+internal/server TestGateClusterContextHeapIsBounded 9
+internal/server TestUnreadGateResponsesAreBounded 2
+internal/server TestFleetDefaultColumnsAreMeasured 1
+internal/collect TestCollectHelmManifestParsingIsBounded 120
+internal/collect TestPodPagePeakHeapIsBounded 24
+internal/collect TestCollectHelmPeakHeapIsBoundedByOneRelease 9
+internal/collect TestCollectHelmGzipBombIsBounded 1
+# The two #329 tests postdate run 38038631216: their seconds come from a
+# local `make test-heap` of integrate/sweep-2026-10-11 (Apple silicon,
+# 2026-10-11: 8.04 s and 0.74 s, rounded up), where the hosted runner took
+# about three times as long for the collect tests above. Replace them with
+# the hosted runner's from that branch's CI run.
+internal/collect TestParseOnce_RandomManifestsMatchTwoParses 9
+internal/collect TestParseOnce_NumberDenseStreamIsNotSlower 1
+internal/server/store TestPruneWithNothingToDeleteIsCheap 6
+internal/server/store TestEvaluationReadsDoNotGrowWithHistory 2

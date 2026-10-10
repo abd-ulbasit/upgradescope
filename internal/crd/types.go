@@ -106,7 +106,8 @@ type Status struct {
 	ExtendedSupportCondition string `json:"extendedSupportCondition,omitempty"`
 	// ObservedGeneration is the metadata.generation whose spec was
 	// evaluated (WriteStatus stamps the current one when it is zero), and
-	// Conditions carry the Ready condition (ReadyCondition): the standard
+	// Conditions carry the Ready condition (ReadyCondition, the first
+	// target) and AllTargetsReady (AllTargetsReadyCondition): the standard
 	// shape Argo CD, kstatus and `kubectl wait` read.
 	ObservedGeneration int64              `json:"observedGeneration,omitempty"`
 	Conditions         []metav1.Condition `json:"conditions,omitempty"`
@@ -119,12 +120,19 @@ type Status struct {
 }
 
 // ConditionReady is the condition type summarizing the first target's
-// verdict; its reasons map the three verdicts.
+// verdict; its reasons map the three verdicts. ConditionAllTargetsReady
+// summarizes every target and uses the same reasons.
 const (
-	ConditionReady    = "Ready"
-	ReasonReady       = "Ready"       // True: verdict ready
-	ReasonBlocked     = "Blocked"     // False: at least one blocker
-	ReasonNotAssessed = "NotAssessed" // Unknown: verdict unknown, or no target evaluated
+	ConditionReady = "Ready"
+	// ConditionAllTargetsReady is False when any target is blocked, Unknown
+	// when none is blocked but any is unknown (or no target was
+	// evaluated), True only when every target is ready. Ready keeps the
+	// first target's meaning; this is the condition to wait on for a plan
+	// of several targets.
+	ConditionAllTargetsReady = "AllTargetsReady"
+	ReasonReady              = "Ready"       // True: verdict ready
+	ReasonBlocked            = "Blocked"     // False: at least one blocker
+	ReasonNotAssessed        = "NotAssessed" // Unknown: verdict unknown, or no target evaluated
 )
 
 // ReadyCondition derives the Ready condition from the first target's
@@ -142,16 +150,17 @@ func ReadyCondition(st Status) metav1.Condition {
 		return c
 	}
 	t := st.Targets[0]
+	state := targetState(t)
 	// A ready or blocked verdict still names what it did not cover.
 	notCovered := ""
 	if len(st.ReadyGaps) > 0 {
 		notCovered = "; not fully assessed: " + strings.Join(st.ReadyGaps, ", ") + "; see status.notAssessed"
 	}
-	switch {
-	case t.Verdict == string(engine.VerdictReady) || (t.Verdict == "" && t.Ready):
+	switch state {
+	case targetReady:
 		c.Status, c.Reason = metav1.ConditionTrue, ReasonReady
 		c.Message = fmt.Sprintf("%s: ready (score %d)%s", t.Target, t.Score, notCovered)
-	case t.Verdict == string(engine.VerdictBlocked) || t.Blockers > 0:
+	case targetBlocked:
 		c.Status, c.Reason = metav1.ConditionFalse, ReasonBlocked
 		c.Message = fmt.Sprintf("%s: %d blocker(s) (score %d)%s", t.Target, t.Blockers, t.Score, notCovered)
 	default:
@@ -163,6 +172,84 @@ func ReadyCondition(st Status) metav1.Condition {
 		c.Message = fmt.Sprintf("%s: no blockers found, but a required check was not assessed%s; see status.notAssessed (score %d)",
 			t.Target, which, t.Score)
 	}
+	return c
+}
+
+type targetVerdict int
+
+const (
+	targetUnknown targetVerdict = iota
+	targetReady
+	targetBlocked
+)
+
+// targetState reads one target's verdict the way the Ready condition does:
+// ready first (a v0.1 row without a verdict counts by its Ready bool), then
+// blocked (a verdict, or any blocker), else unknown.
+func targetState(t TargetStatus) targetVerdict {
+	switch {
+	case t.Verdict == string(engine.VerdictReady) || (t.Verdict == "" && t.Ready):
+		return targetReady
+	case t.Verdict == string(engine.VerdictBlocked) || t.Blockers > 0:
+		return targetBlocked
+	}
+	return targetUnknown
+}
+
+// maxAllTargetsMessage bounds the AllTargetsReady message, in encoded bytes.
+// Eight targets at their longest need about 300; target names come from the
+// engine (a minor, "1.38"), so this only guards a hostile row.
+const maxAllTargetsMessage = 1024
+
+// AllTargetsReadyCondition summarizes every target in st.Targets: False
+// (reason Blocked) when any is blocked, Unknown (reason NotAssessed) when
+// none is blocked but any is unknown or no target was evaluated, True
+// (reason Ready) only when all are ready. The message names the targets
+// that decide it, e.g. "1.38 blocked (3 blockers)". LastTransitionTime is
+// the evaluation time; WriteStatus keeps the stored one while the status
+// does not change.
+func AllTargetsReadyCondition(st Status) metav1.Condition {
+	c := metav1.Condition{Type: ConditionAllTargetsReady, LastTransitionTime: st.LastEvaluated}
+	if len(st.Targets) == 0 {
+		c.Status, c.Reason = metav1.ConditionUnknown, ReasonNotAssessed
+		c.Message = "no target evaluated"
+		if len(st.NotAssessed) > 0 {
+			c.Message += ": " + strings.Join(st.NotAssessed, "; ")
+		}
+		c.Message = clip(c.Message, maxAllTargetsMessage)
+		return c
+	}
+	var blocked, unknown, ready []string
+	for _, t := range st.Targets {
+		name := clip(t.Target, 32)
+		switch targetState(t) {
+		case targetBlocked:
+			noun := "blockers"
+			if t.Blockers == 1 {
+				noun = "blocker"
+			}
+			blocked = append(blocked, fmt.Sprintf("%s blocked (%d %s)", name, t.Blockers, noun))
+		case targetUnknown:
+			unknown = append(unknown, name+" not assessed")
+		default:
+			ready = append(ready, name)
+		}
+	}
+	switch {
+	case len(blocked) > 0:
+		c.Status, c.Reason = metav1.ConditionFalse, ReasonBlocked
+		c.Message = strings.Join(append(blocked, unknown...), ", ")
+	case len(unknown) > 0:
+		c.Status, c.Reason = metav1.ConditionUnknown, ReasonNotAssessed
+		c.Message = strings.Join(unknown, ", ") + "; see status.notAssessed"
+	default:
+		c.Status, c.Reason = metav1.ConditionTrue, ReasonReady
+		c.Message = fmt.Sprintf("%d targets ready: %s", len(ready), strings.Join(ready, ", "))
+		if len(ready) == 1 {
+			c.Message = "1 target ready: " + ready[0]
+		}
+	}
+	c.Message = clip(c.Message, maxAllTargetsMessage)
 	return c
 }
 

@@ -191,6 +191,7 @@ func collectControlPlane(ctx context.Context, kube kubernetes.Interface, inv *in
 			p := &pods.Items[i]
 			largest = max(largest, p.Size())
 			ev.addPod(p.Namespace, p.Labels, podContainerImages(p))
+			ev.volumes.addPod(p.Namespace, p.Spec.Volumes)
 			comp, labelled := classifyControlPlanePod(p.Name, p.Labels)
 			if comp == "" {
 				continue

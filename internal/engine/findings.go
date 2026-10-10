@@ -244,6 +244,7 @@ var categorySources = map[Category][]inventory.Capability{
 	CatChartIncompat:      {inventory.CapAddOns, inventory.CapVersions, inventory.CapHelm},
 	CatVersionSkew:        {inventory.CapVersions},
 	CatCRDVersion:         {inventory.CapCRDs},
+	CatVolumePlugin:       {inventory.CapVolumes},
 	// The provider is inferred in the versions step, from the server
 	// version and the nodes it lists.
 	CatSupportLifecycle: {inventory.CapVersions},

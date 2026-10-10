@@ -63,8 +63,12 @@ In scope:
   - with `rbac.helmSecrets=true` (the default), cluster-wide `get`/`list` on
     Secrets and ConfigMaps, for Helm release detection. RBAC cannot filter
     them by label or type, so the agent can read **every** Secret and
-    ConfigMap; treat its token as privileged. `rbac.helmSecrets=false`
-    removes both rules;
+    ConfigMap; treat its token as privileged. `rbac.helmSecretsNamespaces`
+    replaces both rules with a Role (`get`/`list` on Secrets and
+    ConfigMaps) and a RoleBinding in each namespace it lists, so the agent
+    reads every Secret and ConfigMap of those namespaces only, and Helm
+    releases elsewhere are not assessed. `rbac.helmSecrets=false` removes
+    both rules;
   - with `agent.manageCRD=true` (the default), `get`/`update`/`patch` on the
     one CRD `clusterreadinesses.upgradescope.basit.engineer` (by `resourceNames`; no
     `create`);

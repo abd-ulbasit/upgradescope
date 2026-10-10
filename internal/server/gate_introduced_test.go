@@ -44,8 +44,10 @@ func TestGateManifestAtAPINotServedYetIsABlocker(t *testing.T) {
 	}
 	if len(body.Findings) != 1 || body.Findings[0].Severity != "blocker" || body.Findings[0].Category != "removed-api" ||
 		!strings.Contains(body.Findings[0].Title, "is not served until 1.34") || body.Findings[0].Source != "manifest" ||
-		!strings.Contains(body.Findings[0].Remediation, "resource.k8s.io/v1beta2 DeviceClass") {
-		t.Fatalf("findings = %+v, want one manifest blocker \"not served until 1.34\" naming v1beta2", body.Findings)
+		!strings.Contains(body.Findings[0].Remediation, "upgrade the cluster to Kubernetes 1.34") ||
+		strings.Contains(body.Findings[0].Remediation, "v1beta2") {
+		// The fix never sends v1 back to a less mature v1beta2 (#332).
+		t.Fatalf("findings = %+v, want one manifest blocker \"not served until 1.34\" whose fix is to upgrade to 1.34", body.Findings)
 	}
 
 	for _, target := range []string{"1.34", "1.37"} {

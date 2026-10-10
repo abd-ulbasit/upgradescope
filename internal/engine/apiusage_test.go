@@ -2,6 +2,7 @@ package engine
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/abd-ulbasit/upgradescope/internal/inventory"
@@ -239,8 +240,13 @@ func TestEvalAPIUsageManifestObjects(t *testing.T) {
 		t.Fatalf("want 1 finding, got %d", len(fs))
 	}
 	f := fs[0]
-	if want := "4 manifest object(s) use this API: namespace unset (2), jobs (1), shop (1)."; f.Detail != want {
+	if want := "4 manifest object(s) use this API: no namespace set (2), jobs (1), shop (1)."; f.Detail != want {
 		t.Errorf("detail = %q, want %q", f.Detail, want)
+	}
+	// #334: the sentence says "no namespace set"; the finding's key, which
+	// suppressions and baselines match, never carried the marker.
+	if f.Key != "removed-api/batch/v1beta1/CronJob" || strings.Contains(f.Title+f.Detail, "namespace unset") {
+		t.Errorf("key %q, title %q: want the unchanged key and no \"namespace unset\" wording", f.Key, f.Title)
 	}
 	wantObjs := []inventory.ObjectRef{
 		{Name: "y", File: "a.yaml", Line: 3, RenderedFrom: "demo/templates/cron.yaml"},
@@ -294,7 +300,7 @@ func TestEvalAPIUsageManifestsInAClusterRow(t *testing.T) {
 	u := row
 	u.Namespaces = map[string]int{"": 3}
 	fs := evalAPIUsage(inventory.Inventory{Source: inventory.SourceCluster, APIUsage: []inventory.APIUsage{u}}, testKB(), target, nil)
-	if want := "3 object(s) use this API: cluster-scoped or namespace unset (3)."; len(fs) != 1 || fs[0].Detail != want {
+	if want := "3 object(s) use this API: cluster-scoped or no namespace set (3)."; len(fs) != 1 || fs[0].Detail != want {
 		t.Errorf("findings %+v, want one with detail %q", fs, want)
 	}
 }
@@ -408,7 +414,7 @@ func TestEvalAPIUsageUnknownGVK(t *testing.T) {
 			Category: CatUnknownAPI, Severity: SevInfo,
 			Key:        "unknown-api/batch/v2alpha1/CronJob",
 			Title:      "batch/v2alpha1 CronJob is not in the knowledge base (2 objects)",
-			Detail:     "2 manifest object(s) use this API: namespace unset (1), default (1). The knowledge base has no lifecycle data for this built-in API: it may have been removed, so check that Kubernetes 1.34 serves it.",
+			Detail:     "2 manifest object(s) use this API: no namespace set (1), default (1). The knowledge base has no lifecycle data for this built-in API: it may have been removed, so check that Kubernetes 1.34 serves it.",
 			Teams:      []string{"core"},
 			Namespaces: []string{"default"},
 			Citations:  []string{deprecationGuideURL},

@@ -121,8 +121,16 @@ func WriteTable(out io.Writer, r engine.Report) error {
 		}
 	}
 	writeUnrecognizedImages(w, r)
+	fmt.Fprintf(w, "\n%s\n", ScopeNotice)
 	return w.err
 }
+
+// ScopeNotice is the static line the table and markdown reports end with
+// (#331): what this version does not judge, so a READY 100/100 is not read
+// as covering it. It changes no score, verdict, exit code or JSON, and it
+// is the one place to narrow when detection of a listed removal ships (as
+// in-tree volume plugins did, #351).
+const ScopeNotice = "Field-level removals other than in-tree volume plugins are not checked by this version."
 
 // esc is textsafe.Escape: the one escape every renderer of text that a
 // manifest or the cluster controls goes through.

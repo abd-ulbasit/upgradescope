@@ -1,0 +1,195 @@
+{
+  "migrations": [
+    {
+      "group": "policy",
+      "version": "v1beta1",
+      "kind": "PodSecurityPolicy",
+      "note": "Pod Security Admission replaces PodSecurityPolicy and has no manifest to convert to: label each namespace with a Pod Security Standards level (privileged, baseline or restricted), check it in audit and warn modes first, then enforce it and disable PodSecurityPolicy; use a validating or mutating admission webhook (a policy engine) for rules the standards do not cover",
+      "citations": [
+        "https://kubernetes.io/docs/tasks/configure-pod-container/migrate-from-psp/",
+        "https://kubernetes.io/docs/reference/using-api/deprecation-guide/"
+      ]
+    },
+    {
+      "group": "extensions",
+      "version": "v1beta1",
+      "kind": "PodSecurityPolicy",
+      "note": "Pod Security Admission replaces PodSecurityPolicy and has no manifest to convert to: label each namespace with a Pod Security Standards level (privileged, baseline or restricted), check it in audit and warn modes first, then enforce it and disable PodSecurityPolicy; use a validating or mutating admission webhook (a policy engine) for rules the standards do not cover",
+      "citations": [
+        "https://kubernetes.io/docs/tasks/configure-pod-container/migrate-from-psp/",
+        "https://kubernetes.io/docs/reference/using-api/deprecation-guide/"
+      ]
+    },
+    {
+      "group": "extensions",
+      "version": "v1beta1",
+      "kind": "Ingress",
+      "note": "networking.k8s.io/v1 is not a rename of the apiVersion: spec.backend becomes spec.defaultBackend, a backend's serviceName becomes service.name and its servicePort becomes service.port.number (numeric) or service.port.name (string), and pathType (Prefix, Exact or ImplementationSpecific, which matches the undefined v1beta1 behaviour) is required on every path",
+      "citations": [
+        "https://kubernetes.io/docs/reference/using-api/deprecation-guide/"
+      ]
+    },
+    {
+      "group": "networking.k8s.io",
+      "version": "v1beta1",
+      "kind": "Ingress",
+      "note": "networking.k8s.io/v1 is not a rename of the apiVersion: spec.backend becomes spec.defaultBackend, a backend's serviceName becomes service.name and its servicePort becomes service.port.number (numeric) or service.port.name (string), and pathType (Prefix, Exact or ImplementationSpecific, which matches the undefined v1beta1 behaviour) is required on every path",
+      "citations": [
+        "https://kubernetes.io/docs/reference/using-api/deprecation-guide/"
+      ]
+    },
+    {
+      "group": "apiextensions.k8s.io",
+      "version": "v1beta1",
+      "kind": "CustomResourceDefinition",
+      "note": "apiextensions.k8s.io/v1 is not a rename of the apiVersion: spec.scope must be set (it no longer defaults to Namespaced), spec.version, spec.validation, spec.subresources and spec.additionalPrinterColumns move under spec.versions[*], each version needs a structural spec.versions[*].schema.openAPIV3Schema, spec.preserveUnknownFields: true is disallowed (use x-kubernetes-preserve-unknown-fields: true in the schema), and spec.conversion.webhookClientConfig moves to spec.conversion.webhook.clientConfig",
+      "citations": [
+        "https://kubernetes.io/docs/reference/using-api/deprecation-guide/"
+      ]
+    },
+    {
+      "group": "admissionregistration.k8s.io",
+      "version": "v1beta1",
+      "kind": "ValidatingWebhookConfiguration",
+      "note": "admissionregistration.k8s.io/v1 is not a rename of the apiVersion: webhooks[*].sideEffects (None or NoneOnDryRun) and webhooks[*].admissionReviewVersions (v1 and v1beta1 are supported) are required and have no default, webhooks[*].name must be unique in the list, and the defaults change: failurePolicy Fail (was Ignore), matchPolicy Equivalent (was Exact), timeoutSeconds 10 (was 30)",
+      "citations": [
+        "https://kubernetes.io/docs/reference/using-api/deprecation-guide/"
+      ]
+    },
+    {
+      "group": "admissionregistration.k8s.io",
+      "version": "v1beta1",
+      "kind": "MutatingWebhookConfiguration",
+      "note": "admissionregistration.k8s.io/v1 is not a rename of the apiVersion: webhooks[*].sideEffects (None or NoneOnDryRun) and webhooks[*].admissionReviewVersions (v1 and v1beta1 are supported) are required and have no default, webhooks[*].name must be unique in the list, and the defaults change: failurePolicy Fail (was Ignore), matchPolicy Equivalent (was Exact), timeoutSeconds 10 (was 30)",
+      "citations": [
+        "https://kubernetes.io/docs/reference/using-api/deprecation-guide/"
+      ]
+    },
+    {
+      "group": "certificates.k8s.io",
+      "version": "v1beta1",
+      "kind": "CertificateSigningRequest",
+      "note": "certificates.k8s.io/v1 requires spec.signerName (kubernetes.io/legacy-unknown requests cannot be created) and spec.usages with no duplicates and only known usages; approvers and signers must not repeat a condition type, set status.conditions[*].status, and write a PEM-encoded status.certificate of CERTIFICATE blocks only",
+      "citations": [
+        "https://kubernetes.io/docs/reference/using-api/deprecation-guide/"
+      ]
+    },
+    {
+      "group": "events.k8s.io",
+      "version": "v1beta1",
+      "kind": "Event",
+      "note": "events.k8s.io/v1 is not a rename of the apiVersion: type is only Normal or Warning, involvedObject becomes regarding, action, reason, reportingController and reportingInstance are required on new events, and eventTime, series.lastObservedTime and series.count replace firstTimestamp, lastTimestamp and count",
+      "citations": [
+        "https://kubernetes.io/docs/reference/using-api/deprecation-guide/"
+      ]
+    },
+    {
+      "group": "policy",
+      "version": "v1beta1",
+      "kind": "PodDisruptionBudget",
+      "note": "in policy/v1 an empty spec.selector ({}) selects every pod in the namespace, where in v1beta1 it selected none; an unset selector still selects none",
+      "citations": [
+        "https://kubernetes.io/docs/reference/using-api/deprecation-guide/"
+      ]
+    },
+    {
+      "group": "discovery.k8s.io",
+      "version": "v1beta1",
+      "kind": "EndpointSlice",
+      "note": "discovery.k8s.io/v1 replaces topology with the per-endpoint nodeName and zone fields (deprecatedTopology is not writable)",
+      "citations": [
+        "https://kubernetes.io/docs/reference/using-api/deprecation-guide/"
+      ]
+    },
+    {
+      "group": "auditregistration.k8s.io",
+      "version": "v1alpha1",
+      "kind": "AuditSink",
+      "note": "this alpha API was removed in 1.19 and the knowledge base knows no API that replaced it; the Kubernetes 1.19 changelog lists what became of the feature, if anything, and objects of this kind should be deleted before the upgrade",
+      "citations": [
+        "https://github.com/kubernetes/kubernetes/blob/master/CHANGELOG/CHANGELOG-1.19.md"
+      ]
+    },
+    {
+      "group": "networking.k8s.io",
+      "version": "v1alpha1",
+      "kind": "ClusterCIDR",
+      "note": "this alpha API was removed in 1.29 and the knowledge base knows no API that replaced it; the Kubernetes 1.29 changelog lists what became of the feature, if anything, and objects of this kind should be deleted before the upgrade",
+      "citations": [
+        "https://github.com/kubernetes/kubernetes/blob/master/CHANGELOG/CHANGELOG-1.29.md"
+      ]
+    },
+    {
+      "group": "resource.k8s.io",
+      "version": "v1alpha1",
+      "kind": "PodScheduling",
+      "note": "this alpha API was removed in 1.27 and the knowledge base knows no API that replaced it; the Kubernetes 1.27 changelog lists what became of the feature, if anything, and objects of this kind should be deleted before the upgrade",
+      "citations": [
+        "https://github.com/kubernetes/kubernetes/blob/master/CHANGELOG/CHANGELOG-1.27.md"
+      ]
+    },
+    {
+      "group": "resource.k8s.io",
+      "version": "v1alpha1",
+      "kind": "ResourceClass",
+      "note": "this alpha API was removed in 1.27 and the knowledge base knows no API that replaced it; the Kubernetes 1.27 changelog lists what became of the feature, if anything, and objects of this kind should be deleted before the upgrade",
+      "citations": [
+        "https://github.com/kubernetes/kubernetes/blob/master/CHANGELOG/CHANGELOG-1.27.md"
+      ]
+    },
+    {
+      "group": "resource.k8s.io",
+      "version": "v1alpha2",
+      "kind": "PodSchedulingContext",
+      "note": "this alpha API was removed in 1.31 and the knowledge base knows no API that replaced it; the Kubernetes 1.31 changelog lists what became of the feature, if anything, and objects of this kind should be deleted before the upgrade",
+      "citations": [
+        "https://github.com/kubernetes/kubernetes/blob/master/CHANGELOG/CHANGELOG-1.31.md"
+      ]
+    },
+    {
+      "group": "resource.k8s.io",
+      "version": "v1alpha2",
+      "kind": "ResourceClaimParameters",
+      "note": "this alpha API was removed in 1.31 and the knowledge base knows no API that replaced it; the Kubernetes 1.31 changelog lists what became of the feature, if anything, and objects of this kind should be deleted before the upgrade",
+      "citations": [
+        "https://github.com/kubernetes/kubernetes/blob/master/CHANGELOG/CHANGELOG-1.31.md"
+      ]
+    },
+    {
+      "group": "resource.k8s.io",
+      "version": "v1alpha2",
+      "kind": "ResourceClass",
+      "note": "this alpha API was removed in 1.31 and the knowledge base knows no API that replaced it; the Kubernetes 1.31 changelog lists what became of the feature, if anything, and objects of this kind should be deleted before the upgrade",
+      "citations": [
+        "https://github.com/kubernetes/kubernetes/blob/master/CHANGELOG/CHANGELOG-1.31.md"
+      ]
+    },
+    {
+      "group": "resource.k8s.io",
+      "version": "v1alpha2",
+      "kind": "ResourceClassParameters",
+      "note": "this alpha API was removed in 1.31 and the knowledge base knows no API that replaced it; the Kubernetes 1.31 changelog lists what became of the feature, if anything, and objects of this kind should be deleted before the upgrade",
+      "citations": [
+        "https://github.com/kubernetes/kubernetes/blob/master/CHANGELOG/CHANGELOG-1.31.md"
+      ]
+    },
+    {
+      "group": "resource.k8s.io",
+      "version": "v1alpha3",
+      "kind": "PodSchedulingContext",
+      "note": "this alpha API was removed in 1.32 and the knowledge base knows no API that replaced it; the Kubernetes 1.32 changelog lists what became of the feature, if anything, and objects of this kind should be deleted before the upgrade",
+      "citations": [
+        "https://github.com/kubernetes/kubernetes/blob/master/CHANGELOG/CHANGELOG-1.32.md"
+      ]
+    },
+    {
+      "group": "settings.k8s.io",
+      "version": "v1alpha1",
+      "kind": "PodPreset",
+      "note": "this alpha API was removed in 1.20 and the knowledge base knows no API that replaced it; the Kubernetes 1.20 changelog lists what became of the feature, if anything, and objects of this kind should be deleted before the upgrade",
+      "citations": [
+        "https://github.com/kubernetes/kubernetes/blob/master/CHANGELOG/CHANGELOG-1.20.md"
+      ]
+    }
+  ]
+}
