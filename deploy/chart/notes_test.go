@@ -15,10 +15,10 @@ import (
 	"github.com/abd-ulbasit/upgradescope/internal/crd"
 )
 
-// renderNotes renders templates/NOTES.txt. helm template never prints
+// renderNotesWithArgs renders templates/NOTES.txt. helm template never prints
 // NOTES, so the test renders a copy of the chart whose NOTES.txt is an
 // ordinary template. extra are further helm template arguments.
-func renderNotes(t *testing.T, extra ...string) string {
+func renderNotesWithArgs(t *testing.T, extra ...string) string {
 	t.Helper()
 	dir := t.TempDir()
 	err := filepath.WalkDir(".", func(path string, d fs.DirEntry, err error) error {
@@ -79,10 +79,10 @@ func TestNotesNameTheCRDInstallCommandOnUpgrade(t *testing.T) {
 	if strings.Contains(cmd, "<tag>") {
 		t.Fatalf("Chart.yaml appVersion %q names no release tag: %s", meta.AppVersion, cmd)
 	}
-	if up := renderNotes(t, "--is-upgrade"); !strings.Contains(up, cmd) {
+	if up := renderNotesWithArgs(t, "--is-upgrade"); !strings.Contains(up, cmd) {
 		t.Errorf("NOTES on upgrade do not name %q:\n%s", cmd, up)
 	}
-	if first := renderNotes(t); strings.Contains(first, "kubectl apply -f https://raw") {
+	if first := renderNotesWithArgs(t); strings.Contains(first, "kubectl apply -f https://raw") {
 		t.Errorf("NOTES on a first install name a CRD install command:\n%s", first)
 	}
 }
@@ -128,7 +128,7 @@ func TestNotesUpgradeBlockMatchesWhatTheAgentDoes(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			out := renderNotes(t, append([]string{"--is-upgrade"}, tc.set...)...)
+			out := renderNotesWithArgs(t, append([]string{"--is-upgrade"}, tc.set...)...)
 			if !strings.Contains(out, cmd) {
 				t.Errorf("NOTES do not name %q:\n%s", cmd, out)
 			}
@@ -153,7 +153,7 @@ func TestNotesUpgradeBlockMatchesWhatTheAgentDoes(t *testing.T) {
 	}
 }
 
-// notesLines returns the lines of the NOTES text in renderNotes' output,
+// notesLines returns the lines of the NOTES text in renderNotesWithArgs' output,
 // where it is the JSON string data.notes of a ConfigMap.
 func notesLines(t *testing.T, out string) []string {
 	t.Helper()

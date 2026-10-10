@@ -60,7 +60,7 @@ for (a what-if) without going back to the cluster.
 | Package | Responsibility | Depends on |
 |---|---|---|
 | `internal/inventory` | The `Inventory` contract (what was observed) and Kubernetes `Version` parsing | nothing |
-| `internal/collect` | Builds an `Inventory` from a live cluster (client-go) or from rendered manifests | `inventory`, `kb`, `registry` |
+| `internal/collect` | Builds an `Inventory` from a live cluster (client-go) or from rendered manifests | `crd/apigroup`, `inventory`, `kb`, `registry` |
 | `registry` | The add-on EOL/compatibility dataset: schema, validator, embedded YAML loader | nothing internal (importable on its own) |
 | `api` | Embeds the published report schema so the MCP server can hand it to clients as a tool output schema | nothing internal |
 | `internal/kb` | Loads the knowledge base: API lifecycle data, the registry, and the version-skew policy | `inventory`, `registry` |
@@ -68,11 +68,12 @@ for (a what-if) without going back to the cluster.
 | `internal/sarif` | Renders a report as SARIF 2.1.0 | `engine`, `inventory` |
 | `internal/junit` | Renders a report as JUnit XML for Jenkins, GitLab and Azure Pipelines | `engine`, `inventory` |
 | `internal/codequality` | Renders a report as a GitLab Code Quality report | `engine`, `inventory` |
-| `internal/suppress` | Applies ignore rules, annotations and a baseline to a report | `engine`, `inventory` |
+| `internal/suppress` | Applies ignore rules, annotations and a baseline to a report | `crd/apigroup`, `engine`, `inventory` |
 | `internal/secretfile` | Reads a token or URL from a mounted file and re-reads it when the file changes | nothing internal |
 | `internal/textsafe` | Makes text a manifest or cluster controls safe to print to a terminal or a CI log | nothing internal |
 | `internal/mcp` | The MCP server behind `upgradescope mcp`: tools, schemas and the stdio and HTTP transports; what a scan does stays in the CLI's code, handed in through its config | `engine`, `registry`, `api` |
-| `internal/crd` | `ClusterReadiness` types, the embedded CRD manifest, and status projection and writes | `engine`, `suppress`, client-go |
+| `internal/crd` | `ClusterReadiness` types, the embedded CRD manifest, and status projection and writes | `crd/apigroup`, `engine`, `suppress`, client-go |
+| `internal/crd/apigroup` | The one place the API group and the annotation keys are spelled, with the read path for the pre-v0.2.0 keys | nothing internal |
 | `internal/agent` | The in-cluster loop and the snapshot push client | `collect`, `crd`, `engine`, `inventory`, `kb`, `secretfile`, `suppress` |
 | `internal/server` | Ingest, read API, what-if, gate, exports, team mapping, delta notifications, SPA serving | `codequality`, `collect` (manifests only), `engine`, `inventory`, `junit`, `kb`, `registry`, `sarif`, `secretfile`, `server/notify`, `server/store`, `suppress` |
 | `internal/server/store` | The `Store` interface and its SQLite and Postgres implementations, with embedded migrations | `engine` |

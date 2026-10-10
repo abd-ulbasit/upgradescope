@@ -171,8 +171,9 @@ A new file that is empty or unreadable keeps the old value, and the pod logs
 an error naming the file.{{ if and .Values.server.enabled (gt (int .Values.server.replicas) 1) }} Each server replica's kubelet syncs the Secret on its own schedule,
 so for up to that window a push can get a 401 from one replica and a 200 from
 another.{{ end }} A UPGRADESCOPE_*_TOKEN in server.extraEnv or agent.extraEnv no
-longer overrides these files: set the value in the Secret. No pod annotation carries a function of a secret
-value, so the pods are not restarted by a rotation.
+longer overrides these files: set the value in the Secret. No pod annotation
+carries a function of a secret value, so the pods are not restarted by a
+rotation.
 
 A restart is still needed for a value that does not come from the mounted
 files: the database URL (server.database.existingSecret), anything you pass in
