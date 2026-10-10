@@ -36,6 +36,16 @@ expect() {
 }
 
 expect "every reference exists" 0 "4 claims" "$good"
+expect "text inside a table fails" 1 "a line inside a claims table does not start with '|'" "$good
+a sentence that lost its row
+| XX-05 | A Go test | \`TestITKubeContext\` |"
+expect "a sentence pasted in front of a row fails" 1 "claims.md:11: a line inside a claims table" "$good
+pasted prose || XX-05 | A Go test | \`TestITKubeContext\` |"
+expect "a row with no ID fails" 1 "a claim row with no ID" "$good
+|| A Go test | \`TestITKubeContext\` |"
+expect "prose after a table, past a blank line, is fine" 0 "4 claims" "$good
+
+Some prose after the table."
 expect "a missing Go test fails" 1 "XX-05: no Go test TestNoSuchClaimTest" "$good
 | XX-05 | Renamed away | \`TestNoSuchClaimTest\` |"
 expect "a missing e2e gate fails" 1 "XX-05: hack/e2e.sh has no gate audit_nothing" "$good
