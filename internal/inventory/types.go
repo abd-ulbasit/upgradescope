@@ -168,6 +168,35 @@ type Inventory struct {
 	// leave it out, as they do CollectedAt, and an agent that moves between
 	// HA apiservers sends the same snapshot.
 	APIServerStartTime time.Time `json:"apiServerStartTime,omitzero"`
+
+	// AddOnEvidenceAgeSeconds is how old the pod evidence the add-ons were
+	// detected from was, in whole seconds (at least 1), when a collection
+	// reused it: the agent lists the pods outside kube-system only every
+	// --pod-pass-every ticks (or --pod-pass-max-age), and in between detects
+	// add-ons from the images and labels the last full pass read (#228). An
+	// add-on installed or upgraded since is then reported as it was at that
+	// pass, for at most this long: a pass of --pod-pass-max-age or more is
+	// not reused, so this is below it when the collection began, and the
+	// report stays up until the next one. A change in the Helm releases or
+	// GitOps charts that name an add-on forces a full pass instead.
+	// Absent (0) when every pod was read in this collection, as a scan's
+	// always are, and in inventories from collectors that predate the field.
+	// The kube-system pods, Helm releases, GitOps resources and IngressClasses
+	// are read in every collection whatever this says. It describes how the
+	// snapshot was collected, not the cluster, so it is not part of a
+	// snapshot's identity: Canonical leaves it out, as it does the times.
+	AddOnEvidenceAgeSeconds int64 `json:"addOnEvidenceAgeSeconds,omitempty"`
+}
+
+// Canonical returns inv without what describes the collection and not the
+// cluster: CollectedAt (it changes every tick), APIServerStartTime (it
+// says which apiserver answered the /metrics scrape, and moves with HA
+// apiservers) and AddOnEvidenceAgeSeconds (it grows with each tick that
+// reuses a pod pass). The agent's and the server's snapshot hashes are
+// over this form, so a push that differs only in those is a duplicate.
+func (inv Inventory) Canonical() Inventory {
+	inv.CollectedAt, inv.APIServerStartTime, inv.AddOnEvidenceAgeSeconds = time.Time{}, time.Time{}, 0
+	return inv
 }
 
 // CRD is one CustomResourceDefinition (apiextensions.k8s.io/v1): the

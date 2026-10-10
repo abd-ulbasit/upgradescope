@@ -42,7 +42,9 @@ import (
 // UPGRADESCOPE_BENCH_EXPECT_HELM (fail unless the inventory holds that many:
 // a benchmark of a cluster that was not seeded measures nothing), and
 // UPGRADESCOPE_BENCH_NO_HELM_CACHE=1 (collect with no Helm release cache, as
-// every tick did before #71: the "before" rows of docs/operations/scale.md).
+// every tick did before #71: the "before" rows of docs/operations/scale.md)
+// and UPGRADESCOPE_BENCH_POD_PASS_EVERY (the agent's --pod-pass-every; unset
+// is its default, 1 lists every pod every tick, #228).
 // With the GitOps fill (#233, hack/bench/agent.sh BENCH_GITOPS=1) the lab
 // has the Argo CD and Flux CRDs: UPGRADESCOPE_BENCH_GITOPS=1 accepts the
 // one gap that brings (a partial helm capability that skips only Argo CD:
@@ -86,6 +88,9 @@ func TestBenchAgentTick(t *testing.T) {
 	}
 
 	acfg := Config{CRName: "bench-agent", Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	// The pod pass cadence the agent ships with unless the run asks for
+	// another (#228); 1 lists every pod every tick, as before.
+	acfg.PodPassEvery = envInt(t, "UPGRADESCOPE_BENCH_POD_PASS_EVERY", 0)
 	if err := acfg.applyDefaults(); err != nil {
 		t.Fatal(err)
 	}
@@ -142,6 +147,7 @@ func TestBenchAgentTick(t *testing.T) {
 		if rep.err != nil {
 			res.Error = rep.err.Error()
 		}
+		res.AddOnEvidenceAgeSeconds = last.AddOnEvidenceAgeSeconds
 		for c, s := range last.Capabilities {
 			state := "available"
 			switch {
@@ -204,6 +210,11 @@ type benchTick struct {
 	Targets          int               `json:"targets"`
 	Capabilities     map[string]string `json:"capabilities"`
 	Error            string            `json:"error,omitempty"`
+
+	// AddOnEvidenceAgeSeconds is set on a tick that reused the last full pod
+	// pass instead of listing the pods (#228), and 0 (absent) on one that
+	// listed them.
+	AddOnEvidenceAgeSeconds int64 `json:"addOnEvidenceAgeSeconds,omitempty"`
 }
 
 // benchCapabilityOK reports whether a capability read as fully as the

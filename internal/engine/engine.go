@@ -2274,5 +2274,6 @@ func evaluate(inv inventory.Inventory, k kb.KB, target inventory.Version, now ti
 
 		UnrecognizedImages:        unrecognized,
 		UnrecognizedImagesOmitted: omitted,
+		AddOnEvidenceAgeSeconds:   max(0, inv.AddOnEvidenceAgeSeconds),
 	}, nil
 }

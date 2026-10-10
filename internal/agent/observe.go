@@ -157,6 +157,9 @@ func (o *observer) record(rep tickReport) {
 		capabilityAttr(rep.caps),
 		targetsAttr(rep.reports),
 	}
+	if len(rep.reports) > 0 && rep.reports[0].AddOnEvidenceAgeSeconds > 0 {
+		attrs = append(attrs, "addOnEvidenceAgeSeconds", rep.reports[0].AddOnEvidenceAgeSeconds)
+	}
 	if rep.markerErr != nil {
 		attrs = append(attrs, "statusErrorMarker", rep.markerErr.Error())
 	}
@@ -273,6 +276,8 @@ var (
 		"1 when the collector capability was available on the last successful tick.", []string{"capability"}, nil)
 	descCapabilityPartial = prometheus.NewDesc("upgradescope_capability_partial",
 		"1 when the collector capability was available but could not read all it covers (status.notAssessed marks it partial) on the last successful tick.", []string{"capability"}, nil)
+	descEvidenceAge = prometheus.NewDesc("upgradescope_addon_evidence_age_seconds",
+		"Age in seconds of the pod evidence the add-ons were detected from on the last successful tick: 0 when that tick listed every pod, else the age of the full pod pass it reused (--pod-pass-every, --pod-pass-max-age).", nil, nil)
 	descKBInfo = prometheus.NewDesc("upgradescope_kb_info",
 		"Embedded knowledge base: dataset version and newest Kubernetes minor it covers.", []string{"kb_version", "max_known_k8s"}, nil)
 )
@@ -281,7 +286,7 @@ var verdicts = []engine.Verdict{engine.VerdictReady, engine.VerdictBlocked, engi
 
 // Describe implements prometheus.Collector for the state gauges.
 func (o *observer) Describe(ch chan<- *prometheus.Desc) {
-	for _, d := range []*prometheus.Desc{descLastSuccess, descInterval, descScore, descVerdict, descFindings, descCapability, descCapabilityPartial, descKBInfo} {
+	for _, d := range []*prometheus.Desc{descLastSuccess, descInterval, descScore, descVerdict, descFindings, descCapability, descCapabilityPartial, descEvidenceAge, descKBInfo} {
 		ch <- d
 	}
 }
@@ -310,6 +315,9 @@ func (o *observer) Collect(ch chan<- prometheus.Metric) {
 	for c, st := range good.caps {
 		ch <- prometheus.MustNewConstMetric(descCapability, prometheus.GaugeValue, boolValue(st.Available), string(c))
 		ch <- prometheus.MustNewConstMetric(descCapabilityPartial, prometheus.GaugeValue, boolValue(st.Partial), string(c))
+	}
+	if len(good.reports) > 0 {
+		ch <- prometheus.MustNewConstMetric(descEvidenceAge, prometheus.GaugeValue, float64(good.reports[0].AddOnEvidenceAgeSeconds))
 	}
 	seen := map[string]bool{}
 	for _, r := range good.reports {

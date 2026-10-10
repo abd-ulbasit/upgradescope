@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"math/rand/v2"
 	"net"
 	"net/http"
@@ -64,6 +65,18 @@ type Config struct {
 	CRName          string        // default crd.DefaultName
 	TeamLabel       string        // default "team"
 	ForceSyncEvery  time.Duration // default 1h: push even if hash unchanged
+	// PodPassEvery and PodPassMaxAge set how often the agent lists every pod
+	// outside kube-system: every PodPassEvery ticks (the pass is the first
+	// of them), and sooner when the last full pass is PodPassMaxAge old; in
+	// between, add-ons are detected from that pass's images and labels, so
+	// an add-on installed or upgraded since (other than through a Helm
+	// release or GitOps chart reference, whose change forces a full pass) is
+	// reported as it was for at most PodPassEvery-1 ticks, and a pass
+	// PodPassMaxAge old is not reused (#228).
+	// Defaults collect.DefaultPodPassEvery (3) and
+	// collect.DefaultPodPassMaxAge (1h); 1 lists every pod every tick.
+	PodPassEvery  int
+	PodPassMaxAge time.Duration
 	// ServerRootCAs verifies the server's certificate on pushes (from
 	// LoadServerCAs: the system roots plus a private CA); nil = the system
 	// roots.
@@ -153,6 +166,26 @@ func ValidateForceSyncEvery(d time.Duration) error {
 	return nil
 }
 
+// ValidatePodPassEvery rejects a --pod-pass-every below 1. Config treats a
+// zero PodPassEvery as unset (3), but a caller that was given one explicitly
+// must not have 0 silently mean the default; 1 lists every pod every tick.
+func ValidatePodPassEvery(n int) error {
+	if n < 1 {
+		return fmt.Errorf("pod-pass-every %d: must be at least 1 (the number of ticks per full read of the pods outside kube-system; 1 reads them every tick)", n)
+	}
+	return nil
+}
+
+// ValidatePodPassMaxAge rejects a --pod-pass-max-age that is not positive:
+// a full read of the pods could never be put off for a duration of zero or
+// less, and 0 must not silently mean the default (#228).
+func ValidatePodPassMaxAge(d time.Duration) error {
+	if d <= 0 {
+		return fmt.Errorf("pod-pass-max-age %s: must be positive (how old the last full read of the pods may be when a tick reuses it)", d)
+	}
+	return nil
+}
+
 // ValidatePprofAddr rejects a --pprof-addr that is not a loopback host and
 // port ("127.0.0.1:6060", "localhost:6060", "[::1]:6060"; "" is off). A
 // profile lets whoever can fetch it read the process's heap and goroutine
@@ -214,6 +247,59 @@ func forceSyncInEffect(forceSync, interval time.Duration) time.Duration {
 	return forceSync
 }
 
+// podPassMaxAgeFloor is the age a --pod-pass-max-age must exceed for
+// --pod-pass-every to be able to reuse a pass on every one of the
+// every-1 ticks after it: every-1 of the longest spacing the jitter draws
+// between two ticks, 11/10 of the interval. It is a floor and not enough:
+// the sleep starts after a tick ends, so each spacing also holds that
+// tick's run time, which the floor leaves out because the agent does not
+// know it ahead. 0 when every is 1 or less, which reuses nothing. A
+// product beyond the largest Duration (a --pod-pass-every of billions,
+// which nothing bounds above) saturates there instead of wrapping to a
+// small or negative age: no max age exceeds it, so the warning is raised.
+func podPassMaxAgeFloor(interval time.Duration, every int) time.Duration {
+	if every <= 1 {
+		return 0
+	}
+	spacing := jitterBy(interval, int64(interval/5))
+	n := time.Duration(every - 1)
+	if spacing > 0 && n > math.MaxInt64/spacing {
+		return math.MaxInt64
+	}
+	return n * spacing
+}
+
+// podPassEveryThatFits is the largest --pod-pass-every whose
+// podPassMaxAgeFloor is below maxAge, and at least 1 (which lists every
+// pod on every tick, the only setting left when maxAge is not above one
+// longest spacing). The warning offers it as the way to keep the max age
+// and still reuse the pass; the ticks' run time comes on top of the floor,
+// so a slow tick may call for one less.
+func podPassEveryThatFits(interval, maxAge time.Duration) int {
+	spacing := jitterBy(interval, int64(interval/5))
+	if spacing <= 0 || maxAge <= spacing {
+		return 1
+	}
+	// Every k satisfies (k-1) x spacing < maxAge, that is
+	// k-1 <= (maxAge-1)/spacing.
+	n := int64((maxAge - 1) / spacing)
+	if n >= math.MaxInt-1 {
+		return math.MaxInt
+	}
+	return 1 + int(n)
+}
+
+// podPassMaxAgeTooShort reports a --pod-pass-max-age that is not above
+// podPassMaxAgeFloor while --pod-pass-every would reuse a pass. At or below
+// the interval the last full pass is as old as the max age by the next
+// tick, so only a tick the jitter brings early reuses it; between the
+// interval and the floor some reuses work and the last ones depend on the
+// jitter draws (and on the ticks' own run time, on top of the floor).
+// Defaults must be applied (#228).
+func podPassMaxAgeTooShort(cfg Config) bool {
+	return cfg.PodPassEvery > 1 && cfg.PodPassMaxAge <= podPassMaxAgeFloor(cfg.Interval, cfg.PodPassEvery)
+}
+
 // applyDefaults fills zero values and rejects invalid combinations.
 func (c *Config) applyDefaults() error {
 	if c.Interval == 0 {
@@ -252,6 +338,18 @@ func (c *Config) applyDefaults() error {
 			return fmt.Errorf("server token file: %w", err)
 		}
 		c.ServerToken, c.serverTokenFn = f.Value(), f.Value
+	}
+	if c.PodPassEvery == 0 {
+		c.PodPassEvery = collect.DefaultPodPassEvery
+	}
+	if err := ValidatePodPassEvery(c.PodPassEvery); err != nil {
+		return err
+	}
+	if c.PodPassMaxAge == 0 {
+		c.PodPassMaxAge = collect.DefaultPodPassMaxAge
+	}
+	if err := ValidatePodPassMaxAge(c.PodPassMaxAge); err != nil {
+		return err
 	}
 	if c.ServerURL != "" {
 		if c.ServerToken == "" {
@@ -399,8 +497,11 @@ func newRunner(clients collect.Clients, dyn dynamic.Interface, k kb.KB, cfg Conf
 	helmCache := collect.NewHelmCache()
 	discoveryCache := collect.NewDiscoveryCache()
 	gitopsCache := collect.NewGitOpsCache()
+	// The pods outside kube-system are listed every PodPassEvery ticks, and
+	// their add-on evidence reused in between (#228).
+	podPass := collect.NewPodPassCache(cfg.PodPassEvery, cfg.PodPassMaxAge)
 	r.collectFn = func(ctx context.Context) inventory.Inventory {
-		inv := collect.Collect(ctx, clients, k, collect.Options{TeamLabel: cfg.TeamLabel, HelmCache: helmCache, DiscoveryCache: discoveryCache, GitOpsCache: gitopsCache,
+		inv := collect.Collect(ctx, clients, k, collect.Options{TeamLabel: cfg.TeamLabel, HelmCache: helmCache, DiscoveryCache: discoveryCache, GitOpsCache: gitopsCache, PodPass: podPass,
 			OnConform: func(notes []string) { r.conformed = notes }})
 		r.collectorConformed = true
 		return inv
@@ -753,16 +854,15 @@ func (r *runner) maybePush(ctx context.Context, inv inventory.Inventory) (pushed
 // hashing it would defeat content dedup entirely. It zeroes
 // APIServerStartTime too: it says which apiserver answered the /metrics
 // scrape, and with HA apiservers that changes whenever the connection
-// moves. The server must use the same canonicalization for its duplicate
-// detection.
+// moves; and AddOnEvidenceAgeSeconds, which grows with every tick that
+// reuses a pod pass (#228). That is inventory.Canonical, which the server
+// uses for its duplicate detection too.
 func snapshotHash(inv inventory.Inventory) (hash string, raw []byte, err error) {
 	raw, err = json.Marshal(inv)
 	if err != nil {
 		return "", nil, fmt.Errorf("marshal inventory: %w", err)
 	}
-	stable := inv
-	stable.CollectedAt, stable.APIServerStartTime = time.Time{}, time.Time{}
-	canon, err := json.Marshal(stable)
+	canon, err := json.Marshal(inv.Canonical())
 	if err != nil {
 		return "", nil, fmt.Errorf("marshal canonical inventory: %w", err)
 	}
@@ -789,6 +889,12 @@ func Run(ctx context.Context, clients collect.Clients, dyn dynamic.Interface, ap
 		cfg.ForceSyncEvery = forceSyncInEffect(asked, cfg.Interval)
 		log.Warn("force-sync-every is at or below the interval: an unchanged inventory is pushed every tick, as the agent pushes at most once a tick",
 			"forceSyncEvery", asked.String(), "interval", cfg.Interval.String(), "inEffect", cfg.ForceSyncEvery.String())
+	}
+	if podPassMaxAgeTooShort(cfg) {
+		floor := podPassMaxAgeFloor(cfg.Interval, cfg.PodPassEvery)
+		log.Warn("pod-pass-max-age is too short for pod-pass-every: the ticks after a full pass can be as far as 1.1 times the interval apart, plus the time a tick takes, so a pass is not reliably reused for pod-pass-every minus one of them (not at all at or below the interval, but by a tick the jitter brings early) and the pods outside kube-system are listed on ticks that pod-pass-every would reuse; raise pod-pass-max-age above mustExceed plus the run time of the ticks in between (a few seconds each at 2,001 nodes), or lower pod-pass-every to podPassEveryThatFits (less if ticks are slow; 1 lists every pod on every tick, which also ends this warning)",
+			"podPassMaxAge", cfg.PodPassMaxAge.String(), "interval", cfg.Interval.String(), "podPassEvery", cfg.PodPassEvery,
+			"mustExceed", floor.String(), "podPassEveryThatFits", podPassEveryThatFits(cfg.Interval, cfg.PodPassMaxAge))
 	}
 	obs := newObserver(log, k, cfg.Interval)
 	healthAddr := ""
@@ -838,6 +944,7 @@ func Run(ctx context.Context, clients collect.Clients, dyn dynamic.Interface, ap
 	log.Info(msgStarting, "version", AgentVersion, "kbVersion", k.Version, "maxKnownK8s", k.MaxKnownK8s.String(),
 		"interval", cfg.Interval.String(), "tickTimeout", tickTimeout(cfg.Interval).String(),
 		"tickReserve", tickReserve(tickTimeout(cfg.Interval)).String(),
+		"podPassEvery", cfg.PodPassEvery, "podPassMaxAge", cfg.PodPassMaxAge.String(),
 		"crName", cfg.CRName, "server", server, "healthAddr", healthAddr, "pprofAddr", pprofAddr)
 
 	r := newRunner(clients, dyn, k, cfg)

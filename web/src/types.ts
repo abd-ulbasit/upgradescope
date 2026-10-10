@@ -104,6 +104,9 @@ export interface Report {
   // (sorted, at most 200), and how many more the cap dropped
   unrecognizedImages?: string[];
   unrecognizedImagesOmitted?: number;
+  // newer servers: seconds since the full pod pass the agent reused for
+  // add-on detection (absent when every pod was read)
+  addOnEvidenceAgeSeconds?: number;
 }
 
 export interface ScorePoint {

@@ -41,3 +41,26 @@ func TestEvaluateReportsUnrecognizedImages(t *testing.T) {
 		t.Errorf("capped to %d, omitted %d; want %d and 8", len(rep.UnrecognizedImages), rep.UnrecognizedImagesOmitted, inventory.MaxUnrecognizedImages)
 	}
 }
+
+// The age of the pod evidence an agent reused (#228) reaches the report as
+// it is, and changes neither score nor verdict; a negative one is no age.
+func TestEvaluateCarriesAddOnEvidenceAge(t *testing.T) {
+	target := inventory.Version{Major: 1, Minor: 35}
+	fresh := Evaluate(clusterInv(), testRegistryKB(), target, testNow)
+	if fresh.AddOnEvidenceAgeSeconds != 0 {
+		t.Errorf("age = %d, want none for an inventory that carries none", fresh.AddOnEvidenceAgeSeconds)
+	}
+	inv := clusterInv()
+	inv.AddOnEvidenceAgeSeconds = 1200
+	rep := Evaluate(inv, testRegistryKB(), target, testNow)
+	if rep.AddOnEvidenceAgeSeconds != 1200 {
+		t.Errorf("age = %d, want 1200", rep.AddOnEvidenceAgeSeconds)
+	}
+	if rep.Score != fresh.Score || rep.Verdict != fresh.Verdict || len(rep.Findings) != len(fresh.Findings) {
+		t.Errorf("the age changed the result: %+v vs %+v", rep, fresh)
+	}
+	inv.AddOnEvidenceAgeSeconds = -5
+	if rep = Evaluate(inv, testRegistryKB(), target, testNow); rep.AddOnEvidenceAgeSeconds != 0 {
+		t.Errorf("age = %d, want a negative one dropped", rep.AddOnEvidenceAgeSeconds)
+	}
+}

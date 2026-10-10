@@ -29,11 +29,60 @@ quote them.
 
 ## The short answers
 
-- **A steady agent tick on a cluster of 2,001 nodes, about 14,000 pods and
-  1,000 Helm releases makes 31 API requests** at the code of
+- **With the pod pass reused (the default since
+  [#228](https://github.com/abd-ulbasit/upgradescope/issues/228)'s option
+  b), a steady agent tick at 2,001 nodes, about 14,000 pods and 1,000 Helm
+  releases makes 20 API requests on 2 ticks of 3, and 31 on the third.**
+  `--pod-pass-every` (3 by default) and `--pod-pass-max-age` (1h) make the
+  agent list the pods outside `kube-system` once per 3 ticks, or sooner when
+  that pass is an hour old, and detect add-ons from its images and labels in
+  between. Measured at `0b6fec28` (this branch on main `f121698a`),
+  10 October 2026, 02:56 to 03:12 UTC, on lab A: the 5 ticks that reused the
+  pass made 20 requests, read 27.8 MiB (1.5 MiB on the wire) in 2.4 s and 1.8
+  CPU-seconds (medians); the 2 that listed every pod made 31, read 50.4 MiB
+  (3.3 on the wire) in 4.4 s and 3.4 CPU-seconds. The requests are those
+  of the earlier run at `9810fb6` (below); its time and CPU are not
+  comparable, because this run was made with the ThinkPad's load average
+  at 8.5 to 11.9 (4 threads), and that run took 3.7 s and 3.0 CPU-seconds.
+  The wire bytes (3.3 MiB against 3.1) differ by fill, not by load: run 2
+  of the same day, on the same fill with `--pod-pass-every=1`, read 3.3 MiB
+  too (3.1 on one tick). The numbers were measured before `8ca7e786` (a
+  change in the Helm releases or GitOps charts that name an add-on forces a
+  pass) and before `81761afd` (a tick that lists every pod drops the held
+  pass before its first list) and still hold at `daf513a4`, the head of the
+  branch before this follow-up (checked, not re-measured). Of the commits in between, only
+  those two change what a tick does; the others are documentation, the
+  agent's start-up warning and the dashboard. For `8ca7e786`: the fill's
+  charts (`chart-rel-NNNN`) name no registry add-on, so the signature
+  that trigger compares is empty on every tick and the requests are
+  unchanged (checked from the seed, `hack/bench/seed/helm.go`, and the
+  registry). For `81761afd`, which moves the old pass's release from after
+  the first pod list to before it: at this fill the held pass is about
+  300 distinct (namespace, image) pairs (pod i is in namespace i%100 and
+  runs image i%12, so the pairs repeat with period lcm(100, 12) = 300), plus 4
+  pairs of add-on images and 4 labelled pods of the add-on pods (every 500th
+  pod, all in `bench-ns-000`), so a few tens of KiB. Holding it during the
+  list or not cannot move the peak heap (30.5 and 36.4 MiB) or the peak RSS
+  (63.6 MiB) by anything the 5 ms sampler could see, nor a request. The mean over a
+  cycle of 3 is 23.7 requests, 35.3 MiB and 2.3 CPU-seconds (computed from
+  those medians, not measured). The price is staleness: an add-on installed
+  or upgraded right after a full pass, other than through Helm or a GitOps
+  chart reference (a change in those makes the next tick a full pass), is
+  reported as it was for at most 2 ticks (about 20 minutes at the default
+  interval), and a pass that is `--pod-pass-max-age` old is not reused; the
+  report, the ClusterReadiness status and
+  `upgradescope_addon_evidence_age_seconds` say how old the evidence is.
+  [The pod pass every Nth tick](#the-pod-pass-every-nth-tick-228) has the
+  tables and the rules. The paragraphs below are the tick that lists every
+  pod (`--pod-pass-every=1`, and one in 3 by default).
+- **A steady agent tick that lists every pod, on a cluster of 2,001 nodes,
+  about 14,000 pods and 1,000 Helm releases, makes 31 API requests** at the
+  code of
   [#228](https://github.com/abd-ulbasit/upgradescope/issues/228) (`9810fb6`,
-  4 October 2026, 06:55 to 07:03 UTC), whose target of under 25 this does
-  not meet, and reads 50.4 MiB of responses (3.1 MiB on the wire,
+  4 October 2026, 06:55 to 07:03 UTC), which misses #228's target of under
+  25: the ticks that reuse the pass (20, measured) and the mean of a cycle
+  of 3 (23.7, computed) are under it, the tick that lists every pod is
+  not. It reads 50.4 MiB of responses (3.1 MiB on the wire,
   compressed) in 3.7 s and 3.0 CPU-seconds. On main `735751d`, before
   #228, it made 53 requests and read 50 MiB (3.4 MiB on the wire) in 4.1 s
   and 3.0 CPU-seconds, with a peak live heap of 28 MiB and a peak RSS of
@@ -127,6 +176,8 @@ quote them.
 | upgradescope, #247 | `da90a86e` as a pod at 200m (the image packed as above, version `collect-da90a86e`), 9 October 2026, 17:46 to 18:12 UTC, on lab `us-lab-137b` reset and filled by `BENCH_STEPS=1 BENCH_TICKS=2` at `86500c36` (docs only after `da90a86e`) just before; the ThinkPad's kernel was 7.0.0-38 then ([the run](#the-tick-after-a-partial-helm-step-247)) |
 | Also running, #247 | `bookstore` and lab `us-lab-137`, both idle (11.7 to 24.3% of a core each; `us-lab-137` at 581 to 664 MiB, no fill); host load average 4.8 to 9.5 |
 | upgradescope, #247 (the cause) | `9687cffc` (this branch: PR #271's tip `0eb41cab`, which is `da90a86e` and 18 commits since, changing the GitOps reads, the tick reserve, the wording of the step's reasons and the push but not the Helm fetch, cache or decoding, plus the opt-in `--pprof-addr`), as a pod at 200m, the image packed as above (version `prof247-before`, `linux/amd64`, `CGO_ENABLED=0 -trimpath -s -w`), 9 October 2026, on lab `us-lab-137b` reset and filled by `BENCH_STEPS=1 BENCH_TICKS=2` at `9687cffc` (21:40 to 21:48 UTC). Two pod runs, each a fresh pod and so an empty cache: with the profiler on and CPU profiles taken around each tick, 22:10 to 22:36 UTC, and with it off, 22:40 to 23:05 UTC. A first attempt at 21:56 UTC, eight minutes after the fill, was dropped: the control plane was still busy (kube-apiserver at 318% of a core and 1.2 GiB in `top` at 22:06, the `kindnet` and `kube-proxy` DaemonSets 1,971 and 1,980 ready of 2,001), the kubelet killed the agent for a failed liveness probe about 5 minutes after it started, and the tick after the restart could not write its status ([the runs](#the-tick-after-a-partial-helm-step-247)) |
+| upgradescope, #228 (pod pass) | `0b6fec28` (this branch on main `f121698a`, which has #251, #262, #271, #279 and #286), the benchmark's `TestBenchAgentTick` cross-compiled for `linux/amd64` and run on the ThinkPad beside the apiserver (`BENCH_RUN_ON`, outside a CPU quota), 10 October 2026, 02:56 to 03:12 UTC, under the measurement lock, on lab A (`us-lab-137`, reset first, filled by `BENCH_STEPS=1`, settled 150 s, Kubernetes 1.37.0), no Argo CD or Flux objects. Run 1: `BENCH_TICKS=8`, the default `--pod-pass-every=3`; run 2, on the same fill: `BENCH_TICKS=5 BENCH_POD_PASS_EVERY=1`. The lab was reset afterwards ([the run](#the-pod-pass-every-nth-tick-228)) |
+| Also running, #228 (pod pass) | lab B (`us-lab-137b`) up and idle, with no fill: its control plane at 11.6 to 21.9% of a core and 569 to 749 MiB in the five `docker stats` taken (before the reset, before each run's ticks, after run 1 and after run 2), and `bookstore` at 10.8 to 19.9% of a core and 567 to 617 MiB; lab A's own control plane at 185 to 315% of a core and 3.2 GiB (KWOK's heartbeats) when sampled at the fill. The ThinkPad's 1-minute load average was 0.45 before the reset, 8.5 to 11.9 around run 1 and 9.4 to 22.5 around run 2 (4 threads) |
 | Also running, #247 (the cause) | `bookstore` and lab `us-lab-137`, idle (10 to 17% of a core each; `us-lab-137` at 575 to 680 MiB, no fill; `docker stats` at the start and end of each run and around the decode runs); the lab's own control plane at 125 to 325% of a core from KWOK's heartbeats; the host's 1-minute load average 3.1 to 11.2 in the spot samples between 21:48 and 23:05 UTC (1.25 before the fill, at 21:40). The two decode runs below (the collector's `TestHelmDecodeCostByRelease`, outside a quota, the lab's agent uninstalled) ran on the ThinkPad at 23:08 UTC at a load of 4.6 and 7.2; an earlier one at 22:36 UTC (pod idle, load 7.3 to 10.7, before the test reported 43, 51 and 83) gave 12.7 s for all 1,000 and 5.40 s for the last 50 |
 
 ### What is simulated
@@ -388,12 +439,11 @@ The other requests are unchanged: `/metrics`, `/version`, the `kube-system`
 namespace, and the metadata lists of the Helm Secrets (3), ConfigMaps,
 CRDs, IngressClasses and namespaces. The bytes and the CPU are what they
 were (50.4 MiB, 3.0 CPU-seconds): every pod is still decoded every tick.
-**31 requests miss #228's target of under 25.** What would reach it is
-not safe or not done: pages of up to 2,000 (24 requests) have the worst
-case above; reading the pods less often (#228's option b) would cut the
-pod requests and the bytes and CPU with them, but needs a staleness bound
-and a setting of its own, and is not part of this work. The split after,
-at `9810fb6`:
+**31 requests miss #228's target of under 25.** Pages of up to 2,000 (24
+requests) have the worst case above, so they were not shipped; reading the
+pods less often (#228's option b) cuts the pod requests and the bytes and
+CPU with them, and is [the next section](#the-pod-pass-every-nth-tick-228).
+The split after, at `9810fb6`, of a tick that lists every pod:
 
 | Verb | Resource | Requests | Response MiB | Time s (summed) |
 |---|---|---|---|---|
@@ -404,6 +454,174 @@ at `9810fb6`:
 | GET | `/version`, `clusterreadinesses`, `kube-system` namespace | 1 each | 0, 0.01, 0 | 0.01 or less each |
 | LIST | configmaps (metadata), CRDs, IngressClasses, namespaces | 1 each | 0, 0.08, 0, 0.04 | 0.02 or less each |
 | UPDATE | `clusterreadinesses/status` | 1 | 0.01 | 0.04 |
+
+### The pod pass every Nth tick (#228)
+
+The pods are 16 of the 31 requests of a tick that lists every pod and 79%
+of its bytes (the split above), decoded whole to read their images and
+labels, and a watch or informer is excluded by design (AG-01). So the
+agent lists the pods **outside `kube-system`** once per `--pod-pass-every`
+ticks (3 by default, the full pass being the first of them), and in between
+detects add-ons from the images and labels that pass read
+(`collect.PodPassCache`, PF-18). It lists them again sooner when the last
+full pass is `--pod-pass-max-age` old (1h by default; the chart's
+`agent.podPassEvery` and `agent.podPassMaxAge`). `--pod-pass-every=1` lists
+them every tick, as before.
+
+What is reused is the evidence (the distinct namespace and image pairs and
+labelled pods, never a verdict): the registry is applied to it on every
+tick, so a knowledge-base update takes effect at once. Read on every tick
+whatever the setting: the `kube-system` pods (the `versions` capability
+lists them for the control-plane components and kube-proxy skew, and the
+add-ons take their evidence from that list), Helm releases, Argo CD and
+Flux charts, and IngressClasses. A full pass is forced when
+
+- the cache holds no complete pass: the agent has just started, or the last
+  pass failed or read only some of its pages (a failed or partial pass is
+  never kept, and drops the evidence of an earlier one);
+- the last full pass is `--pod-pass-max-age` old;
+- `versions` did not list the `kube-system` pods on this tick, because the
+  held pass does not hold them; and
+- the Helm releases or the Argo CD and Flux chart references that name a
+  registry add-on are not those the pass was taken with: a release or
+  chart that appeared, went away or changed its chart, chart version,
+  appVersion, revision or status. They are read on every tick anyway, so
+  this early trigger costs no request. Releases of no add-on (your own
+  applications) do not count, however often they are upgraded
+  (`TestPodPassHelmUpgradeForcesAFullPass`, `TestPodPassIgnoresReleasesOfNoAddOn`,
+  `TestPodPassGitOpsChartChangeForcesAFullPass`). Without it, a release
+  upgraded across a release line would be joined with the old pods and
+  reported as two installs for up to 2 ticks.
+
+**Worst-case staleness.** An add-on installed or upgraded right after a full
+pass began is reported as it was for the next `--pod-pass-every` minus 1
+ticks (2 at the default: about 20 minutes at the default 10-minute
+interval, with its jitter of up to 10%), and a tick does not reuse a pass
+that is `--pod-pass-max-age` old or more, which bites first on a long
+interval (at 30 minutes the default hour allows the first reuse, which is
+a pass of about 30 minutes, and loses the second on the ticks the jitter
+spaces widely; at an hour only the ticks the jitter brings early reuse the
+pass, about half of the first ticks after one, and none does from an
+interval of about 67 minutes, the hour over 0.9, a little less where a
+tick takes time). The age is measured when the tick reuses the pass, and
+that tick's report and ClusterReadiness status stay up until the next
+one, so a viewer can see evidence up to about the maximum age plus one
+interval old. An add-on removed or one whose last pod went away is
+likewise reported until the next full pass.
+
+**The maximum age needed.** Ticks are spaced by the interval with a jitter
+of 10% either way (0.9 to 1.1 times it), and the sleep starts after a tick
+ends, so each spacing also holds that tick's run time. The last reuse after
+a pass is `--pod-pass-every` minus one spacings old, up to 1.1 times the
+interval plus the run time of each. So `--pod-pass-max-age` must exceed
+1.1 times `--interval` times (`--pod-pass-every` minus one), the floor, for
+every one of those reuses to work, and the floor is needed but not
+enough: the ticks' run time comes on top. At the default interval of 10
+minutes and `--pod-pass-every 3` the floor is 22 minutes, and 21 fails
+on the draws where the two spacings and their run time reach 21 minutes;
+25 works unless the ticks take more than a minute and a half each (two
+spacings of up to 11 minutes and two run times must stay under 25; a
+reusing tick took 2.4 s here, a full one 4.4 s, the first 35 s). The default hour clears it. A
+maximum age at or below `--interval` defeats the setting most: the
+pass is about one interval old at the next tick, so every tick lists every
+pod but one the jitter brings early. Between the interval and the floor the
+first reuses work and the last ones depend on the draw. The agent logs a
+warning at start for any maximum age at or below the floor, with the floor
+in its `mustExceed` field, and the largest `--pod-pass-every` that fits the
+maximum age you set in `podPassEveryThatFits` (`TestRunWarnsWhenPodPassMaxAgeIsTooShortForPodPassEvery`):
+at a 30-minute interval the default hour fits 2, whose floor is 33 minutes,
+not the default 3, whose floor is 66. A `--pod-pass-every` of billions
+does not overflow the floor: it saturates at the largest duration, and the
+warning is raised (`TestPodPassMaxAgeFloorSaturates`).
+
+Which add-ons can be behind. Those in `kube-system` cannot: their pods are
+read on every tick. A change made through Helm (a new release, or a new
+revision of one, which an upgrade, a rollback and a values change all make)
+or to an Argo CD or Flux chart reference that names the add-on (a new
+`targetRevision`, chart or target namespace) forces a full pass on the next
+tick (the early trigger above), so those are reported as they are. What
+can be behind, for the 2 ticks: an add-on installed without Helm or a chart
+reference; an image changed in place (`kubectl set image`, a patched
+manifest); and an upgrade made by a GitOps tool through a version
+constraint (`4.*`), which leaves the resource untouched.
+The age of what a tick reused is `addOnEvidenceAgeSeconds` in the
+inventory and the report (absent when every pod was read), the same on the
+ClusterReadiness status, in the tick's log line, on the dashboard's Cluster view
+(as "Pod evidence N min old") and in
+`upgradescope_addon_evidence_age_seconds`. It is not part of the snapshot
+hash, on the agent or on the server, so a reusing tick pushes nothing new
+(`TestSnapshotHashIgnoresAddOnEvidenceAge`,
+`TestAddOnEvidenceAgeIsNotANewSnapshot`), and no gap is raised for a reused
+pass: it was complete.
+
+**Why 3.** At the 2,001-node fill the reused ticks cost 20 requests and the
+full ones 31, so a cycle of 3 averages 23.7 requests (computed), under the
+25 of the issue, and 2 of every 3 ticks are under it by 5; 2 would average
+25.5 (computed) and miss it, and each tick more is another tick of
+staleness for a saving that is already there. The pod pages the
+reused tick still makes are the 5 requests (17.4 MiB) of the `kube-system`
+list: 4,000 pods at this fill (a CNI and a kube-proxy pod per node).
+
+Run 1, `BENCH_TICKS=8` at the default cadence, was ticks 1, 4 and 7 full
+passes (the first also filling the Helm cache) and 2, 3, 5, 6 and 8 reusing
+the last. Medians of the steady ticks of each kind (the mean of the middle
+two when the count is even; the heap is the maximum), `0b6fec28`, 10 October
+2026, 02:56 to 03:12 UTC, the measurement lock held, lab B idle:
+
+| Tick | Ticks | Requests | LIST pods | Response MiB | Wire MiB | Wall s | CPU s | Peak heap MiB | Peak RSS MiB |
+|---|---|---|---|---|---|---|---|---|---|
+| lists every pod | 2 (4, 7) | 31 | 16 | 50.4 | 3.3 | 4.4 | 3.4 | 30.5 | 63.6 |
+| reuses the pass | 5 | 20 | 5 | 27.8 | 1.5 | 2.4 | 1.8 | 36.4 | 63.6 |
+| the first tick | 1 | 1,037 | 16 | 72.7 | 24.2 | 35.1 | 23.3 | 36.3 | 56.7 |
+
+The peak RSS is the process's peak so far, over every tick of the run (63.6
+MiB at the end, against 56.7 at the first tick). The age of the evidence
+was 3 to 7 seconds, because the benchmark runs its ticks back to back; in an
+agent it is a multiple of the interval. The peak heap of a reusing tick is
+the higher by about 6 MiB (32.6 to 36.4 MiB over its 5 ticks, 29.7 and 30.5
+over the 2 full ones): the cache holds the evidence of the pass, but the
+sampler reads every 5 ms with the garbage not yet collected, and these runs
+did not separate the two. These figures come from `0b6fec28`, where a
+full-pass tick still held the previous pass while it read the new one;
+`81761afd` drops it first. The held pass is a few tens of KiB at this
+fill (the estimate under [the short answers](#the-short-answers), checked
+from the seed, not re-measured), so the peaks above are those of `daf513a4`
+to within what the sampler can see. The requests of the two kinds of tick, by verb and
+resource:
+
+| Verb | Resource | Lists every pod: requests, MiB | Reuses the pass: requests, MiB |
+|---|---|---|---|
+| LIST | pods | 16, 40.09 | 5, 17.42 |
+| LIST | nodes | 3, 5.37 | 3, 5.37 |
+| LIST | secrets (metadata) | 3, 0.42 | 3, 0.42 |
+| GET | `/metrics` | 1, 4.41 | 1, 4.40 |
+| others (`/version`, `clusterreadinesses` GET and UPDATE, namespaces GET and LIST, ConfigMaps (metadata), CRDs, IngressClasses) | 1 each, 8 in all | 0.14 | 0.14 |
+
+Run 2, on the same fill with `--pod-pass-every=1`: 31 requests on all 5
+ticks, 50.5 MiB (46.0 on tick 3), 3.3 MiB on the wire (3.1 on tick 3), and
+3.3 to 3.6 CPU-seconds on three of them (ticks 2, 3 and 5; 4.0 on tick 4). Its wall times are not usable:
+the host's load average was 9 to 22, and tick 3 took 52 s because its
+`/metrics` scrape ran into the 30 s request timeout (the benchmark flags
+that tick: its `deprecated-calls` capability was unavailable, and run 2 exits
+non-zero), tick 4 31 s. Run 2 confirms that the 31 requests of a pass tick are
+the same with the setting off; the numbers of the table above are run 1's.
+
+**The cheap early trigger was not built.** A metadata-only list of
+Deployments, DaemonSets and StatefulSets with their resourceVersions
+(or generations), compared with the last pass, could force a pass when a
+workload changed. At this fill it is not cheap, computed from the object
+counts and not measured, at the collector's metadata page size of 500
+(`listPageSize`, PF-07: ceil(N / 500) requests): 4,000 Deployments are 8
+pages, and the DaemonSets and the StatefulSets (fewer than 500 of each) 1
+each, 10 requests more on a tick that makes 20 or 31 (the list is made on
+every tick), which puts a reusing tick at 30, a tick that lists every pod
+at 41 and the mean of a cycle of 3 at 33.7, over the issue's 25 by 8.7; resourceVersions of a Deployment change with every
+status update, so a busy cluster would force a pass almost every tick; and
+it does not see a pod that no such workload owns (a Job, a CronJob, a bare
+pod or an operator's pod), so the staleness bound would still be the
+count. Generations would see spec changes only, at the same request cost.
+The staleness bound above is the same with it or without it, which is why
+it is the only one documented.
 
 ### Re-measured on main, with and without Argo CD and Flux
 
@@ -886,7 +1104,7 @@ at all:
 | The same 1,000 GETs on the first tick after a start, and on every one-shot `scan` | Sequential, 36.1 to 36.7 s and 23.1 to 23.5 CPU-seconds here; at a 60 ms round trip the first tick reached the Helm step's deadline with 231 releases unread; as a pod at the old 200m default it reached it with 132 unread (measured, [above](#cpu-and-the-chart-limit)) | **Fixed** for the round trip ([#226](https://github.com/abd-ulbasit/upgradescope/issues/226)): 8 GETs in flight, decoded one at a time in order; 42.4 s here at `9810fb6`, on a host whose load rose to 15 (27.1 s at the draft `59d8561`, at a load of 7 to 12), and at 60 ms 30.4 s at `06cdf7a` and 29.6 s at `5da764e`, with every release read. Decoding (22 CPU-seconds) and the client's rate limit (14 s for 1,000) are the bounds now, so under a CPU quota #226 was not expected to help at 200m and saves at most the 13.4 s the GETs waited at 1 CPU (computed, [above](#cpu-and-the-chart-limit)); measured at 200m at `da90a86e` (with #226 and #228, 9 October 2026), the first tick still gave up at the Helm step's deadline, with 43 of 1,001 unread where `735751d` left 132 ([above](#the-tick-after-a-partial-helm-step-247)); the runs differ in more than #226 and in host load, so the share that is #226's is not known; the chart's default limit is now 1 CPU, at which main's first tick read all 1,000. `TestCollectHelmConcurrentMatchesSequential` |
 | `kube-system` pods are listed in full twice a tick: by the control-plane version check, then again by the all-pods list | 4,009 pods here; the second listing is not a separate 9 requests but 9 extra ones (those pods already fall inside the 29 pages of the all-pods list) and about 4,000 pods decoded twice; grows with nodes (every node adds a `kube-proxy` and a CNI pod) | **Fixed** ([#227](https://github.com/abd-ulbasit/upgradescope/issues/227), #232): the add-ons take them from the version check's list; 30 pod list requests a tick instead of 38 in the runs on `735751d` |
 | Argo CD Applications, Flux HelmReleases and the OCIRepositories their chartRefs name are listed whole (page size 50) every tick (#218; the OCIRepositories since #248, a GET each before) | **Measured** (`BENCH_GITOPS=1`, at 1,000 Applications and 1,000 HelmReleases with 500 chartRefs): at `da90a86e` 50 of the 81 requests of a steady tick (20 + 20 + 10 lists), 9.0 MiB of 59.8, every chart resolved ([above](#the-ocirepositories-listed-248)); on main `735751d`, before #248, 540 of 596, 500 of them sequential OCIRepository GETs, 12 MiB of 63, 8.7 more seconds and 3.2 more CPU-seconds, under host noise ([above](#re-measured-on-main-with-and-without-argo-cd-and-flux)) | Fixed by [#248](https://github.com/abd-ulbasit/upgradescope/issues/248): a list instead of a GET per OCIRepository, a GET by name only where the list is forbidden; the rest grows by one request per 50 objects |
-| The all-pods list is the steady tick's largest cost | 38 of 61 requests (30 of 53 after #232), 79% of the bytes; whole pod objects are needed for their images, and the agent keeps no watch | **Requests fixed** ([#228](https://github.com/abd-ulbasit/upgradescope/issues/228)): pod and node pages sized by their largest object (at most 1,000), discovery kept between ticks, the agent's object read once: 53 to 31 requests, short of the target of under 25. The bytes (50 MiB) and CPU (3 s) are unchanged, since every pod is still decoded every tick; reading pods less often (#228's option b) would cut those and the pod requests, and is not done |
+| The all-pods list is the steady tick's largest cost | 38 of 61 requests (30 of 53 after #232), 79% of the bytes; whole pod objects are needed for their images, and the agent keeps no watch | **Requests fixed** ([#228](https://github.com/abd-ulbasit/upgradescope/issues/228)): pod and node pages sized by their largest object (at most 1,000), discovery kept between ticks, the agent's object read once: 53 to 31 requests, short of the target of under 25. The bytes (50 MiB) and CPU (3 s) are unchanged on a tick that lists every pod; reading the pods less often (#228's option b, the default since, PF-18) makes the ticks that reuse the pass cost 20 requests, 27.8 MiB and 1.8 CPU-seconds (measured at `0b6fec28`, 10 October 2026), and a cycle of 3 averages 23.7 requests (computed), while the tick that lists every pod still makes 31 |
 
 ## The server
 
@@ -972,6 +1190,12 @@ BENCH_RUN_ON=lab-host make bench-agent KUBECONFIG=/path/to/lab-kubeconfig
 # BENCH_GITOPS_APPS and BENCH_GITOPS_HELMRELEASES change that).
 BENCH_GITOPS=1 BENCH_RUN_ON=lab-host make bench-agent KUBECONFIG=/path/to/lab-kubeconfig
 
+# The pod pass reuse (#228): the default cadence needs ticks of both kinds
+# after the first, so run enough (BENCH_TICKS=8 gives 2 that list every pod
+# and 5 that reuse the pass); BENCH_POD_PASS_EVERY=1 lists every pod every
+# tick, as before. The report tells the two kinds of tick apart.
+BENCH_STEPS=1 BENCH_TICKS=8 BENCH_RUN_ON=lab-host make bench-agent KUBECONFIG=/path/to/lab-kubeconfig
+
 # The agent as a pod under the chart's CPU limit: fill the lab (BENCH_STEPS=1),
 # build the image, kind load it, helm install the chart with
 # agent.resources.limits.cpu set, then sample the pod's cgroup while it ticks
@@ -993,7 +1217,7 @@ UPGRADESCOPE_BENCH_HELM_RTT=60ms go test -run TestCollectHelmColdFetchAtRoundTri
 ```
 
 `hack/bench/agent.sh` documents its knobs (`BENCH_STEPS`, `BENCH_TICKS`,
-`BENCH_HELM_REVISIONS`, `BENCH_RESET_CMD`, `BENCH_NO_HELM_CACHE`, `BENCH_GITOPS`); both scripts print their tables
+`BENCH_HELM_REVISIONS`, `BENCH_RESET_CMD`, `BENCH_NO_HELM_CACHE`, `BENCH_POD_PASS_EVERY`, `BENCH_GITOPS`); both scripts print their tables
 as above and keep the raw per-tick and per-round JSON lines in `bin/bench/`.
 The agent's report has the per-tick table, the GitOps table when the run
 had the GitOps fill, and the requests, response bytes and time by verb and
@@ -1023,6 +1247,16 @@ pinned in the script.
   Argo CD or Flux objects: what it does under the chart's limits, and its
   larger pod pages' memory in a pod, are computed from those runs, not
   measured.
+- The pod pass reuse (#228) was run in the benchmark process only, not as a
+  pod, and without Argo CD or Flux objects, on one fill whose pods never
+  changed: its staleness rules are shown by tests against a fake apiserver
+  (`TestPodPassStalenessIsBoundedByTheCount` and the others of PF-18), not
+  by a lab in which an add-on was upgraded. The age of the evidence in the
+  runs, 3 to 7 seconds, is the benchmark's back-to-back ticks, not an
+  agent's. The lab's pods run near-identical images, so the cache was small;
+  a cluster with many distinct images keeps more (at most what one full
+  pass holds while it matches, never the pods), which was not measured. The
+  wall times are a loaded host's.
 - The server benchmark generates inventories: real ones differ in the size
   of their Helm releases and the findings they carry. The per-snapshot
   storage scales with the inventory.

@@ -58,6 +58,11 @@ type Options struct {
 	// when it left out anything. The capability reasons carry the same
 	// for the report; this is for a log. The agent logs it every tick.
 	OnConform func(notes []string)
+	// PodPass, when set, reads the pods outside kube-system only every few
+	// collections and detects add-ons in between from the last full pass's
+	// images and labels (#228), under the rules PodPassCache states. The
+	// agent keeps one; a one-shot scan leaves it nil and reads every pod.
+	PodPass *PodPassCache
 }
 
 // listPageSize bounds every cluster-wide list call: large clusters must
@@ -267,7 +272,7 @@ func steps(c Clients, k kb.KB, opts Options) []step {
 			if c.Kube == nil {
 				return errors.New("kubernetes client not configured")
 			}
-			return collectAddOnsFrom(ctx, c.Kube, k.AddOns, inv, &kubeSystem)
+			return collectAddOnsFrom(ctx, c.Kube, k.AddOns, inv, &kubeSystem, opts.PodPass)
 		}},
 		{cap: inventory.CapAPIUsage, run: func(ctx context.Context, inv *inventory.Inventory) error {
 			if c.Discovery == nil || c.Metadata == nil {

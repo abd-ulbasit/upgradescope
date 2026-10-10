@@ -69,6 +69,10 @@ type Status struct {
 	Targets               []TargetStatus `json:"targets,omitempty"`
 	NotAssessed           []string       `json:"notAssessed,omitempty"` // "helm: secrets list forbidden"
 	AgentVersion          string         `json:"agentVersion,omitempty"`
+	// AddOnEvidenceAgeSeconds is engine.Report.AddOnEvidenceAgeSeconds: how
+	// old the pod evidence the add-ons were detected from was when the agent
+	// reused its last full pod pass (#228); absent when every pod was read.
+	AddOnEvidenceAgeSeconds int64 `json:"addOnEvidenceAgeSeconds,omitempty"`
 	// SupportPhase, ExtendedSupportFrom, ExtendedSupportEnds,
 	// AnnualCostDelta, Currency, PriceAsOf, AnnualCostNote and
 	// ExtendedSupportCondition are the engine's Report.Support for a cluster on EKS, GKE
@@ -294,6 +298,7 @@ func StatusFromReports(reports []engine.Report, observedServerVersion, agentVers
 	}
 	if len(reports) > 0 {
 		st.KBVersion = reports[0].KBVersion
+		st.AddOnEvidenceAgeSeconds = reports[0].AddOnEvidenceAgeSeconds
 		if s := reports[0].Support; s != nil {
 			st.SupportPhase, st.ExtendedSupportFrom, st.ExtendedSupportEnds = string(s.Phase), s.ExtendedSupportFrom, s.ExtendedSupportEnds
 			st.AnnualCostDelta, st.Currency, st.PriceAsOf = s.AnnualCostDelta, s.Currency, s.PriceAsOf

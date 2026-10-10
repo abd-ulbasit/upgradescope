@@ -164,6 +164,14 @@ export function Cluster({
                         </>
                       )}
                     </p>
+                    {report.addOnEvidenceAgeSeconds != null &&
+                      report.addOnEvidenceAgeSeconds > 0 && (
+                        <p className="muted" data-testid="pod-evidence-age">
+                          Pod evidence {Math.max(1, Math.round(report.addOnEvidenceAgeSeconds / 60))}{" "}
+                          min old: the agent lists every pod only every few ticks, so an add-on
+                          installed or upgraded since may still show its old version.
+                        </p>
+                      )}
                     {report.notApplicable && (
                       <p className="muted">
                         This cluster already runs {report.serverVersion ?? "this version or newer"}:

@@ -4,8 +4,11 @@
 # first, the mean of the two middle ones when their count is even, with the first tick, the cold one, beside it), then the requests by
 # verb and resource at the last level, with their response bytes and time, of
 # a steady tick and of the first, and, for a run with the GitOps fill, the
-# GitOps reads per level. Needs jq. Knob: BENCH_REPORT_FORMAT=json
-# prints the summary as JSON instead.
+# GitOps reads per level. A run with the agent's pod pass reuse (#228) has two
+# kinds of tick after the first: those that listed every pod, which the first
+# table and the breakdown report as before, and those that reused the last
+# pass (addOnEvidenceAgeSeconds set), which get a table of their own. Needs jq.
+# Knob: BENCH_REPORT_FORMAT=json prints the summary as JSON instead.
 set -euo pipefail
 
 [ $# -eq 1 ] && [ -s "$1" ] || { echo "usage: agent-report.sh <results.jsonl>" >&2; exit 2; }
@@ -22,7 +25,15 @@ def mib: . / 1048576;
 def r1: . * 10 | round / 10;
 def r2: . * 100 | round / 100;
 def levels: group_by(.label) | map(sort_by(.tick)) | sort_by(.[0].nodes);
-def steady: if length > 1 then .[1:] else . end;
+def aged: (.addOnEvidenceAgeSeconds // 0) > 0;
+# The ticks after the first (the first is the cold one).
+def afterFirst: if length > 1 then .[1:] else . end;
+# The ticks that reused the last pod pass, and the steady ticks that listed
+# every pod: what every number but the second table is a median of. A run
+# whose ticks after the first all reused the pass has no such tick, and
+# falls back to them all.
+def reused: afterFirst | map(select(aged));
+def steady: (afterFirst | map(select(aged | not))) as $p | if ($p | length) > 0 then $p else afterFirst end;
 def get(res): (.byVerbResource | map(select(.verb == "GET" and .resource == res) | .count) | add) // 0;
 def lst(res): (.byVerbResource | map(select(.verb == "LIST" and .resource == res) | .count) | add) // 0;
 # Requests and response bytes of every verb on one resource (the GitOps
@@ -43,10 +54,22 @@ def gitops: ["applications", "helmreleases", "ocirepositories"] as $rs |
     requests: $req, bodyMiB: ($b | mib | r2),
     firstTickRequests: (.[0] | [$rs[] as $r | reqs($r)] | add)
   };
+def reusedSummary: reused as $r | if ($r | length) == 0 then null else {
+  ticks: ($r | length),
+  requests: ($r | map(.requests) | median),
+  listPods: ($r | map(lst("pods")) | median),
+  bodyMiB: ($r | map(.bodyBytes) | median | mib | r1),
+  wireMiB: ($r | map(.wireDownBytes + .wireUpBytes) | median | mib | r1),
+  wallS: ($r | map(.wallMs) | median / 1000 | r1),
+  cpuS: ($r | map(.cpuMs // 0) | median / 1000 | r1),
+  peakHeapMiB: ($r | map(.peakHeapBytes) | max | mib | r1),
+  maxAgeS: ($r | map(.addOnEvidenceAgeSeconds) | max)
+} end;
 def summary: {
   fill: (.[0].label | capture("fill=(?<f>[^ ]+)").f),
   label: .[0].label,
   ticks: length,
+  steadyTicks: (steady | length),
   nodes: .[0].nodes, helmReleases: .[0].helmReleases,
   requests: (steady | map(.requests) | median),
   listPods: (steady | map(lst("pods")) | median),
@@ -60,6 +83,7 @@ def summary: {
   maxRssMiB: (map(.maxRssBytes) | max | mib | r1),
   firstTick: (.[0] | {requests, wallS: (.wallMs / 1000 | r1), cpuS: ((.cpuMs // 0) / 1000 | r1), bodyMiB: (.bodyBytes | mib | r1), wireMiB: ((.wireDownBytes + .wireUpBytes) | mib | r1), peakHeapMiB: (.peakHeapBytes | mib | r1)}),
   errors: (map(select(.error != null and .error != "")) | length),
+  reusedPods: reusedSummary,
   gitops: gitops
 };
 # The GitOps columns only when some level of the run read GitOps charts (the
@@ -72,13 +96,27 @@ if [ "${BENCH_REPORT_FORMAT:-}" = json ]; then
 fi
 
 echo
-echo "Per tick, by fill level (medians over the ticks after the first, the mean of the middle two when their count is even, except peak heap, which is the maximum of them: the peak of live heap objects while a tick ran; RSS is the process peak so far):"
+echo "Per tick, by fill level (medians over the ticks after the first that listed every pod, the mean of the middle two when their count is even, except peak heap, which is the maximum of them: the peak of live heap objects while a tick ran; RSS is the process peak so far):"
 echo
 echo "| Fill | Nodes | Helm releases | Requests | LIST pods | GET secrets | Response MiB | Wire MiB | Wall s | CPU s | Peak heap MiB | Peak RSS MiB | First tick: requests, response MiB, wall s, CPU s |"
 echo "|---|---|---|---|---|---|---|---|---|---|---|---|---|"
 jq -rs "$defs"'
   levels | map(summary)[] |
   "| \(.fill) | \(.nodes) | \(.helmReleases) | \(.requests) | \(.listPods) | \(.getSecrets) | \(.bodyMiB) | \(.wireMiB) | \(.wallS) | \(.cpuS) | \(.peakHeapMiB) | \(.maxRssMiB) | \(.firstTick.requests), \(.firstTick.bodyMiB), \(.firstTick.wallS), \(.firstTick.cpuS) |"' "$1"
+
+# The agent's pod pass reuse (#228): the ticks after the first that did not
+# list the pods outside kube-system, from the same levels. Printed only when
+# some tick reused the last pass.
+if jq -es '[.[] | select((.addOnEvidenceAgeSeconds // 0) > 0)] | length > 0' "$1" >/dev/null; then
+  echo
+  echo "Per tick that reused the last pod pass instead of listing the pods outside kube-system, by fill level (medians over those ticks; peak heap is the maximum; age is the oldest evidence a tick reused):"
+  echo
+  echo "| Fill | Ticks | Requests | LIST pods | Response MiB | Wire MiB | Wall s | CPU s | Peak heap MiB | Age of the evidence, s |"
+  echo "|---|---|---|---|---|---|---|---|---|---|"
+  jq -rs "$defs"'
+    levels | map(summary) | map(select(.reusedPods != null))[] |
+    "| \(.fill) | \(.reusedPods.ticks) | \(.reusedPods.requests) | \(.reusedPods.listPods) | \(.reusedPods.bodyMiB) | \(.reusedPods.wireMiB) | \(.reusedPods.wallS) | \(.reusedPods.cpuS) | \(.reusedPods.peakHeapMiB) | \(.reusedPods.maxAgeS) |"' "$1"
+fi
 
 # The GitOps fill (BENCH_GITOPS=1): what the lists of Argo CD Applications
 # and Flux HelmReleases, and the reads of the OCIRepositories their chartRefs
@@ -108,9 +146,16 @@ breakdown() {
 }
 
 echo
-echo "Requests by verb and resource at the last fill level (a steady tick):"
+echo "Requests by verb and resource at the last fill level (a steady tick that listed every pod):"
 echo
 breakdown 'levels | last | steady | .[0]' "$1"
+
+if jq -es '[.[] | select((.addOnEvidenceAgeSeconds // 0) > 0)] | length > 0' "$1" >/dev/null; then
+  echo
+  echo "Requests by verb and resource at the last fill level that reused the pod pass (a tick that reused it):"
+  echo
+  breakdown 'levels | map(select(reused | length > 0)) | last | reused | .[0]' "$1"
+fi
 
 echo
 echo "Requests by verb and resource at the last fill level (the first tick, the cold one):"

@@ -699,14 +699,14 @@ func (s *Server) handleIngest(w http.ResponseWriter, r *http.Request) {
 	// never dedup to 200 duplicate). APIServerStartTime is zeroed too: it
 	// says which apiserver answered the /metrics scrape, and an agent whose
 	// connection moves between HA apiservers would otherwise store a new
-	// snapshot and history point at every move (#204). The snapshot itself
-	// stores the inventory as pushed, so collectedAt, the start time and
-	// fields this server does not know (a newer agent's) are kept for a
-	// server that does; a push that differs only in those is a duplicate,
-	// since nothing judged changed.
-	hashed := inv
-	hashed.CollectedAt, hashed.APIServerStartTime = time.Time{}, time.Time{}
-	hash, err := canonicalHash(hashed)
+	// snapshot and history point at every move (#204). The age of the
+	// agent's reused pod evidence is zeroed too (#228): it grows with every
+	// tick that reuses a pod pass. All three are inventory.Canonical. The
+	// snapshot itself stores the inventory as pushed, so collectedAt, the
+	// start time, the age and fields this server does not know (a newer
+	// agent's) are kept for a server that does; a push that differs only in
+	// those is a duplicate, since nothing judged changed.
+	hash, err := canonicalHash(inv.Canonical())
 	if err != nil {
 		internalErr(w, "canonicalizing inventory", err)
 		return

@@ -253,6 +253,32 @@ cluster. The requests of one tick are:
   server or proxy that rejects the field selector with a 400 is asked
   again without it, and the add-ons skip the `kube-system` pods in the
   response.
+- **The other namespaces' pods are listed every Nth tick.** The pods are
+  most of a tick's requests and bytes at 2,001 nodes (#228), and a watch
+  or informer is excluded by design (AG-01), so the agent reads the pods
+  outside `kube-system` once per `--pod-pass-every` ticks (3 by default;
+  the full pass is the first of them) and, in between, detects add-ons
+  from the images and labels of that pass (`collect.PodPassCache`). Only
+  that evidence is reused, not a verdict: the registry is applied to it on
+  every tick, and the `kube-system` pods (for the control-plane skew),
+  Helm releases, GitOps resources and IngressClasses are read on every
+  tick. A pass is also forced when the last full pass is
+  `--pod-pass-max-age` old (1h), when the last one failed or read only some
+  of its pages (it is never kept), when `versions` did not list the
+  `kube-system` pods this tick, and when the Helm releases or GitOps chart
+  references that name an add-on differ from those the pass was taken with
+  (they are read every tick, so the trigger costs no request, and a release
+  upgraded across a release line is not joined with the old pods). So an
+  add-on installed or upgraded right after a pass, by other means than
+  Helm or a chart reference, is reported as it was for at most
+  `--pod-pass-every` minus one ticks, and a tick does not reuse a pass of
+  the maximum age or more; the age of the evidence is
+  `addOnEvidenceAgeSeconds` in the inventory, the report and the
+  ClusterReadiness status, left out of the snapshot hash so a reusing tick
+  pushes nothing new. A cheap trigger from the Deployments', DaemonSets'
+  and StatefulSets' metadata was weighed and not built
+  ([Scale and cost](operations/scale.md#the-pod-pass-every-nth-tick-228)).
+  A one-shot `scan` reads every pod.
 - **One GET per Helm release the agent has not decoded yet**: the full Secret
   (or ConfigMap) of its installed revision, up to the 1 MiB Kubernetes
   allows. Up to 8 are in flight at once (#226), and the step holds at most

@@ -122,6 +122,74 @@ To accept a finding for now, with a reason and an expiry, use an
   it means an unchanged inventory is pushed on every tick, and the
   agent logs a warning with the period in effect, nine tenths of the
   interval, the shortest gap the tick jitter leaves between two ticks.
+- **The agent exits at once with `invalid --pod-pass-every` or `invalid
+  --pod-pass-max-age`.** `--pod-pass-every` is a number of ticks, at least
+  1 (1 reads the pods outside `kube-system` on every tick, as before
+  #228), and `--pod-pass-max-age` a positive duration; 0 does not mean the
+  default (3 and 1h). The chart's `agent.podPassEvery` and
+  `agent.podPassMaxAge` are refused at `helm install` for the same values.
+- **The agent logs `pod-pass-max-age is too short for pod-pass-every`, and
+  some or all ticks list every pod.** A `--pod-pass-max-age` that is
+  not above 1.1 times `--interval` times (`--pod-pass-every` minus one),
+  the `mustExceed` field of the warning, is not refused, but it cannot work
+  as set. Ticks are spaced by the interval with a jitter of 10% either way
+  (0.9 to 1.1 times the interval), and the sleep starts after the tick
+  ends, so the spacing also holds the tick's run time. A pass is reused
+  only while it is younger than the maximum age, and the last reuse after a
+  pass (the one `--pod-pass-every` minus one ticks later) is about that
+  many spacings old, up to 1.1 times the interval plus the run time each.
+  At or below the interval the pass is too old by the next tick, so only a
+  tick that the jitter brings early reuses it; between the interval and the
+  floor the first reuses work and the last ones depend on the draw. The
+  request savings of [the pod pass
+  setting](operations/scale.md#the-pod-pass-every-nth-tick-228) are then
+  partly or wholly not there. Raise `--pod-pass-max-age` above the
+  `mustExceed` value, and leave room on top of it for the ticks' run
+  time, which the floor cannot know and which is a few seconds each at
+  2,001 nodes. Exceeding the floor is needed and, because of that run
+  time, not quite enough: at `--interval 10m --pod-pass-every 3` the floor
+  is 22 minutes, and 21 minutes fails on the second reuse whenever the
+  two spacings and their run time come to 21 minutes or more; 25 minutes
+  works unless the ticks take more than a minute and a half each (two
+  spacings of up to 11 minutes and two run times must stay under 25). At
+  a 30-minute interval the default hour is under the floor of 66 minutes,
+  so the last of the two reuses is lost on the ticks the jitter spaces
+  widely. Instead of raising the maximum age, lower `--pod-pass-every`
+  (`agent.podPassEvery`) until its floor, `--interval` times 1.1 times
+  (`--pod-pass-every` minus one), fits under the maximum age: the warning's
+  `podPassEveryThatFits` field is the largest value whose floor alone is
+  under it. That field leaves out the ticks' run time, which comes on top,
+  so on slow ticks you may need one less (the warning text says so too).
+  At the 30-minute interval and the default hour that is 2 (floor 33
+  minutes). The price is a full pass every other tick instead of every
+  third (a cycle of 2 averages 25.5 requests at the 2,001-node fill,
+  computed, against 23.7 for 3), and an add-on is then behind for at most
+  one tick (up to about 33 minutes) instead of two. Or set `--pod-pass-every=1`
+  (`agent.podPassEvery=1`) if reading every pod on every tick is what you
+  want, which also ends the warning.
+- **An add-on I just installed or upgraded is missing, or still shows its
+  old version.** The agent lists the pods outside `kube-system` only every
+  `--pod-pass-every` ticks (3 by default, so about every 30 minutes at the
+  default interval), or sooner when the last full pass is
+  `--pod-pass-max-age` old (1h), and detects add-ons from that pass's
+  images and labels in between. An add-on changed right after a pass is
+  reported as it was for at most `--pod-pass-every` minus one ticks, and a
+  pass that is `--pod-pass-max-age` old or more is not reused (the age is
+  measured at the tick that reuses it, and that tick's report stays up until
+  the next one). `status.addOnEvidenceAgeSeconds`
+  (also `addOnEvidenceAgeSeconds` in the report and the
+  `upgradescope_addon_evidence_age_seconds` gauge) says how old the evidence
+  of the last tick was: absent or 0 means every pod was read. Wait for the
+  next full pass, or set `agent.podPassEvery=1` to read the pods on every
+  tick, at the request count [Scale and cost](operations/scale.md) gives
+  for it. The `kube-system` pods, Helm releases, Argo CD and Flux charts
+  and IngressClasses are read on every tick, and a change in the Helm
+  releases or chart references that name an add-on (a new release or
+  revision, a new chart reference) makes the next tick list every pod. So
+  an add-on in `kube-system`, or installed or upgraded through Helm or a
+  GitOps chart reference, is not behind; one installed another way, or whose
+  image was changed in place (`kubectl set image`), is, for the ticks above.
+  `scan` reads every pod.
 - **The pod never becomes Ready.** Readiness waits for a successful tick.
   `kubectl logs` shows one line per tick, with `tick failed` and the error.
   A tick fails when no target can be evaluated (no `spec.targets` and an

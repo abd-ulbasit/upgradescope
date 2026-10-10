@@ -54,7 +54,12 @@ Required checks:
   IngressClasses that were read are matched (an EOL chart-installed
   ingress-nginx still blocks), but an add-on installed any other way goes
   undetected, so a clean result is `unknown`. A role that cannot list
-  IngressClasses alone leaves an optional partial gap.
+  IngressClasses alone leaves an optional partial gap. The agent lists
+  the pods outside `kube-system` only every few ticks and detects add-ons
+  from the last full pass in between (`--pod-pass-every`,
+  `--pod-pass-max-age`); that is no gap, since the pass was complete, and
+  the report's `addOnEvidenceAgeSeconds` says how old it was. See
+  [Scale and cost](../operations/scale.md).
 
 Not required, because a blocker cannot hide behind them, or because managed
 platforms routinely deny them: `deprecated-calls` (the apiserver's
