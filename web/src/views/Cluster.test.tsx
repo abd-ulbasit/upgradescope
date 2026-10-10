@@ -291,6 +291,29 @@ describe("Cluster view", () => {
     expect(screen.queryByRole("region", { name: /Unrecognized images/ })).toBeNull();
   });
 
+  it("says how old the pod evidence is only when the agent reused a pod pass", async () => {
+    await openCluster("#/cluster/1", {
+      "api/v1/clusters/1/report": report("1.35", { addOnEvidenceAgeSeconds: 1230 }),
+    });
+    expect(screen.getByTestId("pod-evidence-age").textContent).toMatch(/^Pod evidence 21 min old/);
+    cleanup();
+
+    await openCluster("#/cluster/1", {
+      "api/v1/clusters/1/report": report("1.35", { addOnEvidenceAgeSeconds: 7 }),
+    });
+    expect(screen.getByTestId("pod-evidence-age").textContent).toMatch(/^Pod evidence 1 min old/);
+    cleanup();
+
+    await openCluster("#/cluster/1", {
+      "api/v1/clusters/1/report": report("1.35", { addOnEvidenceAgeSeconds: 0 }),
+    });
+    expect(screen.queryByTestId("pod-evidence-age")).toBeNull();
+    cleanup();
+
+    await openCluster("#/cluster/1");
+    expect(screen.queryByTestId("pod-evidence-age")).toBeNull();
+  });
+
   it("flags a stale cluster and shows when it was last seen", async () => {
     mockApi(routes({ "api/v1/clusters/1": { ...detail, stale: true } }));
     navigate("#/cluster/1");
