@@ -1,13 +1,14 @@
 # Knowledge base
 
 The knowledge base (KB) is what upgradescope knows about Kubernetes and the
-add-ons around it. It has four parts, all **compiled into the binary**:
+add-ons around it. It has five parts, all **compiled into the binary**:
 nothing is fetched at runtime, and a KB update reaches you only through a
 new release.
 
 | Part | Source | Maintained by |
 |---|---|---|
 | API lifecycle: for each group/version/kind, when it was introduced, deprecated and removed, and its replacement | generated from `k8s.io/api` source (`internal/kb/data/apilifecycle.json`), and nothing else: no hand-written overlay. The few facts the source lacks are fixups in the generator, each with a citation | `tools/gen-kb` |
+| Migration notes: what a manifest needs besides a new `apiVersion`, for the kinds whose replacement is not a drop-in or that have none | hand-written in `internal/kb/data/migrations.json`, every note cited; merged onto the lifecycle data when the KB loads, and never written by `tools/gen-kb` or the weekly refresh | hand-curated ([Migration notes](#migration-notes)) |
 | Add-on registry: end of life, release lines and Kubernetes compatibility of common add-ons | one YAML file per add-on in `registry/data/`, every claim cited | hand-curated, and synced with endoflife.date where it has the product ([Add-on registry](addon-registry.md)) |
 | Version-skew policy | the upstream [version skew policy](https://kubernetes.io/releases/version-skew-policy/) | `internal/kb/skew.go` ([Version skew](version-skew.md)) |
 | Managed-provider support calendars: for EKS, GKE and AKS, when each Kubernetes minor leaves standard support and when extended support ends, and where the provider publishes it, the extended-support list price | one YAML file per provider in `registry/data/providers/`, every date and price cited | EKS and AKS synced with endoflife.date, GKE and the prices hand-curated ([Managed-provider support](support-lifecycle.md)) |
@@ -92,7 +93,44 @@ Five things the generator adds to what the source says, each in
   kube-apiserver served, so a new one cannot slip in unaudited.
 
 Every other fact is `k8s.io/api`'s own. There is no separate hand-written
-dataset; a test fails if one is added.
+lifecycle dataset; a test fails if one is added. (The migration notes below
+are remediation text, not lifecycle facts, and change no date or version.)
+
+## Migration notes
+
+A generated hint says *where* to go (`migrate to networking.k8s.io/v1
+Ingress`). For some kinds that is not enough: an Ingress, a
+CustomResourceDefinition or a webhook configuration with only its
+`apiVersion` changed is rejected, and `PodSecurityPolicy` has no successor
+kind at all. `internal/kb/data/migrations.json` holds a short note for each,
+`{group, version, kind, note, citations[]}`, written from the Kubernetes
+[deprecation guide](https://kubernetes.io/docs/reference/using-api/deprecation-guide/)
+and, for `PodSecurityPolicy`, the
+[migration page](https://kubernetes.io/docs/tasks/configure-pod-container/migrate-from-psp/).
+
+A finding's remediation is the generated hint, then `; `, then the note, or
+the note alone when there is no hint. The note's citations follow the
+deprecation guide in the finding's. The text appears wherever the finding
+does: the table's `fix:` line, the Markdown cell, `--output json` and SARIF.
+
+The file is separate from `apilifecycle.json` so a regeneration or a weekly
+refresh cannot drop a note, and the KB refuses to load when it cannot be
+trusted: a note whose kind is not in the lifecycle data, two notes for one
+kind, an empty note, or a note without an `https` citation. A lint in the
+tests also requires a note on every kind that is removed by the KB's horizon
+and has no replacement and no served successor, which is how
+`PodSecurityPolicy` is caught. Adding a removal of that shape to the data
+fails `go test ./internal/kb` until its note is written.
+
+To add a note, add an entry to `migrations.json` with the exact group,
+version and kind from `apilifecycle.json`, say only what the cited page
+says, and cite it with an `https` URL. Run `go test ./internal/kb`.
+
+Remediation never moves a manifest to a less mature API than the one it
+uses (alpha before beta before GA, from the version name). When the GA
+replacement is not served at the target yet, the finding says the version in
+use is the right one for that target, and names the GA version with the
+minor that first serves it.
 
 ## The horizon
 
@@ -142,3 +180,7 @@ the horizon minor, until you upgrade to a release with a newer KB.
   `unrecognizedImages` in the inventory and the report, and never become
   findings.
 - Feature gates, flags and behaviour changes that are not API removals.
+- Field-level removals and in-tree volume-plugin removals inside an API that
+  is still served (`glusterfs`, `awsElasticBlockStore`, `cephfs`, `rbd`, the
+  `gitRepo` volume): only the `apiVersion` and `kind` of an object are
+  judged. The reports say so ([Verdict and score](verdict-and-score.md#what-a-verdict-does-not-cover)).
