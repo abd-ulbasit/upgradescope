@@ -178,7 +178,10 @@ docs.
 - `make eol-sync` and `make eol-check` reconcile registry entries that declare
   `endoflife_product` with the endoflife.date API. Both need network access.
 - A weekly workflow (`kb-refresh.yml`) runs both and opens a pull request. You
-  rarely need to bump `k8s.io/api` yourself.
+  rarely need to bump `k8s.io/api` yourself. The regeneration runs in a
+  separate run on the branch `bot/kb-refresh-build` (`kb-refresh-build.yml`),
+  not on `main`, because it executes freshly bumped, unreviewed modules;
+  see "kb-refresh's unreviewed build runs off `main`" below.
 - That pull request comes from `github-actions[bot]`, so GitHub holds its CI
   runs until someone approves them. The workflow tries to approve them
   itself; when it cannot, its run shows a warning. **Maintainers: if a bot
@@ -236,8 +239,9 @@ run, not repeats of one.
 
 **No cache on the release path.** Any job can write the GitHub Actions
 cache with the runner's own token, whatever its `permissions:` block, and a
-run on a tag restores what runs on `main` saved, including kb-refresh's
-job that builds freshly bumped, unreviewed modules. So no job that builds,
+run on a tag restores what runs on `main` saved. (kb-refresh used to build
+freshly bumped, unreviewed modules on `main`; it no longer does, see
+below.) So no job that builds,
 signs or publishes a release, and no `ci.yml` job when `release.yml` calls
 it to gate one, restores a cache: in `release.yml`, `actions/setup-go` sets
 `cache: false`, `actions/setup-node` has no `cache:` and sets
@@ -250,6 +254,23 @@ BuildKit cache. In `ci.yml` each of those is keyed on the workflow's
 be checked for a cache of its own and added to the list in
 `hack/release-caches_test.sh` (`make hack-test`), which fails on any of
 these (IR-22).
+
+**kb-refresh's unreviewed build runs off `main`.** The weekly `kb-refresh.yml`
+runs on `main` and builds nothing. Its `build` job points the branch
+`bot/kb-refresh-build` at `main`'s head, dispatches `kb-refresh-build.yml` on
+it and waits. That workflow is the only place the freshly bumped,
+unreviewed modules (`go get` of the newest `k8s.io` ones, `make gen-kb`,
+`go test`, `make eol-sync`) run, and it runs only on that branch, with
+`contents: read` and no Go cache. A cache entry it writes lands in that
+branch's scope, which `main`'s CI and a tag's release run never restore
+([GitHub's cache scoping](https://docs.github.com/en/actions/reference/workflows-and-actions/dependency-caching#restrictions-for-accessing-a-cache):
+a run restores caches from its own ref and the default branch, not from
+sibling or child branches). The two pipelines' patches are artifacts of that
+run under different names, and the `*-pr` jobs download theirs by run id, so
+neither pipeline can read or replace the other's. `hack/kb-refresh-scope_test.sh`
+checks all of this (IR-23). A manual dry run after a change to either file:
+`gh workflow run kb-refresh.yml` (it opens the real bot PRs if anything
+changed).
 
 **Docker Hub pulls go through a mirror.** Docker Hub rate-limits anonymous
 pulls per source IP (`429 toomanyrequests`), and a hosted runner shares its IP

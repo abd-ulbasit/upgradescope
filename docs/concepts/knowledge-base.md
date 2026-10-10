@@ -112,7 +112,7 @@ the horizon minor, until you upgrade to a release with a newer KB.
 - A weekly workflow (`kb-refresh`) bumps `k8s.io/api`, regenerates the
   dataset, syncs the registry with endoflife.date and opens a pull request
   for review. Nothing changes the datasets without review, and a failing
-  refresh opens an issue. It has failed for weeks at a time before ([#23](https://github.com/abd-ulbasit/upgradescope/issues/23)), so
+  refresh opens an issue. The regeneration, which runs freshly bumped, unreviewed modules, runs in a separate run on a staging branch, not on `main`, so it cannot plant an Actions cache entry that `main` or a release run restores. It has failed for weeks at a time before ([#23](https://github.com/abd-ulbasit/upgradescope/issues/23)), so
   it is a helper, not a guarantee.
 - A merged refresh changes nothing for users until it is released. There is
   no fixed release schedule yet; the [changelog](../changelog.md) lists what
