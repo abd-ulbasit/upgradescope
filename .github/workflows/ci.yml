@@ -280,7 +280,7 @@ jobs:
         with:
           go-version-file: go.mod
           cache: ${{ env.RESTORE_CACHES == 'true' }} # no cache on the release path (IR-22)
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '24' # the Dockerfile's
           package-manager-cache: false # only the cache: below, which the release path turns off (IR-22)
@@ -312,7 +312,7 @@ jobs:
       # The CI-only Renovate validator's lockfile (hack/renovate), bumped by
       # hand: an advisory not accepted in hack/renovate/osv-scanner.toml,
       # with a reason and an expiry, fails here, weekly too (#244).
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '24' # Renovate's engines
           package-manager-cache: false # only the cache: below, which the release path turns off (IR-22)
@@ -334,7 +334,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ matrix.node }}
           package-manager-cache: false # only the cache: below, which the release path turns off (IR-22)
@@ -386,7 +386,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '24' # Renovate's engines
           package-manager-cache: false # only the cache: below, which the release path turns off (IR-22)
