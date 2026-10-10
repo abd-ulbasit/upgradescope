@@ -89,7 +89,7 @@ NOT ASSESSED
   helm: secrets list forbidden
   kb-coverage (required): knowledge base covers Kubernetes up to 1.37; target 1.38 cannot be assessed
 `
-	if got := buf.String(); got != want {
+	if got := buf.String(); got != want+tableScope {
 		t.Errorf("table output mismatch\n--- got ---\n%s\n--- want ---\n%s", got, want)
 	}
 }

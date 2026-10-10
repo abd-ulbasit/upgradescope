@@ -68,7 +68,7 @@ TEAMS
 NOT ASSESSED
   deprecated-calls: GET /metrics forbidden
 `
-	if got := buf.String(); got != want {
+	if got := buf.String(); got != want+tableScope {
 		t.Errorf("table output mismatch\n--- got ---\n%s\n--- want ---\n%s", got, want)
 	}
 }
@@ -143,7 +143,7 @@ BLOCKER (2)
 NOT ASSESSED
   versions: files mode
 `
-	if got := buf.String(); got != want {
+	if got := buf.String(); got != want+tableScope {
 		t.Errorf("table output mismatch\n--- got ---\n%s\n--- want ---\n%s", got, want)
 	}
 	if strings.Contains(buf.String(), "cluster-scoped") || strings.Contains(buf.String(), "stored/served") {
@@ -188,7 +188,7 @@ READY  yes
 
 No findings.
 `
-	if got := buf.String(); got != want {
+	if got := buf.String(); got != want+tableScope {
 		t.Errorf("table output mismatch\n--- got ---\n%s\n--- want ---\n%s", got, want)
 	}
 }
@@ -230,7 +230,7 @@ NOT ASSESSED
   helm (partial): helm releases: 1 via secrets; 1 release(s) not decodable, first a/b: gunzip
       skipped: a/b
 `
-	if got := buf.String(); got != want {
+	if got := buf.String(); got != want+tableScope {
 		t.Errorf("table output mismatch\n--- got ---\n%s\n--- want ---\n%s", got, want)
 	}
 }
@@ -309,5 +309,58 @@ func TestWriteTableNamesTheCluster(t *testing.T) {
 	}
 	if strings.Contains(buf.String(), "Context:") {
 		t.Errorf("no context or API server: table has a Context line:\n%s", buf.String())
+	}
+}
+
+// tableScope and mdScope are the footer every report ends with (#331).
+const (
+	tableScope = "\n" + ScopeNotice + "\n"
+	mdScope    = "\n**Scope.** " + ScopeNotice + "\n"
+)
+
+// #331: a READY 100/100 is not read as covering what the engine does not
+// judge. Both reports end with this sentence, pinned verbatim. It is text
+// only: score, verdict and JSON are the engine's and do not change.
+func TestReportsStateWhatIsNotChecked(t *testing.T) {
+	const sentence = "Not checked by this version: field-level removals and in-tree volume-plugin removals inside served APIs."
+	r := engine.Report{ClusterID: "files", Target: inventory.Version{Major: 1, Minor: 36}, KBVersion: "test-kb", Score: 100, Ready: true, Verdict: engine.VerdictReady}
+	var table, md, js bytes.Buffer
+	if err := WriteTable(&table, r); err != nil {
+		t.Fatal(err)
+	}
+	WriteMarkdown(&md, r)
+	if err := WriteJSON(&js, r); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasSuffix(table.String(), "\n"+sentence+"\n") {
+		t.Errorf("table does not end with the scope line:\n%s", table.String())
+	}
+	if !strings.HasSuffix(md.String(), "\n**Scope.** "+sentence+"\n") {
+		t.Errorf("markdown does not end with the scope line:\n%s", md.String())
+	}
+	if strings.Contains(js.String(), "Not checked") || strings.Contains(js.String(), "volume-plugin") {
+		t.Errorf("the JSON report carries the scope line, which is a rendering only:\n%s", js.String())
+	}
+}
+
+// The same report on a table with findings still ends with the line, and
+// the table and markdown for a finding with a migration note carry the
+// remediation (#330).
+func TestOutputsCarryTheMigrationNote(t *testing.T) {
+	const note = "Pod Security Admission replaces PodSecurityPolicy"
+	r := engine.Report{Target: inventory.Version{Major: 1, Minor: 25}, Findings: []engine.Finding{{
+		Category: engine.CatRemovedAPI, Severity: engine.SevBlocker, Title: "policy/v1beta1 PodSecurityPolicy removed in 1.25 (1 object)",
+		Remediation: note + ": label each namespace",
+	}}}
+	var table, md bytes.Buffer
+	if err := WriteTable(&table, r); err != nil {
+		t.Fatal(err)
+	}
+	WriteMarkdown(&md, r)
+	if !strings.Contains(table.String(), "      fix: "+note) {
+		t.Errorf("table has no fix line for the note:\n%s", table.String())
+	}
+	if !strings.Contains(md.String(), "| "+note) {
+		t.Errorf("markdown has no remediation cell for the note:\n%s", md.String())
 	}
 }

@@ -106,6 +106,7 @@ func WriteMarkdown(w io.Writer, r engine.Report) {
 		}
 	}
 	mdUnrecognizedImages(w, r)
+	fmt.Fprintf(w, "\n**Scope.** %s\n", ScopeNotice)
 }
 
 // baselineCounts counts the findings marked new and unchanged; both are
