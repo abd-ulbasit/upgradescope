@@ -144,6 +144,20 @@ if (cd "$ROOT" && UPGRADESCOPE_CHART_TEST=1 go test -count=1 ./deploy/chart/); t
 else
   fail "go test ./deploy/chart (RBAC coverage)"
 fi
+
+# tools/promrule-test evaluates the rendered PrometheusRule expressions with
+# the Prometheus PromQL engine (the retention alert's cases, docs/claims.md
+# SV-21). It skips without helm unless UPGRADESCOPE_CHART_TEST=1; set here, a
+# missing or failing helm fails the run, so the pinned-helm job cannot pass
+# with these cases skipped (the `test` job's tools loop runs them only if its
+# runner happens to ship helm). -count=1 for the same reason as above.
+echo "== PrometheusRule: alert expressions evaluated with the PromQL engine"
+if (cd "$ROOT/tools/promrule-test" && UPGRADESCOPE_CHART_TEST=1 go test -count=1 ./...); then
+  pass "go test tools/promrule-test"
+else
+  fail "go test tools/promrule-test (PrometheusRule expressions)"
+fi
+
 assert_contains "$TMP/default.yaml" "image: \"ghcr.io/abd-ulbasit/upgradescope:$APP_VERSION\"" "default image tag is the chart appVersion"
 assert_not_contains "$TMP/default.yaml" 'upgradescope:dev"' "default image is not the unpublished :dev"
 assert_contains "$TMP/default.yaml" 'imagePullPolicy: IfNotPresent'   "pullPolicy IfNotPresent"
