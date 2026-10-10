@@ -351,8 +351,10 @@ for pair in "false false" "true false" "true true"; do
   [ -z "$lost" ] && ok "PR with go=$1 cross=$2 (scope $scope) runs the packages that read every file of the checkout" || bad "PR with go=$1 cross=$2 (scope $scope) does not run: $(echo $lost)"
 done
 # Every tracked file has one of those answers, so the three cover the tree; an
-# inert file is the first of them.
-inert_only=$(grep -vE "$go_re" <<<"$tracked" | grep -E "$inert_re" | head -1)
+# inert file is the first of them. sed reads to the end: head would exit
+# early, and under pipefail the grep writing into it fails with SIGPIPE once
+# its output outgrows one buffer (as on CI's checkout).
+inert_only=$(grep -vE "$go_re" <<<"$tracked" | grep -E "$inert_re" | sed -n 1p)
 [ -n "$inert_only" ] && ! in_go "$inert_only" && ok "an inert file ($inert_only) is a go=false change, which runs the readers' scope" || bad "no inert file found to stand for a go=false change"
 
 # ---- 3. every gated job's `if`, for every kind of run ----------------------
