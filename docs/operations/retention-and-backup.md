@@ -70,6 +70,40 @@ test; four runs, 1.21 to 1.47 s) took 1.21 s at best. That is about 20%
 more at best-of, in exchange for transactions of 5,000 rows at most. Not
 measured: a Postgres prune, and the temp space one batch needs.
 
+What one run reads. The evaluation step finds the old rows from an index on
+`evaluations (created_at, id)` (migration 0010, SQLite and Postgres), taking
+them oldest first and stopping at the cutoff, so a run with nothing older
+than the window reads the oldest index entries and no report. The conditions
+that spare rows read covering indexes only: each cluster's latest snapshot,
+and every decided evaluation's index entry for the newest of each
+(cluster, target). Before 0010 the step scanned the whole evaluations table,
+every run, the last short batch of a drain included; `created_at` is stored
+after the report on SQLite, so that read every report's overflow pages, all
+under SQLite's single write lock, which every push and re-evaluation commit
+waits for. The index alone does not change this: the statement has to order
+by `created_at, id` as the index does (with `ORDER BY id` SQLite still
+scans), and the plan is pinned for both stores. The snapshot step still
+walks the snapshots table in id order: it reads the row's `received_at`,
+which comes before the inventory, so its cost follows the number of
+snapshots and not their size, but it is a scan.
+
+Measured on SQLite with 20,000 evaluations of 30 KB reports (a 625 MB
+database) all inside the window, so that a prune deletes nothing
+(`TestPruneWithNothingToDeleteIsCheap`), on an arm64 Mac, 10 October 2026,
+load average not recorded for these runs: before the index (commit
+`2f9de7cc`), five runs took 177 to 270 ms, and a push of another cluster
+started with the prune committed after 184 to 337 ms; with it (the code of
+commit `147ac1ef`), five runs took 0.27 to 0.43 ms, the push 0.62 to 1.3
+ms. The same test passes with its 50 ms bounds, which the scan failed in all
+five runs. The snapshot step on 20,000 snapshots of 30 KB (`TestPruneNothingToDeleteTiming`,
+load average about 100): 32, 45 and 45 ms for a prune that deletes nothing.
+The index has a price on a backlog: `TestPruneBacklogTiming` (the 60,000-row
+prune above), five runs of each at load average 64 to 86, took 1.73 to 3.38 s
+before (best 1.73 s, commit `2f9de7cc`) and 1.99 to 2.65 s after (best 1.99
+s, the code of `147ac1ef`), about 15% more at best-of; an earlier three runs
+of each at a load average not recorded gave 1.39 s best before and 1.63 s
+after. A Postgres prune was still not timed.
+
 Sizing: the October 2026 audit measured about 35 KB per changed snapshot
 for a realistic inventory (60 nodes, 250 namespaces, 80 Helm releases),
 plus one report per target. Plan for
@@ -136,13 +170,26 @@ visible
   including the batches a failed run had committed.
 
 The chart's `UpgradescopeRetentionStale` alert (`metrics.prometheusRule`;
-not rendered with `server.retention=0`) fires when the gauge is more than
-2 days old, is absent more than 2 days after the server started, or is
-absent after a prune failed in the last 2 days (the third arm is for a
-server that restarts more often than every 2 days, whose failing startup
-prune would otherwise never let the second arm hold). The prune runs at
-startup and then daily, so the first two are two missed days in a row, and
-the alert waits a further 15 minutes (`for`) after its condition holds.
+not rendered with `server.retention=0`) has three arms, and each covers a
+different restart cadence:
+
+| Arm | Fires when | Covers |
+|---|---|---|
+| 1 | the gauge is more than 2 days old | a server that stayed up more than 2 days after a prune last completed, and whose daily prunes since then fail |
+| 2 | the gauge is absent and the oldest server process is more than 2 days old | a server up more than 2 days that never completed a prune, with or without a failure counted |
+| 3 | the gauge is absent and `upgradescope_retention_prune_failures_total` is above 0 | a server that restarts more often than every 2 days (every few hours, say) and whose startup prune keeps failing, where arm 2 never holds because no process gets 2 days old |
+
+Arm 3 reads the counter's value and not `increase()` of it: the startup
+prune fails within milliseconds, before Prometheus first scrapes the new
+process, so the series is first seen at 1 and `increase()` over it is 0.
+Both series restart with the process, so a process that has failed
+nothing, or a restart after a prune succeeded, stays quiet. What no arm
+sees: a process that restarts before it is scraped once (the pod's restarts
+are the signal then), and, with several Postgres replicas, a replica that
+fails while another has completed a prune, since `absent()` looks at the
+whole job (arm 1 still judges each replica's own gauge). The alert waits a
+further 15 minutes (`for`) after its condition holds, and the prune runs at
+startup and then daily, so arm 1 and arm 2 are two missed days in a row.
 Until a run completes the database keeps growing.
 
 `/readyz` does not change: it pings the database and nothing else. A server
