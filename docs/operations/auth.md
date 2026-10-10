@@ -478,6 +478,9 @@ passes neither flag.
 
 ## Putting the dashboard behind SSO
 
+(The dashboard's screens, token entry and serving it under a path prefix
+are on [The dashboard](../guides/dashboard.md).)
+
 For people, put an authenticating proxy in front of the server:
 [oauth2-proxy](https://oauth2-proxy.github.io/oauth2-proxy/), an
 identity-aware proxy, or your ingress controller's external-auth support.

@@ -182,6 +182,8 @@ team's clusters, findings and scores ([Read access](../operations/auth.md)).
 
 ## Next
 
+- The web dashboard, its routes, and serving it under a path prefix behind
+  a proxy: [The dashboard](../guides/dashboard.md).
 - Retention, sizing and backups: [Retention and backup](../operations/retention-and-backup.md).
 - Tokens, SSO and who can read what: [Tenancy and access control](../operations/tenancy.md)
   and [Read access: tokens, teams and SSO](../operations/auth.md).

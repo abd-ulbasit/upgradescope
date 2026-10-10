@@ -1,9 +1,11 @@
 import { getFleet, getFleetTeams } from "../api";
+import { defaultTarget } from "../fleet";
 import { useAsync } from "../hooks";
-import type { ExcludedReason, FleetResponse, FleetTeamsResponse } from "../types";
+import type { ExcludedReason, FleetTeamsResponse } from "../types";
 import {
   Empty,
   ErrorState,
+  Freshness,
   Loading,
   ScoreBadge,
   TargetPicker,
@@ -28,8 +30,12 @@ export function Teams({ target }: { target?: string }) {
   );
 
   if (fleet.loading) return <Loading label="Loading fleet…" />;
-  if (fleet.error) return <ErrorState error={fleet.error} onRetry={fleet.reload} />;
+  if (fleet.error && !fleet.data) return <ErrorState error={fleet.error} onRetry={fleet.reload} />;
 
+  const refresh = () => {
+    fleet.reload();
+    rollup.reload();
+  };
   const pick = (t: string | undefined) => {
     window.location.hash = t ? `#/teams?target=${t}` : "#/teams";
   };
@@ -44,6 +50,12 @@ export function Teams({ target }: { target?: string }) {
             suggestions={uniqueSortedVersions(fleet.data!.targets)}
             onPick={pick}
             placeholder="1.38"
+          />
+          <Freshness
+            updatedAt={rollup.updatedAt ?? fleet.updatedAt}
+            refreshing={fleet.refreshing || rollup.refreshing}
+            error={fleet.error ?? rollup.error}
+            onRefresh={refresh}
           />
         </div>
         <p className="muted">
@@ -64,29 +76,13 @@ export function Teams({ target }: { target?: string }) {
         />
       ) : rollup.loading ? (
         <Loading label="Rolling up teams…" />
-      ) : rollup.error ? (
+      ) : rollup.error && !rollup.data ? (
         <ErrorState error={rollup.error} onRetry={rollup.reload} />
       ) : (
         rollup.data && <TeamsTable data={rollup.data} />
       )}
     </section>
   );
-}
-
-// defaultTarget picks the fleet column that is an upgrade for the most
-// clusters (the lowest on a tie): the first column is often one most
-// clusters already run.
-function defaultTarget({ targets, clusters }: FleetResponse): string | undefined {
-  let best: string | undefined;
-  let bestCount = -1;
-  for (const t of targets) {
-    const n = clusters.filter((c) => !c.notApplicable?.includes(t)).length;
-    if (n > bestCount) {
-      best = t;
-      bestCount = n;
-    }
-  }
-  return best;
 }
 
 function TeamsTable({ data }: { data: FleetTeamsResponse }) {
