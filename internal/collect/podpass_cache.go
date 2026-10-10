@@ -1,11 +1,17 @@
 package collect
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	"github.com/abd-ulbasit/upgradescope/internal/inventory"
+	"github.com/abd-ulbasit/upgradescope/registry"
 )
 
 // Defaults of the agent's --pod-pass-every and --pod-pass-max-age (#228).
@@ -47,7 +53,14 @@ const (
 //     reused, and the evidence of an earlier one is dropped with it);
 //   - the versions capability did not list the kube-system pods in this
 //     collection, because the add-ons would then need them from the pass,
-//     and the pass does not hold them.
+//     and the pass does not hold them;
+//   - the Helm releases and GitOps chart references that name a registry
+//     add-on are not those the pass was taken with (installSignature):
+//     they are read in every collection and joined with the pods, so a
+//     release upgraded across a release line would otherwise be reported
+//     beside a phantom install from the old pods, and a chart without an
+//     appVersion, or a GitOps add-on, would take its version from them.
+//     This costs no request: the releases are read anyway.
 //
 // The cache holds the distinct (namespace, image) pairs and the distinct
 // labelled pods among the pods outside kube-system, never the pods, so it
@@ -65,6 +78,7 @@ type PodPassCache struct {
 	have   bool      // a complete pass is held
 	at     time.Time // when it began
 	since  int       // collections that reused it
+	sig    string    // installSignature of the releases and charts it was taken with
 	images []nsImage
 	labels []labelledPod
 }
@@ -93,9 +107,11 @@ func (c *PodPassCache) Held() bool { return c != nil && c.have }
 // reuse reports whether this collection should reuse the held pass, and if
 // so returns its evidence and age (whole seconds, at least 1). The caller
 // has already established that the kube-system pods were listed by
-// versions. A reuse counts toward Every.
-func (c *PodPassCache) reuse() (images []nsImage, labelled []labelledPod, ageSeconds int64, ok bool) {
-	if !c.enabled() || !c.have {
+// versions, and passes sig, the installSignature of this collection's Helm
+// releases and GitOps charts: a pass taken with others is not reused. A
+// reuse counts toward Every.
+func (c *PodPassCache) reuse(sig string) (images []nsImage, labelled []labelledPod, ageSeconds int64, ok bool) {
+	if !c.enabled() || !c.have || sig != c.sig {
 		return nil, nil, 0, false
 	}
 	age := c.now().Sub(c.at)
@@ -115,10 +131,10 @@ func (c *PodPassCache) forget() {
 }
 
 // record keeps the evidence of a full pass that began at start and read
-// every pod, dropping the kube-system pods' (every collection reads those)
+// every pod, taken with the releases and charts of signature sig, dropping the kube-system pods' (every collection reads those)
 // and, as matchAddOns reads a repeat the same as the first, repeats of a
 // pair or a labelled pod already seen.
-func (c *PodPassCache) record(ev addOnEvidence, start time.Time) {
+func (c *PodPassCache) record(ev addOnEvidence, start time.Time, sig string) {
 	if !c.enabled() {
 		return
 	}
@@ -143,5 +159,35 @@ func (c *PodPassCache) record(ev addOnEvidence, start time.Time) {
 		seenPod[key] = true
 		c.labels = append(c.labels, labelledPod{Namespace: p.Namespace, Labels: p.Labels, Images: slices.Clone(p.Images)})
 	}
-	c.have, c.at = true, start
+	c.have, c.at, c.sig = true, start, sig
+}
+
+// installSignature identifies the Helm releases and GitOps chart references
+// that name a registry add-on, as far as the add-on's detection reads them:
+// where it is, which chart and version, the release's appVersion, revision
+// and status. Releases and charts of no add-on are left out, so a cluster
+// that upgrades its own applications with Helm all day does not pay for a
+// pod pass each time. A change of the registry that changes which releases
+// name an add-on changes the signature too, which at worst costs one pass.
+func installSignature(releases []inventory.HelmRelease, gitops []inventory.GitOpsChart, addons []registry.AddOn) string {
+	names := func(chart string) bool {
+		return slices.ContainsFunc(addons, func(a registry.AddOn) bool { return slices.Contains(a.Matchers.Charts, chart) })
+	}
+	var lines []string
+	for _, r := range releases {
+		if names(r.ChartName) {
+			lines = append(lines, strings.Join([]string{"helm", r.Namespace, r.Name, r.ChartName, r.ChartVersion, r.AppVersion, r.Status, strconv.Itoa(r.Revision)}, "\x00"))
+		}
+	}
+	for _, g := range gitops {
+		if names(g.Chart) {
+			lines = append(lines, strings.Join([]string{"gitops", g.Tool, g.Namespace, g.Name, g.Target, g.Chart, g.Version, g.Repo}, "\x00"))
+		}
+	}
+	if len(lines) == 0 {
+		return ""
+	}
+	slices.Sort(lines)
+	sum := sha256.Sum256([]byte(strings.Join(lines, "\n")))
+	return hex.EncodeToString(sum[:])
 }

@@ -142,8 +142,9 @@ func collectAddOnsFrom(ctx context.Context, kube kubernetes.Interface, addons []
 	// versions' list of this collection, so only a collection that has it
 	// can do without the pass.
 	listPods := true
+	sig := installSignature(inv.HelmReleases, inv.GitOpsCharts, addons)
 	if sysPods.read {
-		if images, labelled, age, ok := pass.reuse(); ok {
+		if images, labelled, age, ok := pass.reuse(sig); ok {
 			ev.images, ev.labelled = slices.Concat(ev.images, images), slices.Concat(ev.labelled, labelled)
 			inv.AddOnEvidenceAgeSeconds = age
 			listPods = false
@@ -188,7 +189,7 @@ func collectAddOnsFrom(ctx context.Context, kube kubernetes.Interface, addons []
 		// drops the earlier evidence too, and the next collection lists
 		// every pod again.
 		if podErr == nil {
-			pass.record(ev, passStart)
+			pass.record(ev, passStart, sig)
 		} else {
 			pass.forget()
 		}

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"reflect"
 	"slices"
+	"strconv"
 	"testing"
 	"time"
 
@@ -212,45 +213,64 @@ func TestPodPassFailedOrPartialPassForcesTheNextOne(t *testing.T) {
 			return nil
 		}},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			cs, disc := podFixture()
-			srv := servePods(cs, append(tickPods(), appPod("nginx-2", "example.com/app:v1"))...)
-			srv.perPage = tc.perPage
-			failing := true
-			srv.failList = func(_ int, ns string, o metav1.ListOptions) error {
-				if failing {
-					return tc.fail(ns, o)
+		for _, held := range []bool{false, true} {
+			t.Run(tc.name+map[bool]string{false: "", true: ", with an earlier pass held"}[held], func(t *testing.T) {
+				cs, disc := podFixture()
+				srv := servePods(cs, append(tickPods(), appPod("nginx-2", "example.com/app:v1"))...)
+				srv.perPage = tc.perPage
+				failing := !held
+				srv.failList = func(_ int, ns string, o metav1.ListOptions) error {
+					if failing {
+						return tc.fail(ns, o)
+					}
+					return nil
 				}
-				return nil
-			}
-			k := loadKB(t)
-			pass, _ := newPassCache(5, time.Hour)
-			clients := Clients{Kube: cs, Discovery: disc}
+				k := loadKB(t)
+				pass, _ := newPassCache(5, time.Hour)
+				clients := Clients{Kube: cs, Discovery: disc}
 
-			inv := Collect(context.Background(), clients, k, Options{PodPass: pass})
-			if st := inv.Capabilities[inventory.CapAddOns]; !st.Partial {
-				t.Fatalf("addons capability = %+v, want partial: the pass failed", st)
-			}
-			if pass.Held() {
-				t.Fatal("the cache holds a failed pass")
-			}
+				if held {
+					// A pass that would be reused, if the failed one did not drop it:
+					// the kube-system list fails too, so the next collection lists
+					// every pod, as the cache forces, and that is the failing pass.
+					Collect(context.Background(), clients, k, Options{PodPass: pass})
+					if !pass.Held() {
+						t.Fatal("no earlier pass held")
+					}
+					failing = true
+					failKubeSystem := srv.failList
+					srv.failList = func(call int, ns string, o metav1.ListOptions) error {
+						if failing && ns == "kube-system" {
+							return errors.New("forbidden")
+						}
+						return failKubeSystem(call, ns, o)
+					}
+				}
+				inv := Collect(context.Background(), clients, k, Options{PodPass: pass})
+				if st := inv.Capabilities[inventory.CapAddOns]; !st.Partial {
+					t.Fatalf("addons capability = %+v, want partial: the pass failed", st)
+				}
+				if pass.Held() {
+					t.Fatal("the cache holds a failed pass")
+				}
 
-			failing = false
-			srv.calls = nil
-			inv = Collect(context.Background(), clients, k, Options{PodPass: pass})
-			if srv.allNamespaceLists() != 1 || inv.AddOnEvidenceAgeSeconds != 0 {
-				t.Errorf("after a failed pass: %d lists, age %d; want a full pass", srv.allNamespaceLists(), inv.AddOnEvidenceAgeSeconds)
-			}
-			if st := inv.Capabilities[inventory.CapAddOns]; st.Partial {
-				t.Fatalf("addons capability = %+v, want complete", st)
-			}
+				failing = false
+				srv.calls = nil
+				inv = Collect(context.Background(), clients, k, Options{PodPass: pass})
+				if srv.allNamespaceLists() != 1 || inv.AddOnEvidenceAgeSeconds != 0 {
+					t.Errorf("after a failed pass: %d lists, age %d; want a full pass", srv.allNamespaceLists(), inv.AddOnEvidenceAgeSeconds)
+				}
+				if st := inv.Capabilities[inventory.CapAddOns]; st.Partial {
+					t.Fatalf("addons capability = %+v, want complete", st)
+				}
 
-			srv.calls = nil
-			inv = Collect(context.Background(), clients, k, Options{PodPass: pass})
-			if srv.allNamespaceLists() != 0 || inv.AddOnEvidenceAgeSeconds == 0 {
-				t.Errorf("after a complete pass: %d lists, age %d; want it reused", srv.allNamespaceLists(), inv.AddOnEvidenceAgeSeconds)
-			}
-		})
+				srv.calls = nil
+				inv = Collect(context.Background(), clients, k, Options{PodPass: pass})
+				if srv.allNamespaceLists() != 0 || inv.AddOnEvidenceAgeSeconds == 0 {
+					t.Errorf("after a complete pass: %d lists, age %d; want it reused", srv.allNamespaceLists(), inv.AddOnEvidenceAgeSeconds)
+				}
+			})
+		}
 	}
 }
 
@@ -351,9 +371,9 @@ func TestPodPassRecordKeepsDistinctEvidenceOutsideKubeSystem(t *testing.T) {
 	ev.addPod("ingress-nginx", map[string]string{"app.kubernetes.io/name": "ingress-nginx", "app.kubernetes.io/version": "1.9.5"},
 		[]string{"registry.k8s.io/ingress-nginx/controller:v1.9.4"})
 	c, _ := newPassCache(3, time.Hour)
-	c.record(ev, c.now())
+	c.record(ev, c.now(), "")
 
-	images, labelled, _, ok := c.reuse()
+	images, labelled, _, ok := c.reuse("")
 	if !ok {
 		t.Fatal("a recorded pass was not reused")
 	}
@@ -376,5 +396,128 @@ func TestPodPassRecordKeepsDistinctEvidenceOutsideKubeSystem(t *testing.T) {
 	b, bu := matchAddOns(kept, k.AddOns)
 	if !reflect.DeepEqual(a, b) || !reflect.DeepEqual(au, bu) {
 		t.Errorf("matchAddOns over the kept evidence = %+v / %v, want that of the whole %+v / %v", b, bu, a, au)
+	}
+}
+
+// The Helm releases and GitOps resources are read in every collection, and
+// the add-ons join them with the pods of the reused pass. A release that
+// changed since the pass would pair its new appVersion with the old pods,
+// and report the old version as a second install on another release line,
+// so a change in the releases that name an add-on forces a full pass.
+func TestPodPassHelmUpgradeForcesAFullPass(t *testing.T) {
+	cs, _ := podFixture()
+	pod := appPod("nginx-1", "registry.k8s.io/ingress-nginx/controller:v1.9.4")
+	srv := servePods(cs, pod)
+	addons := loadKB(t).AddOns
+	pass, clk := newPassCache(3, time.Hour)
+	release := func(chart, app string, rev int) inventory.HelmRelease {
+		return inventory.HelmRelease{Name: "ingress-nginx", Namespace: "ingress-nginx", ChartName: "ingress-nginx",
+			ChartVersion: chart, AppVersion: app, Status: "deployed", Revision: rev}
+	}
+	tick := func(releases []inventory.HelmRelease, gitops ...inventory.GitOpsChart) (inventory.Inventory, int) {
+		srv.calls = nil
+		inv := inventory.Inventory{HelmReleases: releases, GitOpsCharts: gitops, Capabilities: map[inventory.Capability]inventory.CapabilityStatus{}}
+		if err := collectAddOnsFrom(context.Background(), cs, addons, &inv, &kubeSystemPods{read: true}, pass); err != nil {
+			t.Fatal(err)
+		}
+		clk.t = clk.t.Add(10 * time.Minute)
+		return inv, srv.allNamespaceLists()
+	}
+	ingress := func(inv inventory.Inventory) []inventory.AddOnInstance {
+		var out []inventory.AddOnInstance
+		for _, a := range inv.AddOns {
+			if a.ID == "ingress-nginx" {
+				out = append(out, a)
+			}
+		}
+		return out
+	}
+
+	if inv, lists := tick([]inventory.HelmRelease{release("4.8.3", "1.9.4", 1)}); lists != 1 || len(ingress(inv)) != 1 {
+		t.Fatalf("tick 1: %d lists, %+v; want a pass and one install", lists, ingress(inv))
+	}
+	// Unchanged: the pass is reused.
+	if _, lists := tick([]inventory.HelmRelease{release("4.8.3", "1.9.4", 1)}); lists != 0 {
+		t.Fatalf("tick 2: %d lists, want the pass reused while the releases are unchanged", lists)
+	}
+	// The release and the pods are upgraded across a release line.
+	pod.Spec.Containers[0].Image = "registry.k8s.io/ingress-nginx/controller:v1.10.0"
+	inv, lists := tick([]inventory.HelmRelease{release("4.10.0", "1.10.0", 2)})
+	if lists != 1 {
+		t.Fatalf("tick 3: %d lists, want a full pass: the release changed", lists)
+	}
+	got := ingress(inv)
+	if len(got) != 1 || got[0].Version != "1.10.0" || got[0].ChartVersion != "4.10.0" || got[0].Source != "chart" {
+		t.Errorf("after the upgrade: %+v, want one install at 1.10.0, chart 4.10.0 (no phantom 1.9.4 from the old pods)", got)
+	}
+	if inv.AddOnEvidenceAgeSeconds != 0 {
+		t.Errorf("age = %d, want none after a full pass", inv.AddOnEvidenceAgeSeconds)
+	}
+	// And the new pass is reused from then on.
+	if _, lists := tick([]inventory.HelmRelease{release("4.10.0", "1.10.0", 2)}); lists != 0 {
+		t.Errorf("tick 4: %d lists, want the new pass reused", lists)
+	}
+	// A release with no appVersion takes its version from the pods, so a
+	// revision it was rolled to forces a pass too.
+	if _, lists := tick([]inventory.HelmRelease{release("4.10.0", "1.10.0", 3)}); lists != 1 {
+		t.Errorf("a new revision: %d lists, want a full pass", lists)
+	}
+}
+
+// A Helm release of no add-on, however often it is upgraded, does not cost a
+// pod pass: only the releases and charts the registry names count.
+func TestPodPassIgnoresReleasesOfNoAddOn(t *testing.T) {
+	cs, _ := podFixture()
+	srv := servePods(cs, appPod("nginx-1", "registry.k8s.io/ingress-nginx/controller:v1.9.4"))
+	addons := loadKB(t).AddOns
+	pass, clk := newPassCache(10, time.Hour)
+	for rev := 1; rev <= 4; rev++ {
+		srv.calls = nil
+		inv := inventory.Inventory{
+			HelmReleases: []inventory.HelmRelease{{Name: "shop", Namespace: "shop", ChartName: "shop", ChartVersion: "1." + strconv.Itoa(rev) + ".0", AppVersion: "1." + strconv.Itoa(rev) + ".0", Status: "deployed", Revision: rev}},
+			GitOpsCharts: []inventory.GitOpsChart{{Tool: inventory.GitOpsArgoCD, Name: "shop", Chart: "shop", Version: "1." + strconv.Itoa(rev) + ".0"}},
+			Capabilities: map[inventory.Capability]inventory.CapabilityStatus{},
+		}
+		if err := collectAddOnsFrom(context.Background(), cs, addons, &inv, &kubeSystemPods{read: true}, pass); err != nil {
+			t.Fatal(err)
+		}
+		if want := map[bool]int{true: 1, false: 0}[rev == 1]; srv.allNamespaceLists() != want {
+			t.Errorf("revision %d: %d lists, want %d", rev, srv.allNamespaceLists(), want)
+		}
+		clk.t = clk.t.Add(10 * time.Minute)
+	}
+}
+
+// A GitOps chart reference that changed, or appeared, takes the next
+// collection to a full pass: its version is evidence beside the pods'.
+func TestPodPassGitOpsChartChangeForcesAFullPass(t *testing.T) {
+	cs, _ := podFixture()
+	srv := servePods(cs, appPod("nginx-1", "registry.k8s.io/ingress-nginx/controller:v1.9.4"))
+	addons := loadKB(t).AddOns
+	pass, clk := newPassCache(10, time.Hour)
+	app := func(version string) inventory.GitOpsChart {
+		return inventory.GitOpsChart{Tool: inventory.GitOpsArgoCD, Name: "ingress", Namespace: "argocd", Target: "ingress-nginx", Chart: "ingress-nginx", Version: version}
+	}
+	for i, tc := range []struct {
+		charts []inventory.GitOpsChart
+		lists  int
+	}{
+		{nil, 1},
+		{nil, 0},
+		{[]inventory.GitOpsChart{app("4.8.3")}, 1}, // appeared
+		{[]inventory.GitOpsChart{app("4.8.3")}, 0},
+		{[]inventory.GitOpsChart{app("4.10.0")}, 1}, // bumped
+		{nil, 1}, // gone
+		{nil, 0},
+	} {
+		srv.calls = nil
+		inv := inventory.Inventory{GitOpsCharts: tc.charts, Capabilities: map[inventory.Capability]inventory.CapabilityStatus{}}
+		if err := collectAddOnsFrom(context.Background(), cs, addons, &inv, &kubeSystemPods{read: true}, pass); err != nil {
+			t.Fatal(err)
+		}
+		if srv.allNamespaceLists() != tc.lists {
+			t.Errorf("step %d: %d lists, want %d", i, srv.allNamespaceLists(), tc.lists)
+		}
+		clk.t = clk.t.Add(10 * time.Minute)
 	}
 }
