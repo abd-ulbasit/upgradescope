@@ -343,15 +343,32 @@ jobs:
       - run: make web-test
 
   # Chart: lint --strict, the values render matrix, kubeconform on every
-  # render at 1.29 and 1.37, and hack/test-chart.sh's contract assertions.
+  # render at 1.29 and 1.37, and hack/test-chart.sh's contract assertions,
+  # which run Go tests (deploy/chart, and tools/promrule-test, which
+  # evaluates the PrometheusRule expressions with the Prometheus PromQL
+  # engine). So the job has the go.mod toolchain and the Go caches, keyed on
+  # the main go.sum and every tools/ one, like the test job.
+  # timeout-minutes is 15, up from 10. Estimate: a cold run (a cache miss, or
+  # the release path, which restores no cache) downloads 94 modules (~800 MB,
+  # ~100 s on the dev laptop's network) and compiles 781 packages (32 s wall,
+  # 120 s CPU on 8 cores), so ~2 to 4 min of Go work on a 4-vCPU hosted
+  # runner, on top of the job's lint, render matrix and kubeconform, whose
+  # time was not measured. A warm run is the 31 s measured with warm caches.
   helm:
     if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: ${{ env.RESTORE_CACHES == 'true' }} # no cache on the release path (IR-22)
+          cache-dependency-path: |
+            go.sum
+            tools/*/go.sum
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
         with:
           version: v4.3.0 # keep in step with the kube job and release.yml HELM_VERSION

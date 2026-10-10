@@ -177,7 +177,7 @@ Go runtime and process metrics (`go_*`, `process_*`) are included.
 | `upgradescope_cluster_blockers` | gauge | `cluster`, `target` | blocker findings |
 | `upgradescope_cluster_last_push_age_seconds` | gauge | `cluster` | seconds since the cluster's agent last pushed (duplicates count) |
 | `upgradescope_cluster_stale` | gauge | `cluster` | 1 when the agent has not pushed within `serve --stale-after` (default 2h), else 0 |
-| `upgradescope_retention_prune_failures_total` | counter | `store` | retention prunes that failed, by `sqlite` or `postgres`; at 0 from startup |
+| `upgradescope_retention_prune_failures_total` | counter | `store` | retention prunes that failed, by `sqlite` or `postgres`; at 0 from startup (the process's own count: a restart resets it) |
 | `upgradescope_retention_last_success_timestamp_seconds` | gauge | | Unix time of the last prune that completed; absent until the first one does |
 | `upgradescope_retention_rows_deleted_total` | counter | `table` | rows retention deleted, `snapshots` or `evaluations`, including those a failed prune had already committed; at 0 from startup |
 
@@ -190,11 +190,26 @@ then, so a prune that fails partway adds one to the failure counter, leaves
 the gauge at the last complete prune and keeps the rows its committed
 batches deleted (`upgradescope_retention_rows_deleted_total` counts them);
 the next run resumes there. A prune cut short by the server stopping is
-neither. The chart's `UpgradescopeRetentionStale` alert fires when the
-gauge is more than 2 days old, absent for more than 2 days after the
-server started, or absent after a prune failed in the last 2 days (a
-server that restarts more often than every 2 days, with a startup prune
-that keeps failing). Retention failing never fails `/readyz`: a server that
+neither. The chart's `UpgradescopeRetentionStale` alert has three arms,
+for three cadences of restart: it fires when the gauge is more than 2 days
+old (a server that has stayed up more than 2 days since a prune last
+completed, whose daily prunes fail); when the gauge is absent and the
+oldest server process is more than 2 days old (a first prune that never
+completes); or when the gauge is absent and `upgradescope_retention_prune_failures_total`
+is above 0 (a prune failed in a process that has completed none, however
+young it is: a server that restarts every few hours with a startup prune
+that keeps failing). The third arm reads the counter's value, not its
+increase, because the startup prune fails before Prometheus first scrapes
+the new process: the series is first seen at 1 and `increase()` over it is
+0. A restart resets both series, so a process that has not failed, or a
+restart after a prune succeeded, stays quiet. One transient startup failure
+(a locked database, say) keeps arm 3 firing until the next prune completes,
+up to the daily retention interval, because the server does not retry
+sooner. Not covered: a process that
+restarts before it is scraped even once (the pod's restarts are the
+signal), and, with several Postgres replicas, a replica that fails while
+another has completed a prune, since `absent()` looks at the whole job
+(the first arm still judges each replica's own gauge). Retention failing never fails `/readyz`: a server that
 cannot prune still ingests and serves, and restarting it would not help,
 so the metric and the log line (`server: retention: ... failed`) are the
 signals ([Retention and backup](operations/retention-and-backup.md#when-the-prune-fails)).
