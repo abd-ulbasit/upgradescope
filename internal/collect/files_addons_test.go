@@ -191,3 +191,42 @@ func TestCollectFilesImageWithoutVersionTakesLabelVersion(t *testing.T) {
 		})
 	}
 }
+
+// A Flux component image on a release line the registry does not map yet
+// gives no version, whatever its pod's version label says (a component
+// image's line is never guessed from a label), and a digest-only image
+// whose label names a different add-on gives none either. The no-data
+// detail must not claim the image has no version tag when it has one
+// (#301): it says no version was read and names both reasons.
+func TestCollectFilesUnreadableImageVersionDetailIsTrue(t *testing.T) {
+	k, err := kb.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	const digest = "ghcr.io/fluxcd/source-controller@sha256:3b1ab0b56f1c2f1f9ba0c6a4b9b4b1b4f0b9d2b2b6c9e2e1d0c1b2a3f4e5d6c7"
+	for name, image := range map[string]string{"tagged on an unmapped line": "ghcr.io/fluxcd/source-controller:v1.99.0", "digest only": digest} {
+		t.Run(name, func(t *testing.T) {
+			dir := writeTree(t, map[string]string{"sc.yaml": "apiVersion: apps/v1\nkind: Deployment\nmetadata: {name: source-controller, namespace: flux-system}\nspec:\n  selector: {matchLabels: {app: sc}}\n  template:\n    metadata: {labels: {app: sc, app.kubernetes.io/name: flux, app.kubernetes.io/version: v2.7.0}}\n    spec:\n      containers:\n      - {name: c, image: \"" + image + "\"}\n"})
+			inv, _, err := CollectFiles(dir, k)
+			if err != nil {
+				t.Fatal(err)
+			}
+			rep := engine.Evaluate(inv, k, inventory.Version{Major: 1, Minor: 33}, time.Date(2026, 10, 10, 0, 0, 0, 0, time.UTC))
+			i := slices.IndexFunc(rep.Findings, func(f engine.Finding) bool { return f.Key == "addon-no-data/flux" })
+			if i < 0 {
+				t.Fatalf("addons %+v, findings %+v; want an addon-no-data finding for flux", inv.AddOns, rep.Findings)
+			}
+			d := rep.Findings[i].Detail
+			for _, want := range []string{"No version was read from the image", "a component image whose release line the registry does not map yet"} {
+				if !strings.Contains(d, want) {
+					t.Errorf("detail %q lacks %q", d, want)
+				}
+			}
+			for _, bad := range []string{"The image has no version tag", "was not consulted", "label was unreadable"} {
+				if strings.Contains(d, bad) {
+					t.Errorf("detail %q claims %q", d, bad)
+				}
+			}
+		})
+	}
+}

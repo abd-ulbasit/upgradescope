@@ -958,12 +958,18 @@ type addOnSubject struct {
 // noVersionReason is the sentence that ends an addon-no-data detail for
 // installs whose version is unknown: what the evidence each was found by
 // lacked, as the detector read it (#301), and not the sources it never
-// consulted. An install found from an image has no version tag, and no
-// app.kubernetes.io/version label of a pod running it gives one (collect
-// takes that label's version for an image without a tag); one found from
-// labels alone has no version label it can trust; one found from a Helm
-// release records no appVersion, and no pod image tag or label gave one.
-func noVersionReason(ins []addOnInstall) string {
+// consulted. An install found from an image has no version read from it.
+// The inventory cannot tell why, so the sentence covers both: the image
+// has no version in its tag (a digest, ":latest") and no
+// app.kubernetes.io/version label of a pod running it names this add-on
+// (collect takes that label's version for such an image), or it is a
+// component image whose release line the registry does not map yet (the
+// label is never consulted for those). One found from labels alone has no
+// version label it can trust; one found from a Helm release records no
+// appVersion, and no pod image tag or label gave one. node marks the
+// subject of node container runtimes; a source the engine does not know
+// gets a neutral sentence.
+func noVersionReason(ins []addOnInstall, node bool) string {
 	var parts []string
 	add := func(s string) {
 		if !slices.Contains(parts, s) {
@@ -973,19 +979,21 @@ func noVersionReason(ins []addOnInstall) string {
 	for _, in := range ins {
 		via, _, _ := strings.Cut(in.via, ",")
 		via, _, _ = strings.Cut(via, " ")
-		switch via {
-		case "image":
-			add("The image has no version tag, and no app.kubernetes.io/version label of a pod running it gives a version for this add-on.")
-		case "labels":
+		switch {
+		case node:
+			add("No version could be read from the node's container runtime version.")
+		case via == "image":
+			add("No version was read from the image: either its tag names no version (a digest, :latest) and no app.kubernetes.io/version label of a pod running it names this add-on, or it is a component image whose release line the registry does not map yet.")
+		case via == "labels":
 			add("The pod labels name it, but no app.kubernetes.io/version label gives a version that applies to it.")
-		case "chart":
+		case via == "chart":
 			add("The Helm release records no appVersion, and no pod image tag or app.kubernetes.io/version label gives a version.")
-		case "gitops":
+		case via == "gitops":
 			add("The GitOps chart reference gives no app version, and no running pod's image tag or app.kubernetes.io/version label does.")
-		case "ingressclass":
+		case via == "ingressclass":
 			add("An IngressClass names it but carries no version.")
 		default:
-			add("No version could be read from the node's container runtime version.")
+			add("No version was recorded for this add-on.")
 		}
 	}
 	return " " + strings.Join(parts, " ") + " Its end of life and Kubernetes compatibility were not assessed."
@@ -1107,7 +1115,7 @@ func evalAddOn(a registry.AddOn, all addOnSubject, groups []addOnSubject, target
 		if !productDated && !inCycle && !below {
 			ver, reason := s.version, " The registry has no release-line data for this version, so its end of life was not assessed."
 			if ver == "" {
-				ver, reason = "(version unknown)", noVersionReason(s.installs)
+				ver, reason = "(version unknown)", noVersionReason(s.installs, s.node)
 			}
 			f := finding(s, CatAddOnNoData, SevInfo, string(CatAddOnNoData)+"/"+a.ID,
 				fmt.Sprintf("no lifecycle data for %s %s", a.DisplayName, ver), s.located+reason, a.Support.Citations)

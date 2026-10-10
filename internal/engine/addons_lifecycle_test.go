@@ -159,7 +159,7 @@ func TestEvalAddOnsCycleCompatDetail(t *testing.T) {
 
 func TestEvalAddOnsNoDataDetail(t *testing.T) {
 	fs := evalAddOns(addOnAt("istio", ""), lifecycleKB(), inventory.Version{Major: 1, Minor: 34}, day("2026-10-02"))
-	want := "Detected Istio version (unknown) via image in namespace(s): istio-system. The image has no version tag, and no app.kubernetes.io/version label of a pod running it gives a version for this add-on. Its end of life and Kubernetes compatibility were not assessed."
+	want := "Detected Istio version (unknown) via image in namespace(s): istio-system. No version was read from the image: either its tag names no version (a digest, :latest) and no app.kubernetes.io/version label of a pod running it names this add-on, or it is a component image whose release line the registry does not map yet. Its end of life and Kubernetes compatibility were not assessed."
 	if len(fs) != 1 || fs[0].Detail != want || fs[0].Severity != SevInfo {
 		t.Fatalf("got %+v, want one info with detail %q", fs, want)
 	}
@@ -170,6 +170,10 @@ func TestEvalAddOnsNoDataDetail(t *testing.T) {
 		{"chart", "1.14.5", "The Helm release records no appVersion, and no pod image tag or app.kubernetes.io/version label gives a version."},
 		{"gitops", "", "The GitOps chart reference gives no app version, and no running pod's image tag or app.kubernetes.io/version label does."},
 		{"ingressclass", "", "An IngressClass names it but carries no version."},
+		// A hand-written or third-party inventory may carry a source the
+		// engine does not know, or none: no node-runtime sentence for it.
+		{"", "", "No version was recorded for this add-on."},
+		{"somethingelse", "", "No version was recorded for this add-on."},
 	} {
 		inv := inventory.Inventory{AddOns: []inventory.AddOnInstance{{ID: "istio", Namespaces: []string{"istio-system"}, Source: tc.source, ChartVersion: tc.chart}}}
 		fs = evalAddOns(inv, lifecycleKB(), inventory.Version{Major: 1, Minor: 34}, day("2026-10-02"))

@@ -801,12 +801,16 @@ func TestMatchAddOnsImageWithoutVersionTakesLabelVersion(t *testing.T) {
 		})
 	}
 
-	// Two pods on one digest with different version labels: the older.
-	var ev addOnEvidence
-	ev.addPod("cert-manager", cm("v1.16.0"), []string{digest})
-	ev.addPod("cert-manager", cm("v1.12.3"), []string{digest})
-	if got, _ := matchAddOns(ev, addons); !reflect.DeepEqual(got, inst("1.12.3")) {
-		t.Errorf("one digest, two version labels: got %+v, want the older 1.12.3", got)
+	// Two pods on one digest with different version labels: the older, in
+	// either pod order (first-wins and last-wins both fail one of them).
+	for _, order := range [][]string{{"v1.16.0", "v1.12.3"}, {"v1.12.3", "v1.16.0"}} {
+		var ev addOnEvidence
+		for _, v := range order {
+			ev.addPod("cert-manager", cm(v), []string{digest})
+		}
+		if got, _ := matchAddOns(ev, addons); !reflect.DeepEqual(got, inst("1.12.3")) {
+			t.Errorf("one digest, version labels %v: got %+v, want the older 1.12.3", order, got)
+		}
 	}
 
 	// A component image maps its tag's line to a product line; an unmapped

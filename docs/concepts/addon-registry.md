@@ -111,6 +111,16 @@ At the installed version, independent of the target unless noted:
   registry is behind upstream, or a product without release lines), or no
   version readable → `addon-no-data` info, never a blocker.
 
+  The info's detail says what was missing for the evidence the install was
+  found by. For an image it says no version was read from it, because the
+  inventory cannot tell a tag that names no version (a digest, `:latest`)
+  with no usable pod label from a component image whose release line the
+  registry does not map yet, and the sentence covers both. A server that
+  evaluates an inventory from an older agent (v0.1.x, v0.2.0-rc.x), which
+  never took the pod label for an image without a version, words it the
+  same way though that agent did not consult the label: a known limitation
+  of the wording, not of the verdict.
+
 Each install (one per namespace, two where a Helm release and images on
 another release line share one, or one per node for a runtime) is judged
 on its own, grouped by release line: with Istio 1.28 in one team's
