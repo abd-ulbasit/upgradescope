@@ -16,6 +16,13 @@ import (
 	"github.com/abd-ulbasit/upgradescope/internal/server/store"
 )
 
+// testClientHosts is the Host allow-list of a test server driven in memory:
+// httptest.NewRequest names example.com, and a server with no read token is
+// open, so it answers anonymous reads only for names it knows
+// (hostcheck.go). The Host check itself stays on: a test of the guard sets
+// AllowedHosts itself.
+var testClientHosts = []string{"example.com"}
+
 // newTestServer builds a Server on a fake store with a pinned clock.
 func newTestServer(t *testing.T, st *fakeStore, opts ...func(*Config)) *Server {
 	t.Helper()
@@ -24,12 +31,9 @@ func newTestServer(t *testing.T, st *fakeStore, opts ...func(*Config)) *Server {
 		o(&cfg)
 	}
 	if len(cfg.AllowedHosts) == 0 {
-		// A server with no read token is open, and an open one answers
-		// anonymous reads only for names it knows (hostcheck.go).
-		// httptest.NewRequest names example.com: tests that drive the
-		// handler in memory are clients told that name. A test of the
-		// guard sets AllowedHosts itself.
-		cfg.AllowedHosts = []string{"example.com"}
+		// Tests that drive the handler in memory are clients told the
+		// name httptest.NewRequest sends (testClientHosts).
+		cfg.AllowedHosts = testClientHosts
 	}
 	s, err := New(cfg)
 	if err != nil {

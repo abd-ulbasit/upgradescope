@@ -55,7 +55,7 @@ func pushedFleet(t *testing.T, n, nameLen int) *Server {
 		t.Fatalf("open sqlite store: %v", err)
 	}
 	t.Cleanup(func() { _ = st.Close() })
-	s, err := New(Config{Store: st, KB: testKB(), IngestToken: "ingest-tok", ExtraTargets: []string{"1.36", "1.37"}})
+	s, err := New(Config{Store: st, KB: testKB(), IngestToken: "ingest-tok", AllowedHosts: testClientHosts, ExtraTargets: []string{"1.36", "1.37"}})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
