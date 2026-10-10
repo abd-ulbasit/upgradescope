@@ -105,8 +105,11 @@ Quality reports (`--output junit|gitlab-codequality`): see
 
 ```sh
 helm install upgradescope deploy/chart -n upgradescope --create-namespace
-kubectl get ucr        # NAME  TARGET  SCORE  READY  LASTEVALUATED  AGE
+kubectl get ucr        # NAME  TARGET  SCORE  READY  BLOCKERS  LASTEVALUATED  AGE
 ```
+
+The columns and the `Ready` condition read the first target; with several
+targets, the `AllTargetsReady` condition covers all of them.
 
 The agent re-evaluates every 10 minutes and writes a `ClusterReadiness`
 object with a standard `Ready` condition, for `kubectl wait`, alerts,
