@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"math"
 	"mime"
 	"net/http"
 	"path"
@@ -620,7 +621,10 @@ func usageKeys(rep engine.Report) map[string]bool {
 // it removes. Identity is the exact namespace and name, so a rendered
 // manifest without a namespace (applied to kubectl's default) does not
 // replace its namespaced twin in the cluster and is counted beside it:
-// Count and Namespaces overstate by one.
+// Count and Namespaces overstate by one. Counts are summed with satAdd, so
+// one at math.MaxInt stays there and the cluster's own finding is not lost
+// to a wrapped, negative sum (#361); the decrement for a replaced object
+// stops at zero.
 func upsertUsage(cluster, manifests []inventory.APIUsage) []inventory.APIUsage {
 	type gvk struct{ group, version, kind string }
 	out := make([]inventory.APIUsage, 0, len(cluster)+len(manifests))
@@ -644,7 +648,7 @@ func upsertUsage(cluster, manifests []inventory.APIUsage) []inventory.APIUsage {
 		var kept []inventory.ObjectRef
 		for _, o := range u.Objects {
 			if o.Name != "" && slices.ContainsFunc(m.Objects, func(n inventory.ObjectRef) bool { return n.Name == o.Name && n.Namespace == o.Namespace }) {
-				u.Count--
+				u.Count = max(0, u.Count-1)
 				if u.Namespaces[o.Namespace]--; u.Namespaces[o.Namespace] <= 0 {
 					delete(u.Namespaces, o.Namespace)
 				}
@@ -652,14 +656,25 @@ func upsertUsage(cluster, manifests []inventory.APIUsage) []inventory.APIUsage {
 			}
 			kept = append(kept, o)
 		}
-		u.Count += m.Count
+		u.Count = satAdd(u.Count, m.Count)
 		for ns, n := range m.Namespaces {
-			u.Namespaces[ns] += n
+			u.Namespaces[ns] = satAdd(u.Namespaces[ns], n)
 		}
 		u.Objects = append(kept, m.Objects...)
-		u.ObjectsOmitted += m.ObjectsOmitted
+		u.ObjectsOmitted = satAdd(u.ObjectsOmitted, m.ObjectsOmitted)
 	}
 	return out
+}
+
+// satAdd is a+b clamped to [0, math.MaxInt]: the gate's counts are never
+// negative, and a sum that would pass math.MaxInt stays there instead of
+// wrapping negative, where the engine would skip the row (#361).
+func satAdd(a, b int) int {
+	a, b = max(a, 0), max(b, 0)
+	if a > math.MaxInt-b {
+		return math.MaxInt
+	}
+	return a + b
 }
 
 // capObjects is rep with each finding's and suppressed finding's objects
