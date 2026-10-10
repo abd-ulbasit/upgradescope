@@ -304,7 +304,7 @@ gets 401, and an anonymous request must name a host the server answers for
 		"(it is open only while no read credential exists: --read-token, a read token minted in the database, or a trusted team header; a lost or restored database reopens it, and a request that presents a bearer nothing knows gets 401); "+
 		"anonymous reads must name a host the server answers for (see --allowed-host); excludes --require-read-credential")
 	cmd.Flags().BoolVar(&opts.requireReadCredential, "require-read-credential", false, "never open the read API: a read with no credential, or with a bearer nothing knows, gets 401 even when the database holds no read token "+
-		"(a lost or restored database cannot reopen it); serve warns at startup while no credential exists yet, and mint the first with: upgradescope tokens create --read --teams '*' (same --db or --db-url), or set --read-token; excludes --allow-anonymous-read")
+		"(a lost or restored database cannot reopen it); serve warns at startup while no credential exists yet, and mint the first with: upgradescope tokens create --read --teams '*' (same --db or --db-url); or set --read-token; excludes --allow-anonymous-read")
 	cmd.Flags().StringVar(&opts.targets, "targets", "", "extra target versions evaluated on every snapshot, CSV, e.g. 1.37,1.38; at most 4 distinct minors")
 	cmd.Flags().StringVar(&opts.trustTeamHeader, "trust-team-header", "",
 		"DANGEROUS unless the proxy strips client-supplied copies: scope a read from a --trusted-proxy-cidr peer to the teams this request header lists, comma separated and each percent-encoded where it must be "+
