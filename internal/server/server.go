@@ -306,6 +306,14 @@ type Server struct {
 
 	readTokensMinted atomic.Bool // a read token exists in the store: reads need a credential (readOpen)
 
+	// openSeen is the last "no read token in the store" answer, kept for
+	// readOpenWindow (readOpen). openClock is its clock: time.Now, whose
+	// readings are monotonic, and never s.now, which tests pin to a date.
+	openMu    sync.Mutex
+	openSeen  bool
+	openAt    time.Time
+	openClock func() time.Time
+
 	hostGuard    atomic.Bool // requests must name a host this server answers for (hostcheck.go)
 	allowedHosts []string    // cfg.AllowedHosts and the Listen host, normalized
 	hostRefusals refusalLog  // rate-limits the log of the guard's 421s
@@ -340,6 +348,7 @@ func New(cfg Config) (*Server, error) {
 		cfg:              cfg,
 		tokens:           tokens,
 		now:              time.Now,
+		openClock:        time.Now,
 		listen:           net.Listen,
 		mux:              http.NewServeMux(),
 		gateSlots:        make(chan struct{}, maxConcurrentGates),

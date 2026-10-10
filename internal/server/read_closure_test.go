@@ -8,7 +8,10 @@ import (
 	"net/http/httptest"
 	"net/netip"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/abd-ulbasit/upgradescope/internal/server/store"
 )
@@ -108,10 +111,13 @@ func TestRequireReadCredentialSurvivesAStoreSwap(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			st := newFakeStore()
 			s := newTestServer(t, st, func(c *Config) { c.Listen = ":0"; tc.cfg(c) })
+			clock := &fakeClock{t: time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC)}
+			s.openClock = clock.now
 			startServer(t, s)
 			_, port, _ := net.SplitHostPort(s.Addr())
 			addr, host := net.JoinHostPort("127.0.0.1", port), "localhost:"+port
 			mintReadToken(t, st, "minted-tok", store.ReadScopeFleet)
+			clock.set(clock.now().Add(readOpenWindow)) // an open answer kept from startup lapses
 			if code, body := getWith(t, addr, "/api/v1/clusters", host, "Bearer minted-tok"); code != http.StatusOK {
 				t.Fatalf("minted token = %d %s, want 200", code, body)
 			}
@@ -119,7 +125,7 @@ func TestRequireReadCredentialSurvivesAStoreSwap(t *testing.T) {
 				t.Fatalf("anonymous read with a token minted = %d, want 401", code)
 			}
 
-			s.cfg.Store = newFakeStore() // the database is lost: an empty one
+			st.wipe() // the database is lost: an empty one, under the store's own lock
 			if code, body := getWith(t, addr, "/api/v1/clusters", host, ""); code != tc.afterSwap {
 				t.Errorf("anonymous read after the swap = %d %s, want %d", code, body, tc.afterSwap)
 			}
@@ -417,6 +423,8 @@ func TestWildcardServerWithAReadTokenAnswersAnyHost(t *testing.T) {
 func TestOpenReadAPIHostGuardFollowsTheStore(t *testing.T) {
 	st := newFakeStore()
 	s := newTestServer(t, st, func(c *Config) { c.Listen = ":0"; c.AllowAnonymousRead = true })
+	clock := &fakeClock{t: time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC)}
+	s.openClock = clock.now
 	startServer(t, s)
 	_, port, _ := net.SplitHostPort(s.Addr())
 	addr := net.JoinHostPort("127.0.0.1", port)
@@ -426,7 +434,8 @@ func TestOpenReadAPIHostGuardFollowsTheStore(t *testing.T) {
 	}
 
 	// The store cannot say whether the API is open: assume it is.
-	st.errs["ListReadTokens"] = errors.New("store down")
+	st.setErr("ListReadTokens", errors.New("store down"))
+	clock.set(clock.now().Add(readOpenWindow)) // the kept answer lapses: the store is asked, and fails
 	if code, _ := getWith(t, addr, "/api/v1/clusters", foreign, ""); code != http.StatusMisdirectedRequest {
 		t.Errorf("store down, foreign Host = %d, want 421 (guard on when unsure)", code)
 	}
@@ -434,7 +443,7 @@ func TestOpenReadAPIHostGuardFollowsTheStore(t *testing.T) {
 	if code, _ := getWith(t, addr, "/healthz", "localhost:"+port, ""); code != http.StatusOK {
 		t.Errorf("store down, /healthz as localhost = %d, want 200", code)
 	}
-	delete(st.errs, "ListReadTokens")
+	st.setErr("ListReadTokens", nil)
 
 	mintReadToken(t, st, "minted-tok", store.ReadScopeFleet)
 	if code, _ := getWith(t, addr, "/api/v1/clusters", foreign, ""); code != http.StatusUnauthorized {
@@ -475,5 +484,133 @@ func TestLoopbackBindKeepsItsGuardWithAReadToken(t *testing.T) {
 	_, port, _ := net.SplitHostPort(s.Addr())
 	if code, _ := getWith(t, net.JoinHostPort("127.0.0.1", port), "/api/v1/clusters", "attacker.example", "Bearer r"); code != http.StatusMisdirectedRequest {
 		t.Errorf("loopback bind, valid token, foreign Host = %d, want 421", code)
+	}
+}
+
+// anonymousGet serves an anonymous GET of path, naming host, through h.
+func anonymousGet(h http.Handler, path, host string) int {
+	req := httptest.NewRequest(http.MethodGet, path, nil)
+	req.Host = host
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	return rec.Code
+}
+
+// On an open read API every anonymous request whose Host is not on the
+// allow-list asks whether the API is open, on every path ("/", assets,
+// /healthz): a store query each. The answer is kept for readOpenWindow, so a
+// flood of them costs one query per window, and a freshly minted first read
+// token closes the API within that window, not at once (auth.md says so).
+func TestOpenReadAPIQueriesTheStoreOncePerWindow(t *testing.T) {
+	st := newFakeStore()
+	s := newTestServer(t, st, func(c *Config) { c.Listen = ":0"; c.AllowAnonymousRead = true })
+	clock := &fakeClock{t: time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC)}
+	s.openClock = clock.now
+	h := s.Handler()
+
+	for _, path := range []string{"/", "/api/v1/clusters", "/healthz", "/readyz", "/assets/app.js"} {
+		for range 20 {
+			if code := anonymousGet(h, path, "evil.example"); code != http.StatusMisdirectedRequest {
+				t.Fatalf("open API, anonymous %s as evil.example = %d, want 421", path, code)
+			}
+		}
+	}
+	if n := st.readTokenListings(); n != 1 {
+		t.Fatalf("100 anonymous requests made %d ListReadTokens queries, want 1 (one per window)", n)
+	}
+
+	// Within the window a token minted by another process (tokens create)
+	// is not seen yet: the API stays open for at most readOpenWindow.
+	mintReadToken(t, st, "minted-tok", store.ReadScopeFleet)
+	clock.set(clock.now().Add(readOpenWindow - time.Millisecond))
+	if code := anonymousGet(h, "/api/v1/clusters", "evil.example"); code != http.StatusMisdirectedRequest {
+		t.Errorf("inside the window after a mint = %d, want 421 (the open answer is still kept)", code)
+	}
+	if n := st.readTokenListings(); n != 1 {
+		t.Errorf("queries inside the window = %d, want still 1", n)
+	}
+
+	// After it the API is asked again, found closed, and closes: 401, not
+	// 421 (the guard is for an open API only), and never asked again.
+	clock.set(clock.now().Add(time.Millisecond))
+	if code := anonymousGet(h, "/api/v1/clusters", "evil.example"); code != http.StatusUnauthorized {
+		t.Errorf("after the window = %d, want 401 (a read token exists: closed)", code)
+	}
+	if n := st.readTokenListings(); n != 2 {
+		t.Errorf("queries after the window = %d, want 2", n)
+	}
+	clock.set(clock.now().Add(time.Hour))
+	for range 10 {
+		if code := anonymousGet(h, "/api/v1/clusters", "evil.example"); code != http.StatusUnauthorized {
+			t.Fatalf("closed API, anonymous read = %d, want 401", code)
+		}
+	}
+	if n := st.readTokenListings(); n != 2 {
+		t.Errorf("a closed API asked the store again: %d queries, want 2 (a minted token is remembered for good)", n)
+	}
+}
+
+// An open API whose store keeps answering "no read token" is asked once a
+// window for as long as it stays open, and a failing store is not cached:
+// the next request asks again.
+func TestOpenReadAPIWindowRenewsAndDoesNotCacheErrors(t *testing.T) {
+	st := newFakeStore()
+	s := newTestServer(t, st, func(c *Config) { c.Listen = ":0"; c.AllowAnonymousRead = true })
+	clock := &fakeClock{t: time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC)}
+	s.openClock = clock.now
+	h := s.Handler()
+	for i := 1; i <= 3; i++ {
+		anonymousGet(h, "/api/v1/clusters", "evil.example")
+		anonymousGet(h, "/api/v1/clusters", "evil.example")
+		if n := st.readTokenListings(); n != i {
+			t.Fatalf("window %d: %d queries, want %d", i, n, i)
+		}
+		clock.set(clock.now().Add(readOpenWindow))
+	}
+
+	st.setErr("ListReadTokens", errors.New("store down"))
+	before := st.readTokenListings()
+	for range 3 {
+		if code := anonymousGet(h, "/api/v1/clusters", "evil.example"); code != http.StatusMisdirectedRequest {
+			t.Fatalf("store down = %d, want 421", code)
+		}
+	}
+	if n := st.readTokenListings() - before; n != 3 {
+		t.Errorf("3 requests against a failing store made %d queries, want 3 (an error is not cached)", n)
+	}
+}
+
+// Concurrent anonymous requests at the start of a window share one query:
+// while the first is still asking, the others wait for its answer instead of
+// asking too (a slow store would otherwise be asked once per request).
+func TestOpenReadAPIConcurrentRequestsShareOneQuery(t *testing.T) {
+	st := newFakeStore()
+	var entered atomic.Int32
+	release := make(chan struct{})
+	st.onListReadTokens = func() { entered.Add(1); <-release }
+	s := newTestServer(t, st, func(c *Config) { c.Listen = ":0"; c.AllowAnonymousRead = true })
+	clock := &fakeClock{t: time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC)}
+	s.openClock = clock.now
+	h := s.Handler()
+	var wg sync.WaitGroup
+	for range 32 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			anonymousGet(h, "/api/v1/clusters", "evil.example")
+		}()
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for entered.Load() == 0 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	time.Sleep(100 * time.Millisecond) // let the others reach (and queue behind) the query
+	if n := entered.Load(); n != 1 {
+		t.Errorf("%d queries in flight at once, want 1 (the others wait for its answer)", n)
+	}
+	close(release)
+	wg.Wait()
+	if n := st.readTokenListings(); n != 1 {
+		t.Errorf("32 concurrent anonymous requests made %d queries, want 1", n)
 	}
 }

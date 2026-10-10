@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/abd-ulbasit/upgradescope/internal/engine"
 	"github.com/abd-ulbasit/upgradescope/internal/inventory"
@@ -449,6 +450,16 @@ func equalToken(presented, configured string) bool {
 	return configured != "" && subtle.ConstantTimeCompare([]byte(presented), []byte(configured)) == 1
 }
 
+// readOpenWindow is how long readOpen keeps an answer of "no read token in
+// the store". On an open read API every anonymous request, whatever its path
+// (the dashboard, assets, probes), asks; without this each one cost a store
+// query before any concurrency limit. The price is that a first read token
+// minted by another process (upgradescope tokens create) closes the API
+// within this window, not at once (auth.md says so). Only "open" is kept:
+// "closed" is remembered for good (readTokensMinted), and an error is never
+// kept.
+const readOpenWindow = time.Second
+
 // readOpen reports whether the read API needs no credential: no
 // --read-token, no trusted-proxy header, and no read token ever minted in
 // the store. Rows are never deleted, so once one is minted the answer stays
@@ -457,9 +468,20 @@ func equalToken(presented, configured string) bool {
 // database does: a lost, emptied or restored one has no rows, and the API
 // is open again. Config.RequireReadCredential is the answer that does not
 // depend on the data: with it the API is never open.
+//
+// While it is open the store is asked at most once per readOpenWindow,
+// concurrent askers sharing one query.
 func (s *Server) readOpen(ctx context.Context) (bool, error) {
 	if s.cfg.RequireReadCredential || s.tokens.read() != "" || s.cfg.TrustTeamHeader != "" || s.readTokensMinted.Load() {
 		return false, nil
+	}
+	s.openMu.Lock()
+	defer s.openMu.Unlock()
+	now := s.openClock()
+	if s.openSeen {
+		if age := now.Sub(s.openAt); age >= 0 && age < readOpenWindow {
+			return true, nil
+		}
 	}
 	toks, err := s.cfg.Store.ListReadTokens(ctx)
 	if err != nil {
@@ -467,8 +489,10 @@ func (s *Server) readOpen(ctx context.Context) (bool, error) {
 	}
 	if len(toks) > 0 {
 		s.readTokensMinted.Store(true)
+		s.openSeen = false
 		return false, nil
 	}
+	s.openSeen, s.openAt = true, now
 	return true, nil
 }
 
