@@ -109,9 +109,17 @@ spec:
             - --db=/data/upgradescope.sqlite
             {{- end }}
             {{- if not (include "upgradescope.readTokenEnabled" .) }}
-            # serve refuses an open read API on a non-loopback address
-            # unless told otherwise; see server.readToken in values.yaml.
+            {{- if include "upgradescope.readAnonymous" . }}
+            # server.allowAnonymousRead (or server.ingress.allowAnonymousRead)
+            # opts into an OPEN read API: open while no read credential
+            # exists, and open again when the database is lost or restored.
             - --allow-anonymous-read
+            {{- else }}
+            # No read token: the read API is closed whatever the database
+            # holds. Reads return 401 until one is minted (see the install
+            # notes); a lost or restored database cannot reopen it.
+            - --require-read-credential
+            {{- end }}
             {{- end }}
             {{- with .Values.server.targets }}
             - {{ printf "--targets=%s" (join "," .) | quote }}
@@ -162,6 +170,9 @@ spec:
             {{- end }}
             {{- range .Values.server.extraArgs }}
             {{- $arg := toString . }}
+            {{- if and (or (eq $arg "--allow-anonymous-read") (hasPrefix "--allow-anonymous-read=" $arg)) (not (include "upgradescope.readTokenEnabled" $)) (not (include "upgradescope.readAnonymous" $)) }}
+            {{- fail "server.extraArgs sets --allow-anonymous-read, but with no read token the chart passes --require-read-credential, which serve refuses together with it. Set server.allowAnonymousRead=true to open the read API (and remove the argument), or remove the argument to keep it closed" }}
+            {{- end }}
             {{- range $key := concat $secretFiles.required $secretFiles.optional }}
             {{- $flag := include "upgradescope.serverSecretFlag" $key }}
             {{- if or (eq $arg (printf "--%s" $flag)) (hasPrefix (printf "--%s=" $flag) $arg) }}

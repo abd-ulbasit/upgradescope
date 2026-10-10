@@ -252,6 +252,17 @@ re-reads it, so a rotated token needs no restart.
 {{- if or .Values.server.readToken .Values.server.readTokenFromSecret -}}true{{- end -}}
 {{- end -}}
 
+{{/*
+Does the chart opt into an OPEN read API (no read credential at all)?
+Non-empty string = yes: no read token, and server.allowAnonymousRead or
+server.ingress.allowAnonymousRead is true. With no read token and neither,
+the chart passes --require-read-credential: the read API is closed whatever
+the database holds, and reads are 401 until a read token is minted (#295).
+*/}}
+{{- define "upgradescope.readAnonymous" -}}
+{{- if and (not (include "upgradescope.readTokenEnabled" .)) (or .Values.server.allowAnonymousRead .Values.server.ingress.allowAnonymousRead) -}}true{{- end -}}
+{{- end -}}
+
 {{/* Does the server get an admin token? Non-empty string = yes. */}}
 {{- define "upgradescope.adminTokenEnabled" -}}
 {{- if and .Values.server.adminTokenFromSecret (not .Values.server.existingSecret) -}}

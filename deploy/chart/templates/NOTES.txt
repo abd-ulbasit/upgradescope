@@ -48,9 +48,33 @@ is printed once):
   kubectl -n {{ .Release.Namespace }} exec deploy/{{ include "upgradescope.serverFullname" . }} -- /upgradescope tokens create <cluster> --db /data/upgradescope.sqlite
 {{- end }}
 {{- if not (include "upgradescope.readTokenEnabled" .) }}
+{{- if include "upgradescope.readAnonymous" . }}
 
-NOTE: the read API has no token (server.readToken is empty). Fine behind a
-ClusterIP Service; set one before exposing it.
+WARNING: the read API is OPEN (server.allowAnonymousRead or
+server.ingress.allowAnonymousRead, and no server.readToken): the clusters,
+the dashboard's data and /api/v1/gate need no credential for anyone who can
+reach the server, and a read token minted in the database closes it only
+while that database lasts. A lost or restored database
+{{- if not .Values.server.persistence.enabled }} (server.persistence.enabled=false: every pod restart){{ end }}
+opens it again. Requests for a Host other than the Service's names,
+server.ingress.host, server.allowedHosts, localhost and the pod's address
+get 421. To close it for good, drop the allowAnonymousRead value(s) and mint
+a read token (below).
+{{- else }}
+
+The read API is closed: reads, the dashboard's data and /api/v1/gate return
+401 until you mint a read token (server.readToken is empty and the server
+runs with --require-read-credential, so a lost or restored database cannot
+reopen it). Mint a fleet-wide one; the token is printed once:
+{{- if include "upgradescope.postgres" . }}
+  kubectl -n {{ .Release.Namespace }} exec deploy/{{ include "upgradescope.serverFullname" . }} -- /upgradescope tokens create --read --teams '*'
+{{- else }}
+  kubectl -n {{ .Release.Namespace }} exec deploy/{{ include "upgradescope.serverFullname" . }} -- /upgradescope tokens create --read --teams '*' --db /data/upgradescope.sqlite
+{{- end }}
+A read token is scoped to teams (--teams payments --teams checkout) or '*'
+for the fleet. Minted tokens live in the database: after losing it, mint
+again. Or set server.readToken (a Secret key, rotated without a restart).
+{{- end }}
 {{- end }}
 {{- end }}
 {{- if .Values.agent.enabled }}

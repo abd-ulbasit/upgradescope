@@ -1,8 +1,8 @@
 {{- if and .Values.server.enabled .Values.server.ingress.enabled }}
 {{- $ing := .Values.server.ingress }}
 {{- $host := required "server.ingress.host is required with server.ingress.enabled" $ing.host }}
-{{- if and (not (include "upgradescope.readTokenEnabled" .)) (not $ing.allowAnonymousRead) }}
-{{- fail "server.ingress.enabled would publish an open read API: set server.readToken (or server.existingSecret with readTokenFromSecret), or server.ingress.allowAnonymousRead=true when an auth layer such as oauth2-proxy fronts the Ingress" }}
+{{- if and (include "upgradescope.readAnonymous" .) (not $ing.allowAnonymousRead) }}
+{{- fail "server.ingress.enabled would publish an open read API (server.allowAnonymousRead=true, no read token): set server.ingress.allowAnonymousRead=true too when an auth layer such as oauth2-proxy fronts the Ingress, or drop server.allowAnonymousRead and mint read tokens (the chart then closes the read API: --require-read-credential)" }}
 {{- end }}
 apiVersion: networking.k8s.io/v1
 kind: Ingress
