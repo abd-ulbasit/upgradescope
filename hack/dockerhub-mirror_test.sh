@@ -231,7 +231,7 @@ want_need() {
 }
 want_need "ci.yml" "$ci" "images kube release-check"
 want_need "release.yml" "$release" "goreleaser verify"
-for f in docs kb-refresh pr-lint scorecard vuln-latest-release; do
+for f in docs kb-refresh kb-refresh-build pr-lint scorecard vuln-latest-release; do
   want_need "$f.yml" ".github/workflows/$f.yml" ""
 done
 [ "$(grep -c '^      - uses: \./\.github/actions/dockerhub-mirror' "$ci")" = 3 ] &&

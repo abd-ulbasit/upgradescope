@@ -266,7 +266,7 @@ gen-kb:
 
 # kb-derived rewrites the committed files the embedded KB feeds (the
 # support-lifecycle doc's scan examples, the chart's KB RBAC rules) through
-# the tests that pin them (hack/kb-derived.sh); both kb-refresh.yml
+# the tests that pin them (hack/kb-derived.sh); both kb-refresh-build.yml
 # jobs run it after changing the data (gen-kb, eol-sync), so each PR carries
 # the files its data feeds.
 .PHONY: kb-derived
@@ -365,6 +365,7 @@ hack-test:
 	./hack/release-ci-permissions_test.sh
 	./hack/release-caches_test.sh
 	./hack/kb-refresh-ci_test.sh
+	./hack/kb-refresh-scope_test.sh
 	./hack/kb-derived_test.sh
 	./hack/notices_test.sh
 	./hack/check-changelog_test.sh

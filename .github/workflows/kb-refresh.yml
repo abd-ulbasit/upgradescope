@@ -9,22 +9,38 @@ name: kb-refresh
 #    tidies go.mod and rewrites internal/kb/data/apilifecycle.json;
 #  - registry: sync registry entries against the live endoflife.date API.
 # Each opens (or updates) its own PR; CI on the PR re-validates everything.
-# If any job fails, report-failure opens or comments on the
+# If anything fails, report-failure opens or comments on the
 # "kb-refresh is failing" issue, so a broken refresh is never silent.
 #
-# Each pipeline is two jobs (#244). The first runs the code: `go get` pulls
-# the newest k8s.io modules and whatever versions they require, and
-# `make gen-kb` and `go test` link and run them, with no human review of
-# that code before it executes. So that job holds only contents: read, keeps
-# no token in its checkout (persist-credentials: false), uses no Go cache a
-# later job could restore, and hands over nothing but a patch of the paths
-# its PR may change, as an artifact. The second job (*-pr) holds the write
-# permissions and runs no repository or dependency code: it checks the
-# patch touches only those paths (no renames, no symlinks), applies it with
-# git, and runs create-pull-request and the approval step. Code in the first
-# job could otherwise read the job's token from the checkout or the runner's
-# memory and move the floating v0 tag or replace release assets.
-# hack/kb-refresh-ci_test.sh pins this split.
+# This workflow runs on main (the schedule only ever does) and builds
+# nothing (#244, #273). Three stages:
+#  1. build points the branch bot/kb-refresh-build at main's head, dispatches
+#     kb-refresh-build.yml on it and waits for that run. It is the only place
+#     unreviewed code executes: `go get` pulls the newest k8s.io modules and
+#     whatever versions they require, and `make gen-kb`, `go test` and
+#     `make eol-sync` link and run them, with no human review of that code
+#     before it executes. The run's ref is not main, so a poisoned Actions
+#     cache entry (any job can write one with the runner's token, whatever
+#     its permissions) lands in that branch's cache scope, which main's CI
+#     and a tag's release run never restore (IR-22), and its artifacts are
+#     in that run, not in this one. build holds contents: write (the staging
+#     branch) and actions: write (the dispatch) and runs gh only: no
+#     checkout, no repository or dependency code. The build run's jobs hold
+#     contents: read, keep no token in their checkout
+#     (persist-credentials: false), use no Go cache and hand over nothing but
+#     a patch of the paths their PR may change.
+#  2. The *-pr jobs hold the write permissions and run no repository or
+#     dependency code. Each takes its pipeline's patch from the build run BY
+#     RUN ID (actions/download-artifact with run-id), under that pipeline's own
+#     artifact name, so the two pipelines can neither read nor replace each
+#     other's patch. It checks the patch touches only its PR's paths (no
+#     renames, no symlinks), applies it with git, and runs
+#     create-pull-request and the approval step.
+#  3. report-failure.
+# Code in the unreviewed run could otherwise read a write token from its
+# checkout or the runner's memory and move the floating v0 tag or replace
+# release assets, or write main's cache. hack/kb-refresh-ci_test.sh and
+# hack/kb-refresh-scope_test.sh pin this.
 #
 # How the bot PRs get CI without a PAT or App secret (#11).
 # create-pull-request pushes the bot branch and opens the PR with this run's
@@ -64,57 +80,95 @@ on:
 permissions:
   contents: read
 
+# One refresh at a time: build points one staging branch at one commit.
+concurrency:
+  group: kb-refresh
+  cancel-in-progress: false
+
 jobs:
-  api-lifecycle:
+  # Stage 1: run the unreviewed build on a ref that is not main, and wait.
+  # gh only; no checkout and no repository or dependency code runs here.
+  build:
     runs-on: ubuntu-latest
+    timeout-minutes: 75
     permissions:
-      contents: read
+      contents: write # point bot/kb-refresh-build at main's head, delete it after
+      actions: write # dispatch kb-refresh-build.yml on it; cancel it if it hangs
+    outputs:
+      run-id: ${{ steps.build.outputs.run-id }}
+      api-lifecycle-result: ${{ steps.build.outputs.api-lifecycle-result }}
+      registry-result: ${{ steps.build.outputs.registry-result }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      SHA: ${{ github.sha }}
+      REQUEST: ${{ github.run_id }}-${{ github.run_attempt }}
+      BUILD_BRANCH: bot/kb-refresh-build
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version: '1.26.x'
-          # No Go cache: this job builds modules nobody reviewed, and a cache
-          # it saved could be restored by a later job that holds a token.
-          cache: false
-
-      - name: Bump gen-kb to the latest k8s.io/api release
-        working-directory: tools/gen-kb
+      - name: Run the unreviewed build on the staging branch
+        id: build
         run: |
-          V="$(go list -m -f '{{.Version}}' k8s.io/api@latest)"
-          echo "latest k8s.io/api: $V"
-          # The extra API modules are released in lockstep with k8s.io/api.
-          go get "k8s.io/api@$V" "k8s.io/apimachinery@$V" \
-            "k8s.io/apiextensions-apiserver@$V" "k8s.io/kube-aggregator@$V"
+          set -euo pipefail
+          ref="heads/$BUILD_BRANCH"
+          if gh api "repos/$GH_REPO/git/ref/$ref" >/dev/null 2>&1; then
+            gh api -X PATCH "repos/$GH_REPO/git/refs/$ref" -f sha="$SHA" -F force=true >/dev/null
+          else
+            gh api -X POST "repos/$GH_REPO/git/refs" -f ref="refs/$ref" -f sha="$SHA" >/dev/null
+          fi
+          echo "$BUILD_BRANCH is at $SHA"
+          # The branch holds main's own workflow file at main's own commit;
+          # a workflow_dispatch run takes its workflow from the ref it is
+          # dispatched on, and its cache and artifacts belong to that ref and
+          # run, not to main.
+          gh workflow run kb-refresh-build.yml --ref "$BUILD_BRANCH" -f request="$REQUEST"
+          # The dispatch returns no run id: find the run by the name this
+          # run gave it (run-name) and the commit it must be at.
+          id=''
+          for attempt in $(seq 24); do
+            [ "$attempt" = 1 ] || sleep 5
+            id=$(gh run list --workflow kb-refresh-build.yml --branch "$BUILD_BRANCH" --event workflow_dispatch --limit 50 \
+              --json databaseId,displayTitle,headSha \
+              --jq 'first(.[] | select(.displayTitle == "kb-refresh-build " + env.REQUEST and .headSha == env.SHA)) | .databaseId') || id=''
+            [ -z "$id" ] || break
+          done
+          [ -n "$id" ] || { echo "::error::the dispatched kb-refresh-build run never appeared on $BUILD_BRANCH"; exit 1; }
+          echo "run-id=$id" >>"$GITHUB_OUTPUT"
+          echo "kb-refresh-build run: $GITHUB_SERVER_URL/$GH_REPO/actions/runs/$id"
+          status=''
+          for attempt in $(seq 240); do
+            [ "$attempt" = 1 ] || sleep 15
+            status=$(gh api "repos/$GH_REPO/actions/runs/$id" --jq .status) || { echo "reading run $id failed (attempt $attempt)"; continue; }
+            [ "$status" != completed ] || break
+          done
+          [ "$status" = completed ] || { echo "::error::kb-refresh-build run $id did not finish in an hour"; exit 1; }
+          # One result per pipeline: the PR job of a pipeline that built runs
+          # even when the other one did not.
+          jobs=$(gh api "repos/$GH_REPO/actions/runs/$id/jobs?per_page=100" --jq '.jobs[] | [.name, (.conclusion // "none")] | @tsv')
+          for name in api-lifecycle registry; do
+            result=$(awk -F'\t' -v n="$name" '$1 == n { print $2 }' <<<"$jobs")
+            echo "$name: ${result:-missing}"
+            echo "$name-result=${result:-missing}" >>"$GITHUB_OUTPUT"
+          done
 
-      - name: Regenerate import list, go.mod and dataset
-        run: make gen-kb
-
-      # The files the dataset feeds, in the same commit (hack/kb-derived.sh).
-      - name: Regenerate what the data feeds
-        run: make kb-derived
-
-      - name: Validate the regenerated KB
+      # The staging branch has done its job; a run still going (a timeout
+      # above) is cancelled, not left holding a runner. Fail-soft.
+      - name: Remove the staging branch
+        if: always()
+        continue-on-error: true
+        env:
+          ID: ${{ steps.build.outputs.run-id }}
         run: |
-          go test ./internal/kb/ ./internal/engine/
-          cd tools/gen-kb && go test ./...
-
-      - name: Package the regenerated files
-        run: |
-          git add -A -- tools/gen-kb internal/kb/data deploy/chart/files/kb-rbac-rules.yaml docs/concepts/support-lifecycle.md
-          git diff --cached --binary -- tools/gen-kb internal/kb/data deploy/chart/files/kb-rbac-rules.yaml docs/concepts/support-lifecycle.md >"$RUNNER_TEMP/kb-refresh-api-lifecycle.patch"
-          git diff --cached --stat -- tools/gen-kb internal/kb/data deploy/chart/files/kb-rbac-rules.yaml docs/concepts/support-lifecycle.md
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: kb-refresh-api-lifecycle
-          path: ${{ runner.temp }}/kb-refresh-api-lifecycle.patch
-          if-no-files-found: error
-          retention-days: 1
+          id=$ID
+          if [ -n "$id" ] && [ "$(gh api "repos/$GH_REPO/actions/runs/$id" --jq .status || true)" != completed ]; then
+            gh run cancel "$id" || true
+          fi
+          gh api -X DELETE "repos/$GH_REPO/git/refs/heads/$BUILD_BRANCH" || echo "::warning::could not delete $BUILD_BRANCH"
 
   api-lifecycle-pr:
-    needs: api-lifecycle
+    needs: build
+    # The unreviewed run succeeded for THIS pipeline (the other one failing
+    # does not hold this one back).
+    if: needs.build.result == 'success' && needs.build.outputs.api-lifecycle-result == 'success'
     runs-on: ubuntu-latest
     permissions:
       contents: write # push the bot branch
@@ -126,6 +180,9 @@ jobs:
           persist-credentials: false # create-pull-request authenticates with its own token input
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
+          # The unreviewed run's artifact, by its run id: not a name in this run.
+          run-id: ${{ needs.build.outputs.run-id }}
+          github-token: ${{ github.token }}
           name: kb-refresh-api-lifecycle
           path: ${{ runner.temp }}/kb-refresh-api-lifecycle
       # The patch was made by a job that ran unreviewed code: only the
@@ -241,40 +298,11 @@ jobs:
             manual "No pull_request run for $BRANCH at $HEAD_SHA could be listed within five minutes." "gh api -X POST repos/$GH_REPO/actions/runs/<id>/approve for each"
           fi
 
-  registry:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version: '1.26.x'
-          cache: false # tools/eol-sync has no dependencies; nothing to cache
-
-      - name: Sync registry with endoflife.date
-        run: make eol-sync
-
-      # The doc examples the registry feeds, in the same patch (hack/kb-derived.sh).
-      - name: Regenerate what the data feeds
-        run: make kb-derived
-
-      - name: Package the regenerated files
-        run: |
-          git add -A -- registry/data docs/concepts/support-lifecycle.md
-          git diff --cached --binary -- registry/data docs/concepts/support-lifecycle.md >"$RUNNER_TEMP/kb-refresh-registry.patch"
-          git diff --cached --stat -- registry/data docs/concepts/support-lifecycle.md
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: kb-refresh-registry
-          path: ${{ runner.temp }}/kb-refresh-registry.patch
-          if-no-files-found: error
-          retention-days: 1
-
   registry-pr:
-    needs: registry
+    needs: build
+    # The unreviewed run succeeded for THIS pipeline (the other one failing
+    # does not hold this one back).
+    if: needs.build.result == 'success' && needs.build.outputs.registry-result == 'success'
     runs-on: ubuntu-latest
     permissions:
       contents: write # push the bot branch
@@ -286,6 +314,9 @@ jobs:
           persist-credentials: false # create-pull-request authenticates with its own token input
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
+          # The unreviewed run's artifact, by its run id: not a name in this run.
+          run-id: ${{ needs.build.outputs.run-id }}
+          github-token: ${{ github.token }}
           name: kb-refresh-registry
           path: ${{ runner.temp }}/kb-refresh-registry
       # The patch was made by a job that ran unreviewed code: only the
@@ -397,8 +428,14 @@ jobs:
           fi
 
   report-failure:
-    needs: [api-lifecycle, api-lifecycle-pr, registry, registry-pr]
-    if: failure()
+    needs: [build, api-lifecycle-pr, registry-pr]
+    # Not just a failed job: a pipeline whose unreviewed build failed has its
+    # PR job skipped, which is not a failure to GitHub.
+    if: >-
+      !cancelled() && (needs.build.result != 'success' ||
+      needs.build.outputs.api-lifecycle-result != 'success' ||
+      needs.build.outputs.registry-result != 'success' ||
+      needs.api-lifecycle-pr.result == 'failure' || needs.registry-pr.result == 'failure')
     runs-on: ubuntu-latest
     permissions:
       issues: write
@@ -406,14 +443,16 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
       RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-      API_RESULT: ${{ needs.api-lifecycle.result }} / PR ${{ needs.api-lifecycle-pr.result }}
-      REGISTRY_RESULT: ${{ needs.registry.result }} / PR ${{ needs.registry-pr.result }}
+      BUILD_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ needs.build.outputs.run-id }}
+      BUILD_RESULT: ${{ needs.build.result }}
+      API_RESULT: ${{ needs.build.outputs.api-lifecycle-result }} / PR ${{ needs.api-lifecycle-pr.result }}
+      REGISTRY_RESULT: ${{ needs.build.outputs.registry-result }} / PR ${{ needs.registry-pr.result }}
     steps:
       - name: Open or update the tracking issue
         run: |
           title='kb-refresh is failing'
-          body="$(printf 'The weekly kb-refresh failed: %s\n\n- api-lifecycle: %s\n- registry: %s\n\nThe embedded KB stays stale until this is fixed.' \
-            "$RUN_URL" "$API_RESULT" "$REGISTRY_RESULT")"
+          body="$(printf 'The weekly kb-refresh failed: %s\n\nThe unreviewed build run (%s): %s\n\n- api-lifecycle: build %s\n- registry: build %s\n\nThe embedded KB stays stale until this is fixed.' \
+            "$RUN_URL" "$BUILD_RESULT" "$BUILD_URL" "$API_RESULT" "$REGISTRY_RESULT")"
           gh label create kb-refresh --color 0e8a16 \
             --description 'Automated knowledge-base refresh' --force
           number="$(gh issue list --state open --label kb-refresh --search "\"$title\" in:title" \

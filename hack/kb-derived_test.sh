@@ -1,16 +1,19 @@
 #!/usr/bin/env bash
 # Tests hack/kb-derived.sh (make kb-derived) and its use in kb-refresh.yml
-# (make hack-test), offline, against a stub go:
+# (make hack-test), offline, against a stub go (the build jobs live in
+# kb-refresh-build.yml, the PR jobs in kb-refresh.yml; #273):
 #  - it runs each pinning test with -update, anchored to that one test, and
 #    each test it names exists in the package it names;
-#  - kb-refresh.yml's registry job runs `make kb-derived` after
-#    `make eol-sync` and before its PR step, and that step's add-paths
+#  - kb-refresh-build.yml's registry job runs `make kb-derived` after
+#    `make eol-sync` and before it packages its patch, and kb-refresh.yml's
+#    PR step's add-paths
 #    commit every derived file the registry feeds, so the bot PR carries the
 #    regenerated doc with the data (#252).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 kb=.github/workflows/kb-refresh.yml
+kbb=.github/workflows/kb-refresh-build.yml
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 failed=0
@@ -48,7 +51,7 @@ EOF2
 ./hack/kb-derived.sh unexpected >/dev/null 2>&1 && fail "accepts an unknown argument" || ok "refuses an unknown argument"
 
 
-# Each pair of jobs that changes the data (kb-refresh.yml: a read-only job
+# Each pair of jobs that changes the data (a read-only job in kb-refresh-build.yml
 # that regenerates and hands over a patch, and a -pr job that applies the
 # patch with the write token and runs no repository code): `make kb-derived`
 # runs in the first, between the step that changes the data and the one
@@ -56,9 +59,9 @@ EOF2
 # and the -pr job runs no make.
 check_job() { # job, the step that changes the data, the data path, derived files...
   local job=$1 step=$2 data=$3; shift 3
-  jobtext() { awk -v j="  $1:" '$0 == j { c = 1; print; next } c && /^  [^ ]/ { exit } c' "$kb"; }
-  jobtext "$job" >"$work/$job"
-  jobtext "$job-pr" >"$work/$job-pr"
+  jobtext() { awk -v j="  $2:" '$0 == j { c = 1; print; next } c && /^  [^ ]/ { exit } c' "$1"; }
+  jobtext "$kbb" "$job" >"$work/$job"
+  jobtext "$kb" "$job-pr" >"$work/$job-pr"
   line() { { grep -n -- "$2" "$work/$1" || true; } | head -1 | cut -d: -f1; }
   local sync derive pack
   sync=$(line "$job" "run: $step")

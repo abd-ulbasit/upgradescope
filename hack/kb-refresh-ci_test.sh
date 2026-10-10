@@ -6,12 +6,14 @@
 # and the required ci-ok never reported. A dispatched ci.yml run (#151) is no
 # substitute: its checks land on the commit, but the PR's check rollup
 # ignores them. So each PR-opening job approves its PR's held runs. This pins:
-#  - kb-refresh.yml (#244): the jobs that run code (go get of the newest
-#    k8s.io modules, make gen-kb, go test, make eol-sync) hold contents: read
-#    only, keep no token in their checkout and save no Go cache; the *-pr
-#    jobs that hold the writes run no repository or dependency code, and
-#    apply only a patch of their PR's paths (refusing anything else,
-#    renames, copies and symlinks, against crafted patches);
+#  - kb-refresh-build.yml (#244, #273; hack/kb-refresh-scope_test.sh pins
+#    where it runs): the jobs that run code (go get of the newest k8s.io
+#    modules, make gen-kb, go test, make eol-sync) hold contents: read only,
+#    keep no token in their checkout and save no Go cache; kb-refresh.yml's
+#    *-pr jobs that hold the writes run no repository or dependency code,
+#    take their patch from that run by run id, and apply only a patch of
+#    their PR's paths (refusing anything else, renames, copies and symlinks,
+#    against crafted patches);
 #  - kb-refresh.yml: each PR-opening job runs 'Approve the PR's CI runs'
 #    exactly when the PR was created or updated, with actions: write on that
 #    job only; against a stub gh it polls the head commit's pull_request
@@ -37,6 +39,7 @@ command -v git >/dev/null || { echo "kb-refresh-ci_test: git is required" >&2; e
 command -v jq >/dev/null || { echo "kb-refresh-ci_test: jq is required (the stub gh applies --jq with it)" >&2; exit 1; }
 
 kb=.github/workflows/kb-refresh.yml
+kbb=.github/workflows/kb-refresh-build.yml
 ci=.github/workflows/ci.yml
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
@@ -281,11 +284,12 @@ check_approve registry-pr bot/kb-refresh-registry
 # The jobs that run repository or dependency code (go, make, setup-go) hold
 # contents: read and nothing else; the PR jobs, which hold the writes, run
 # none, and take only a patch of their PR's paths from the first job.
-jobs=$(awk '/^jobs:/{j=1;next} j&&/^[^ #]/{j=0} j&&/^  [a-z0-9_-]+:[ ]*$/{sub(/^  /,"");sub(/:.*/,"");print}' "$kb")
+jobs_of() { awk '/^jobs:/{j=1;next} j&&/^[^ #]/{j=0} j&&/^  [a-z0-9_-]+:[ ]*$/{sub(/^  /,"");sub(/:.*/,"");print}' "$1"; }
 runs_code() { grep -qE '^ +(run: .*\b(go|make) |uses: actions/setup-go@)|^ +(go|make|cd [^ ]+ && go) ' <<<"$1"; }
 perms_of() { awk '/^    permissions:/{p=1;next} p&&/^    [^ ]/{exit} p' <<<"$1" | sed 's/ *#.*//; s/^ *//' | grep -v '^$' | tr '\n' ' ' | sed 's/ $//'; }
-for j in $jobs; do
-  body=$(job "$kb" "$j")
+for f in "$kb" "$kbb"; do
+for j in $(jobs_of "$f"); do
+  body=$(job "$f" "$j")
   if runs_code "$body"; then
     if [ "$(perms_of "$body")" = "contents: read" ]; then
       ok "$j runs repository or dependency code with contents: read only"
@@ -298,20 +302,21 @@ for j in $jobs; do
     ok "$j holds write permissions and runs no repository or dependency code"
   fi
 done
+done
 # Every checkout keeps no token (zizmor: artipacked).
-n=$(grep -c 'uses: actions/checkout@' "$kb")
-m=$(grep -A2 'uses: actions/checkout@' "$kb" | grep -cE '^ +persist-credentials: false( |$)')
-[ "$n" -gt 0 ] && [ "$n" = "$m" ] && ok "all $n checkouts in $kb set persist-credentials: false" ||
-  fail "$((n - m)) of $n checkouts in $kb keep their token (persist-credentials)"
+n=$(cat "$kb" "$kbb" | grep -c 'uses: actions/checkout@')
+m=$(cat "$kb" "$kbb" | grep -A2 'uses: actions/checkout@' | grep -cE '^ +persist-credentials: false( |$)')
+[ "$n" -gt 0 ] && [ "$n" = "$m" ] && ok "all $n checkouts in $kb and $kbb set persist-credentials: false" ||
+  fail "$((n - m)) of $n checkouts in $kb and $kbb keep their token (persist-credentials)"
 
 for p in api-lifecycle:gen-kb registry:eol-sync; do
   j=${p%%:*} target=${p#*:}
-  body=$(job "$kb" "$j")
+  body=$(job "$kbb" "$j")
   grep -qE "^        run: make $target$" <<<"$body" && ok "$j runs make $target" || fail "$j does not run make $target"
   grep -qE "^          name: kb-refresh-$j$" <<<"$body" && grep -q 'uses: actions/upload-artifact@' <<<"$body" &&
     ok "$j hands its patch over as the kb-refresh-$j artifact" || fail "$j does not upload a kb-refresh-$j artifact"
   pr=$(job "$kb" "$j-pr")
-  grep -qE "^    needs: $j$" <<<"$pr" && ok "$j-pr needs $j" || fail "$j-pr does not need $j"
+  grep -qE "^    needs: build$" <<<"$pr" && ok "$j-pr needs build (the run of kb-refresh-build.yml)" || fail "$j-pr does not need build"
   uses=$(grep -oE 'uses: [a-z0-9_.-]+/[a-z0-9_.-]+@' <<<"$pr" | sort -u | tr '\n' ' ')
   [ "$uses" = "uses: actions/checkout@ uses: actions/download-artifact@ uses: peter-evans/create-pull-request@ " ] &&
     ok "$j-pr uses only checkout, download-artifact and create-pull-request" ||

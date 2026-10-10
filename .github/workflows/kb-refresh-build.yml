@@ -1,0 +1,131 @@
+name: kb-refresh-build
+
+# The unreviewed half of kb-refresh (#273). Never run by hand: kb-refresh.yml
+# (scheduled on main) points the branch bot/kb-refresh-build at main's head,
+# dispatches this workflow on that branch and waits for it; its *-pr jobs then
+# download the patches from THIS run by run id.
+#
+# Why a run of its own, on a ref that is not main. The jobs below run code
+# nobody has reviewed: `go get` pulls the newest k8s.io modules and whatever
+# versions they require, and `make gen-kb`, `go test` and `make eol-sync`
+# link and run them. Any job can write the GitHub Actions cache with the
+# runner's own token, whatever its permissions: block, and writes go to the
+# cache scope of the run's ref (docs.github.com, "Dependency caching
+# reference", "Restrictions for accessing a cache": a run saves caches to its
+# own branch's scope and may restore from its own and the default branch's;
+# a run on a branch cannot write main's scope). On main these jobs could
+# plant an entry that main's CI and a tag's release run later restore (IR-22),
+# so they run only here, on bot/kb-refresh-build, where a poisoned entry is
+# visible to nothing but another run of this workflow, which restores no
+# cache (setup-go `cache: false`). Their artifacts live in this run, so the
+# other pipelines' runs cannot read or replace them, and the two patches
+# here have different names.
+#
+# Each job holds contents: read, keeps no token in its checkout
+# (persist-credentials: false) and hands over nothing but a patch of the
+# paths its PR may change. hack/kb-refresh-scope_test.sh pins all of this.
+
+run-name: kb-refresh-build ${{ inputs.request }}
+
+on:
+  # The only trigger. Not schedule, push or pull_request: kb-refresh.yml
+  # starts it, on the one ref it runs on.
+  workflow_dispatch:
+    inputs:
+      request:
+        description: 'Set by kb-refresh.yml: names this run so that run can find it'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  api-lifecycle:
+    # Only on the branch kb-refresh.yml stages, never on main or a branch
+    # someone dispatched this on by hand: the cache scope is the point.
+    if: github.ref == 'refs/heads/bot/kb-refresh-build'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.26.x'
+          # No Go cache: this job builds modules nobody reviewed, and restores
+          # nothing a poisoned entry could have been planted in.
+          cache: false
+
+      - name: Bump gen-kb to the latest k8s.io/api release
+        working-directory: tools/gen-kb
+        run: |
+          V="$(go list -m -f '{{.Version}}' k8s.io/api@latest)"
+          echo "latest k8s.io/api: $V"
+          # The extra API modules are released in lockstep with k8s.io/api.
+          go get "k8s.io/api@$V" "k8s.io/apimachinery@$V" \
+            "k8s.io/apiextensions-apiserver@$V" "k8s.io/kube-aggregator@$V"
+
+      - name: Regenerate import list, go.mod and dataset
+        run: make gen-kb
+
+      # The files the dataset feeds, in the same commit (hack/kb-derived.sh).
+      - name: Regenerate what the data feeds
+        run: make kb-derived
+
+      - name: Validate the regenerated KB
+        run: |
+          go test ./internal/kb/ ./internal/engine/
+          cd tools/gen-kb && go test ./...
+
+      - name: Package the regenerated files
+        run: |
+          git add -A -- tools/gen-kb internal/kb/data deploy/chart/files/kb-rbac-rules.yaml docs/concepts/support-lifecycle.md
+          git diff --cached --binary -- tools/gen-kb internal/kb/data deploy/chart/files/kb-rbac-rules.yaml docs/concepts/support-lifecycle.md >"$RUNNER_TEMP/kb-refresh-api-lifecycle.patch"
+          git diff --cached --stat -- tools/gen-kb internal/kb/data deploy/chart/files/kb-rbac-rules.yaml docs/concepts/support-lifecycle.md
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: kb-refresh-api-lifecycle
+          path: ${{ runner.temp }}/kb-refresh-api-lifecycle.patch
+          if-no-files-found: error
+          retention-days: 1
+
+  registry:
+    # Only on the branch kb-refresh.yml stages, never on main or a branch
+    # someone dispatched this on by hand: the cache scope is the point.
+    if: github.ref == 'refs/heads/bot/kb-refresh-build'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.26.x'
+          cache: false # tools/eol-sync has no dependencies; nothing to cache
+
+      - name: Sync registry with endoflife.date
+        run: make eol-sync
+
+      # The doc examples the registry feeds, in the same patch (hack/kb-derived.sh).
+      - name: Regenerate what the data feeds
+        run: make kb-derived
+
+      - name: Package the regenerated files
+        run: |
+          git add -A -- registry/data docs/concepts/support-lifecycle.md
+          git diff --cached --binary -- registry/data docs/concepts/support-lifecycle.md >"$RUNNER_TEMP/kb-refresh-registry.patch"
+          git diff --cached --stat -- registry/data docs/concepts/support-lifecycle.md
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: kb-refresh-registry
+          path: ${{ runner.temp }}/kb-refresh-registry.patch
+          if-no-files-found: error
+          retention-days: 1
+
