@@ -115,7 +115,13 @@ workload and baselines work on it as on any other finding.
   included). A StorageClass whose provisioner is an
   in-tree one counts for that plugin, under none; a CSI provisioner is not
   counted. Both are named in the finding, and the ignore annotations on
-  them work as on a workload. The agent's ClusterRole grants `get` and
+  them work as on a workload. The pods the finding counts beside them are
+  not named, so they are counted as omitted (`objectsOmitted`, "…and N
+  more"): accepting every named PersistentVolume and StorageClass, by
+  annotation or by a `name:` rule, leaves the finding standing for the
+  pods, with "N object(s) suppressed". Only a rule without object
+  selectors takes the whole finding. The gate does the same for the
+  cluster's pods beside a PR's objects. The agent's ClusterRole grants `get` and
   `list` on `persistentvolumes` and `storageclasses` for this. A refused or
   failed list makes `volumes` partial, with a reason naming what was not
   read (for example "list persistentvolumes: ... forbidden ...;
