@@ -25,6 +25,12 @@
 #    go.mod needs a newer Go fails before it starts. This reads the pinned
 #    version's go.mod through the module proxy, so it needs network access.
 #
+# 4. Every actions/setup-go step in .github/workflows reads go.mod
+#    (`go-version-file: go.mod`), never a literal `go-version:`. A literal
+#    like '1.26.x' lets setup-go take an older Go cached on the runner, which
+#    then fails under GOTOOLCHAIN=local once go.mod asks for a newer patch
+#    (kb-refresh-build.yml did, after go.mod moved to 1.26.9: #11).
+#
 # Knobs, for hack/check-toolchain_test.sh:
 #   UPGRADESCOPE_TOOLCHAIN_ROOT     tree to check (default: this repository)
 #   UPGRADESCOPE_TOOLCHAIN_OFFLINE  1 = skip check 3 (no module proxy)
@@ -59,6 +65,25 @@ for df in Dockerfile*; do
     rc=1
   else
     echo "ok: $df golang:$got == go.mod go $want"
+  fi
+done
+
+for f in .github/workflows/*.yml .github/workflows/*.yaml; do
+  [ -f "$f" ] || continue
+  steps=$(grep -c 'actions/setup-go@' "$f" || true)
+  [ "$steps" -gt 0 ] || continue
+  fromfile=$(grep -cE '^[[:space:]]+go-version-file:[[:space:]]*go\.mod([[:space:]]|$)' "$f" || true)
+  literal=$(grep -nE '^[[:space:]]+go-version:' "$f" || true)
+  if [ -n "$literal" ]; then
+    echo "FAIL: $f pins Go literally instead of reading go.mod:" >&2
+    sed 's/^/      /' <<<"$literal" >&2
+    echo "      use 'go-version-file: go.mod' (a literal can resolve to an older cached Go)" >&2
+    rc=1
+  elif [ "$steps" != "$fromfile" ]; then
+    echo "FAIL: $f has $steps setup-go steps but $fromfile read 'go-version-file: go.mod'" >&2
+    rc=1
+  else
+    echo "ok: $f: $steps setup-go step(s) read go.mod"
   fi
 done
 
