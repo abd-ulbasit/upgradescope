@@ -208,7 +208,7 @@ kubectl and kubeconform are also checked against their upstream sha256
 
 | Job | Runs on | Reproduce with | What it checks |
 |---|---|---|---|
-| `test` (2 shards) | PRs touching code or the docs its tests read, push | `make test` (`TEST_SHARD=1/2`, `2/2` for one shard) | gofmt, `go vet`, `go test -race -count=1` for the main and `tools/` modules, each package in exactly one of the two shards (`hack/test.sh --shard`, balanced by `hack/test-durations.txt`). A PR that changes docs, Markdown or `mkdocs.yml` and no code runs only the packages whose tests read them (`TEST_SCOPE=docs`: `hack/test-docs-readers.txt`) |
+| `test` (2 shards) | every PR, push | `make test` (`TEST_SHARD=1/2`, `2/2` for one shard) | gofmt, `go vet`, `go test -race -count=1` for the main and `tools/` modules, each package in exactly one of the two shards (`hack/test.sh --shard`, balanced by `hack/test-durations.txt`). A PR that changes no Go code runs only the packages whose tests read the repository outside Go code (`TEST_SCOPE=readers`: `hack/test-readers.txt`: the docs-drift tests, and two that walk every file of the checkout), never none |
 | `repo-checks` | every PR, push | `make check-toolchain hack-test claims-check` | the Dockerfile's golang tag equals `go.mod`'s `go` directive and GoReleaser is one pinned version; offline self-tests of the `hack/` scripts (the path gates, `ci-ok`, the shards, that no tag run can share a concurrency group with main or another tag); every test the claims ledger names exists |
 | `test-heap` (4 shards) | PRs touching code, push | `make test-heap` (`TEST_HEAP_SHARD=1/4` … `4/4` for one shard) | the heap-bound tests, without the race detector (under it they skip or shrink, so `make test` never runs them in full): every test that reads `raceEnabled`, found by `hack/test-heap.sh`, which sets `UPGRADESCOPE_HEAP=1` (without it a plain `go test` skips the server's, which take ~10 min, and the Helm manifest test, whose reading a busy machine inflates) and fails on a skip. These are the proofs of the server's and the Helm collector's memory bounds that `docs/claims.md` and the operations guide cite. `--shard i/n` gives each test to exactly one shard, balanced by `hack/test-heap-durations.txt`; a test missing from that table counts 30 s |
 | `lint` | PR, push | `make lint` | `go vet` and pinned staticcheck |
@@ -228,21 +228,29 @@ kubectl and kubeconform are also checked against their upstream sha256
 | `ci-ok` | always | `hack/ci-ok.sh` (aggregates the rest) | every other job passed, or was skipped for a reason that holds: its own `if` for the event, or the `changes` job ran and said a gated job is not needed (below); the one stable check to require on `main` |
 
 **Which jobs a pull request runs.** The `changes` job reads the files a pull
-request changes and `hack/ci-changes.sh` turns that into four answers: `go`
+request changes and `hack/ci-changes.sh` turns that into four answers (and
+passes on the `release` and `action` filters' two): `go`
 (Go code, and every other file a Go-heavy job reads: the embedded data and
 dashboard, the chart, the examples, the Dockerfiles, the scripts those jobs
 call), `cross` (a Go file, module file, GoReleaser config or the Makefile),
-`test-scope` (`all`, `docs` or `none`) and `e2e`. `test-heap`, `build`,
+`test-scope` (`all` or `readers`) and `e2e`. `test-heap`, `build`,
 `examples`, `images`, `vuln`, `pg-conformance`, `kube` and `envtest` run on a
 pull request only when `go` (the last two also when the one docs page the
-e2e runs changes) says so, `cross-build` when `cross` does, and `test` for
-`test-scope` `all` or `docs`. So a pull request that changes only docs or
-Markdown skips all of that and runs `lint`, `repo-checks`, `web`, `helm`,
-`notices`, `kb-freshness`, `registry`, the `action` and `release-check` jobs
-when their own filters match, and the unit tests of the packages that read
-docs. A push to `main`, the weekly schedule, a dispatch and a release run what
-they always did: the gates are for pull requests only (a push keeps the old
-docs-only skip of `kube` and `envtest`).
+e2e runs changes) says so, and `cross-build` when `cross` does. The unit tests
+are never skipped: `test` runs in full for `all`, and for `readers` (a change
+to no Go code) runs the packages in `hack/test-readers.txt`, because some of
+their tests read every file of the checkout, not just the ones a filter names
+(`internal/server` decodes every YAML file in the tree, `internal/crd/apigroup`
+reads every tracked file), so a change to a workflow, an issue template or a
+script can fail them. So a pull request that changes only docs, Markdown or a
+workflow skips the Go-heavy jobs above and runs `lint`, `repo-checks`, `web`,
+`helm`, `notices`, `kb-freshness`, `registry`, the `action` and
+`release-check` jobs when their own filters match, and those unit tests. The
+filters see at most 3000 changed files (the API lists no more), so a pull
+request of 3000 or more files runs everything. A push to `main`, the weekly
+schedule, a dispatch and a release run what they always did: the gates are
+for pull requests only (a push keeps the old docs-only skip of `kube` and
+`envtest`).
 
 `ci-ok` accepts a gated job's skip only when the `changes` job **ran and
 succeeded** and said the job is not needed. A `changes` job that failed, was
@@ -252,12 +260,17 @@ accepts only the docs-only skips a push always had (`kube`, `envtest` and
 `release-check`) and fails any other skipped gated job whatever `changes` said;
 on a dispatch or release every gated job must run. `hack/ci-gates_test.sh` (`make
 hack-test`) holds the filters to the tree: every tracked file is matched by
-`go` or `docs`, or is on its short list of files no gated job reads, and every
+`go`, or is on its short list of files no Go-heavy job reads, and every
 `hack/` script a gated job reaches is matched; it evaluates each gated job's
-`if` for every kind of run and combination of filter results.
+`if` for every kind of run and combination of filter results, and that the unit
+tests run in all of them. `hack/test_test.sh` keeps `hack/test-readers.txt`
+whole: a package whose tests name a docs page, or walk the checkout from
+outside their own directory, must be on it.
 `hack/ci-ok_test.sh` runs the verdict through each scenario. A new
 directory, workflow or script therefore has to be decided on: add it to the
-`go` filter in `ci.yml`, or to the test's list with the reason.
+`go` filter in `ci.yml`, or to the test's list with the reason. A new Go test
+that reads files outside its package has to be listed in
+`hack/test-readers.txt`.
 
 `pr-lint.yml` is a separate workflow, not a `ci.yml` job: on every PR, and again when its title or description is edited, `hack/check-breaking.sh` fails a title, description or commit with a `BREAKING CHANGE:` footer whose subject has no `!` (see [Commit conventions](#commit-conventions)). It is not part of `ci-ok`; the repository ruleset decides whether it blocks a merge.
 
