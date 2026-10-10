@@ -86,7 +86,11 @@ func evalVolumePlugins(inv inventory.Inventory, k kb.KB, target inventory.Versio
 			f.Severity = SevInfo
 		}
 		where, names := namespaceBreakdown(u.Namespaces, listed.emptyNamespace())
-		f.Detail = fmt.Sprintf("%s name it, in: %s. %s", count, where, consequence)
+		verb := "name"
+		if u.Count == 1 {
+			verb = "names"
+		}
+		f.Detail = fmt.Sprintf("%s %s it, in: %s. %s", count, verb, where, consequence)
 		if p.Note != "" {
 			f.Detail += " Upstream: " + p.Note + "."
 		}

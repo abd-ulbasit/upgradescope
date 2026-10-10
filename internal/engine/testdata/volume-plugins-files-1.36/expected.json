@@ -8,7 +8,7 @@
         "https://github.com/kubernetes/kubernetes/pull/124544",
         "https://github.com/kubernetes/kubernetes/pull/118143"
       ],
-      "detail": "1 object name it, in: namespace unset (1). From 1.31 a pod that names it does not start.",
+      "detail": "1 object names it, in: namespace unset (1). From 1.31 a pod that names it does not start.",
       "key": "volume-plugin/cephfs",
       "objects": [
         {
@@ -58,7 +58,7 @@
         "https://github.com/kubernetes/kubernetes/pull/112015",
         "https://github.com/kubernetes/kubernetes/pull/111485"
       ],
-      "detail": "1 object name it, in: shop (1). From 1.26 a pod that names it does not start.",
+      "detail": "1 object names it, in: shop (1). From 1.26 a pod that names it does not start.",
       "key": "volume-plugin/glusterfs",
       "namespaces": [
         "shop"
@@ -81,7 +81,7 @@
         "https://github.com/kubernetes/kubernetes/blob/master/CHANGELOG/CHANGELOG-1.27.md",
         "https://github.com/kubernetes/kubernetes/pull/115838"
       ],
-      "detail": "1 object name it, in: shop (1). From 1.27 its in-tree code is gone and every operation on these volumes is redirected to the ebs.csi.aws.com CSI driver: a cluster without that driver installed cannot mount them, one with it is fine.",
+      "detail": "1 object names it, in: shop (1). From 1.27 its in-tree code is gone and every operation on these volumes is redirected to the ebs.csi.aws.com CSI driver: a cluster without that driver installed cannot mount them, one with it is fine.",
       "key": "volume-plugin/awsElasticBlockStore",
       "namespaces": [
         "shop"
@@ -104,7 +104,7 @@
         "https://github.com/kubernetes/kubernetes/blob/master/CHANGELOG/CHANGELOG-1.23.md",
         "https://kubernetes.io/docs/concepts/storage/volumes/#flexvolume"
       ],
-      "detail": "1 object name it, in: namespace unset (1). It still works; upstream has not scheduled its removal.",
+      "detail": "1 object names it, in: namespace unset (1). It still works; upstream has not scheduled its removal.",
       "key": "volume-plugin/flexVolume",
       "objects": [
         {
