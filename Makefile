@@ -363,6 +363,7 @@ hack-test:
 	./hack/ci-concurrency_test.sh
 	./hack/ci-ok_test.sh
 	./hack/ci-sarif_test.sh
+	./hack/docs-sarif-guard_test.sh
 	./hack/release-ci-permissions_test.sh
 	./hack/release-caches_test.sh
 	./hack/kb-refresh-ci_test.sh

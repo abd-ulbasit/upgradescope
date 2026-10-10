@@ -137,7 +137,11 @@ jobs:
 
 On a pull request from a fork the token is read-only, so the `if:` above skips
 the upload there: the gate still runs and fails the job only for the gate, and
-the step summary and annotations are the report. Do not use
+the step summary and annotations are the report. A pull request that
+Dependabot opens has a read-only token as well, with the head repository
+being yours, so the guard does not skip it; add
+`&& github.actor != 'dependabot[bot]'` to the condition if the gate runs on
+those. Do not use
 `pull_request_target` to get the upload back: it would run the gate on files
 the pull request controls with a write token.
 

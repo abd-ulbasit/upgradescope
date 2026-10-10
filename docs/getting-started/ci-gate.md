@@ -61,7 +61,10 @@ comes from another repository, so on a fork PR the gate still runs and fails
 the job only when the gate fails; the job summary and the step annotations,
 which need no write permission, are the fork's report, and the SARIF is not
 uploaded. The same step works unchanged on a push and on a same-repository
-pull request. Do not switch the trigger to `pull_request_target` to get the
+pull request, except one that Dependabot opens: its token is read-only too,
+though the head repository is yours, so the guard lets the upload run and it
+fails. If the gate runs on those, add `&& github.actor != 'dependabot[bot]'`
+to the condition. Do not switch the trigger to `pull_request_target` to get the
 upload back: it runs with a write token and the base repository's secrets,
 and the gate would read files the pull request controls. Instead of the
 guard, `continue-on-error: true` on the upload step also keeps a failed
