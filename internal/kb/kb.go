@@ -106,7 +106,8 @@ func loadWith(lifecycle, migrations []byte, extra string) (KB, error) {
 	if err != nil {
 		return KB{}, fmt.Errorf("kb: loading managed-provider support calendars: %w", err)
 	}
-	version, err := datasetVersion(f.GeneratedFrom, f.Entries, f.BuiltinGroups, addons, providers)
+	volumes := VolumePlugins()
+	version, err := datasetVersion(f.GeneratedFrom, f.Entries, f.BuiltinGroups, volumes, addons, providers)
 	if err != nil {
 		return KB{}, err
 	}
@@ -118,7 +119,7 @@ func loadWith(lifecycle, migrations []byte, extra string) (KB, error) {
 		Providers:     providers,
 		Skew:          DefaultSkewPolicy(),
 		MaxKnownK8s:   maxKnown,
-		VolumePlugins: VolumePlugins(),
+		VolumePlugins: volumes,
 	}, nil
 }
 
@@ -129,19 +130,23 @@ func loadWith(lifecycle, migrations []byte, extra string) (KB, error) {
 //
 // generatedFrom names the upstream release ("k8s.io/api v0.37.1"); each
 // digest is the first 8 hex digits of the SHA-256 of the canonical JSON of
-// the lifecycle entries and built-in groups or the parsed registry (the
-// add-ons and the managed providers' support calendars). Any change to
-// either dataset (an eol-sync date flip, a regenerated entry, a new
-// built-in group) changes the label; YAML comments and formatting do not.
-func datasetVersion(generatedFrom string, entries []APILifecycleEntry, groups []BuiltinGroup, addons []registry.AddOn, providers []registry.ProviderSupport) (string, error) {
-	// Without built-in groups the digest is over the bare entries, so a
-	// dataset that predates the field keeps the label it always had.
+// the lifecycle entries (with their migration notes), built-in groups and
+// in-tree volume plugins, or the parsed registry (the add-ons and the
+// managed providers' support calendars). Any change to either dataset (an
+// eol-sync date flip, a regenerated entry, a new built-in group, an edited
+// migration note or volume plugin) changes the label; YAML comments and
+// formatting do not.
+func datasetVersion(generatedFrom string, entries []APILifecycleEntry, groups []BuiltinGroup, volumes []VolumePlugin, addons []registry.AddOn, providers []registry.ProviderSupport) (string, error) {
+	// Without built-in groups or volume plugins the digest is over the bare
+	// entries, so a dataset that predates the fields keeps the label it
+	// always had.
 	var lifecycleData any = entries
-	if len(groups) > 0 {
+	if len(groups) > 0 || len(volumes) > 0 {
 		lifecycleData = struct {
-			Entries []APILifecycleEntry
-			Groups  []BuiltinGroup
-		}{entries, groups}
+			Entries       []APILifecycleEntry
+			Groups        []BuiltinGroup
+			VolumePlugins []VolumePlugin `json:",omitempty"`
+		}{entries, groups, volumes}
 	}
 	lifecycle, err := digest(lifecycleData)
 	if err != nil {

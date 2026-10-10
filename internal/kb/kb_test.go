@@ -142,7 +142,8 @@ func TestCheckLifecycleFloors(t *testing.T) {
 }
 
 // TestDatasetVersion: the label is derived from content, so any change to
-// the lifecycle entries or the registry yields a different label, and
+// the lifecycle entries (their migration notes too), the volume plugins or
+// the registry yields a different label, and
 // identical data always yields the same one.
 func TestDatasetVersion(t *testing.T) {
 	entries := func() []APILifecycleEntry {
@@ -158,11 +159,11 @@ func TestDatasetVersion(t *testing.T) {
 	}
 	const from = "k8s.io/api v0.37.1"
 
-	base, err := datasetVersion(from, entries(), nil, addons(), providers())
+	base, err := datasetVersion(from, entries(), nil, nil, addons(), providers())
 	if err != nil {
 		t.Fatalf("datasetVersion() error = %v", err)
 	}
-	again, _ := datasetVersion(from, entries(), nil, addons(), providers())
+	again, _ := datasetVersion(from, entries(), nil, nil, addons(), providers())
 	if base != again {
 		t.Errorf("datasetVersion not deterministic: %q vs %q", base, again)
 	}
@@ -185,15 +186,23 @@ func TestDatasetVersion(t *testing.T) {
 	tomb[0].RemovedInferred = true
 
 	for name, got := range map[string]func() (string, error){
-		"registry eol_date": func() (string, error) { return datasetVersion(from, entries(), nil, synced, providers()) },
-		"provider date":     func() (string, error) { return datasetVersion(from, entries(), nil, addons(), shifted) },
-		"lifecycle entry":   func() (string, error) { return datasetVersion(from, e, nil, addons(), providers()) },
-		"tombstone flag":    func() (string, error) { return datasetVersion(from, tomb, nil, addons(), providers()) },
+		"registry eol_date": func() (string, error) { return datasetVersion(from, entries(), nil, nil, synced, providers()) },
+		"provider date":     func() (string, error) { return datasetVersion(from, entries(), nil, nil, addons(), shifted) },
+		"lifecycle entry":   func() (string, error) { return datasetVersion(from, e, nil, nil, addons(), providers()) },
+		"tombstone flag":    func() (string, error) { return datasetVersion(from, tomb, nil, nil, addons(), providers()) },
 		"builtin group": func() (string, error) {
-			return datasetVersion(from, entries(), []BuiltinGroup{{Group: "imagepolicy.k8s.io", Versions: []string{"v1alpha1"}}}, addons(), providers())
+			return datasetVersion(from, entries(), []BuiltinGroup{{Group: "imagepolicy.k8s.io", Versions: []string{"v1alpha1"}}}, nil, addons(), providers())
+		},
+		"migration note": func() (string, error) {
+			n := entries()
+			n[0].Migration = &Migration{Note: "batch/v1 is a drop-in", Citations: []string{"https://kubernetes.io/docs/reference/using-api/deprecation-guide/"}}
+			return datasetVersion(from, n, nil, nil, addons(), providers())
+		},
+		"volume plugin": func() (string, error) {
+			return datasetVersion(from, entries(), nil, VolumePlugins()[:1], addons(), providers())
 		},
 		"generatedFrom": func() (string, error) {
-			return datasetVersion("k8s.io/api v0.37.2", entries(), nil, addons(), providers())
+			return datasetVersion("k8s.io/api v0.37.2", entries(), nil, nil, addons(), providers())
 		},
 	} {
 		v, err := got()
