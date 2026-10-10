@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"sort"
 	"strings"
@@ -474,9 +475,10 @@ var (
 // wrong: a clause that grants watch (the role has get and list only: each
 // mention must be negated by one of the two words before it, or be in a
 // clause ending "are denied"), a CRD grant "not restricted by
-// resourceNames" (both CRD write rules are), or no mention of the
-// cluster-wide ConfigMaps read that rbac.helmSecrets adds. A --watch flag
-// (`kubectl get ... --watch`) is not a grant.
+// resourceNames" (both CRD write rules are), no mention of the
+// cluster-wide ConfigMaps read that rbac.helmSecrets adds, or none of
+// rbac.helmSecretsNamespaces, which replaces it with a Role per namespace
+// (#344). A --watch flag (`kubectl get ... --watch`) is not a grant.
 func rbacDocProblems(doc string) []string {
 	var out []string
 	for _, clause := range clauseEnd.Split(watchFlag.ReplaceAllString(doc, ""), -1) {
@@ -497,11 +499,14 @@ func rbacDocProblems(doc string) []string {
 	if !strings.Contains(flat, "configmap") {
 		out = append(out, "does not mention the cluster-wide ConfigMaps get/list that rbac.helmSecrets grants")
 	}
+	if !strings.Contains(flat, "helmsecretsnamespaces") {
+		out = append(out, "does not describe rbac.helmSecretsNamespaces, which grants Secrets and ConfigMaps per namespace instead (#344)")
+	}
 	return out
 }
 
 func TestRBACDocProblems(t *testing.T) {
-	const cm = " Helm needs ConfigMaps."
+	const cm = " Helm needs ConfigMaps, or a Role per namespace with rbac.helmSecretsNamespaces."
 	for _, tc := range []struct {
 		name, doc string
 		bad       bool
@@ -518,7 +523,8 @@ func TestRBACDocProblems(t *testing.T) {
 		{"watch then a negation", "It can `watch` pods, but not nodes." + cm, true},
 		{"not restricted", "CRD create/update/patch, not restricted by `resourceNames`." + cm, true},
 		{"not restricted across lines", "CRD writes, not\n    restricted by `resourceNames`." + cm, true},
-		{"no configmaps", "It reads with `get` and `list`, never `watch`, and Secrets.", true},
+		{"no configmaps", "It reads with `get` and `list`, never `watch`, and Secrets. See rbac.helmSecretsNamespaces.", true},
+		{"no namespaced mode", "It reads with `get` and `list`, never `watch`, and Secrets and ConfigMaps.", true},
 		// kubectl's --watch flag is the reader's, not a grant to the agent.
 		{"kubectl --watch", "Follow it with `kubectl get clusterreadiness cluster --watch`." + cm, false},
 		{"--watch beside a grant", "Run it with --watch; the agent can watch pods." + cm, true},
@@ -540,5 +546,177 @@ func TestRBACDocsMatchRole(t *testing.T) {
 		for _, p := range rbacDocProblems(string(b)) {
 			t.Errorf("%s %s", page, p)
 		}
+	}
+}
+
+// --- namespaced Helm reads (#344) ---
+
+// renderedRBAC is the agent's RBAC as the chart renders it: the
+// ClusterRole's rules, and each Role and RoleBinding.
+type renderedRBAC struct {
+	clusterRules []rbacv1.PolicyRule
+	roles        []rbacv1.Role
+	bindings     []rbacv1.RoleBinding
+	agentArgs    []string
+}
+
+func renderRBAC(t *testing.T, sets ...string) renderedRBAC {
+	t.Helper()
+	var out renderedRBAC
+	objs := render(t, sets...)
+	for _, o := range objs {
+		b, err := o.MarshalJSON()
+		if err != nil {
+			t.Fatal(err)
+		}
+		switch o.GetKind() {
+		case "ClusterRole":
+			var r rbacv1.ClusterRole
+			if err := yaml.Unmarshal(b, &r); err != nil {
+				t.Fatal(err)
+			}
+			out.clusterRules = r.Rules
+		case "Role":
+			var r rbacv1.Role
+			if err := yaml.Unmarshal(b, &r); err != nil {
+				t.Fatal(err)
+			}
+			out.roles = append(out.roles, r)
+		case "RoleBinding":
+			var r rbacv1.RoleBinding
+			if err := yaml.Unmarshal(b, &r); err != nil {
+				t.Fatal(err)
+			}
+			out.bindings = append(out.bindings, r)
+		}
+	}
+	if find(objs, "Deployment", "upgradescope-agent") != nil {
+		out.agentArgs = args(container(t, objs, "upgradescope-agent"))
+	}
+	return out
+}
+
+func helmNamespacesArg(args []string) (string, bool) {
+	for _, a := range args {
+		if v, ok := strings.CutPrefix(a, "--helm-namespaces="); ok {
+			return v, true
+		}
+	}
+	return "", false
+}
+
+// rbac.helmSecretsNamespaces: no cluster-wide Secrets or ConfigMaps rule,
+// but one Role (get/list on secrets and configmaps, nothing else) and one
+// RoleBinding to the agent's ServiceAccount in each listed namespace, and
+// the agent told to read only there. Everything else the ClusterRole
+// grants is unchanged.
+func TestRenderedRBACHelmSecretsNamespaces(t *testing.T) {
+	got := renderRBAC(t, "rbac.helmSecretsNamespaces={kube-system,ingress-nginx}")
+	assertNoWildcards(t, got.clusterRules)
+	assertAllowed(t, got.clusterRules, collectorCalls(t)...)
+	assertDenied(t, got.clusterRules, res("", "secrets", "get", "list"), res("", "configmaps", "get", "list"))
+	assertDenied(t, got.clusterRules, neverAllowed...)
+
+	want := map[string]bool{"kube-system": true, "ingress-nginx": true}
+	if len(got.roles) != len(want) {
+		t.Fatalf("%d Roles rendered, want one per listed namespace (%d)", len(got.roles), len(want))
+	}
+	roleIn := map[string]string{} // namespace -> Role name
+	for _, r := range got.roles {
+		ns := r.Namespace
+		if !want[ns] || roleIn[ns] != "" {
+			t.Errorf("Role %s in namespace %q, want exactly one in each of %v", r.Name, ns, want)
+			continue
+		}
+		roleIn[ns] = r.Name
+		assertNoWildcards(t, r.Rules)
+		assertAllowed(t, r.Rules, res("", "secrets", "get", "list"), res("", "configmaps", "get", "list"))
+		assertDenied(t, r.Rules,
+			res("", "secrets", "watch", "create", "update", "patch", "delete", "deletecollection"),
+			res("", "configmaps", "watch", "create", "update", "patch", "delete", "deletecollection"),
+			res("", "pods", "get", "list"), res("", "serviceaccounts/token", "create"))
+		for _, rule := range r.Rules {
+			if !reflect.DeepEqual(rule.Verbs, []string{"get", "list"}) || len(rule.APIGroups) != 1 || rule.APIGroups[0] != "" {
+				t.Errorf("Role %s/%s rule %s: want get and list in the core group only", ns, r.Name, ruleString(rule))
+			}
+		}
+	}
+	if len(got.bindings) != len(want) {
+		t.Fatalf("%d RoleBindings rendered, want one per listed namespace (%d)", len(got.bindings), len(want))
+	}
+	bound := map[string]bool{}
+	for _, b := range got.bindings {
+		ns := b.Namespace
+		if roleIn[ns] == "" || bound[ns] {
+			t.Errorf("RoleBinding %s in namespace %q, want exactly one beside each Role", b.Name, ns)
+			continue
+		}
+		bound[ns] = true
+		if b.RoleRef != (rbacv1.RoleRef{APIGroup: "rbac.authorization.k8s.io", Kind: "Role", Name: roleIn[ns]}) {
+			t.Errorf("RoleBinding %s/%s binds %+v, want the Role %s", ns, b.Name, b.RoleRef, roleIn[ns])
+		}
+		if want := []rbacv1.Subject{{Kind: "ServiceAccount", Name: "upgradescope", Namespace: "upgradescope"}}; !reflect.DeepEqual(b.Subjects, want) {
+			t.Errorf("RoleBinding %s/%s subjects = %+v, want the agent's ServiceAccount %+v", ns, b.Name, b.Subjects, want)
+		}
+	}
+	if v, ok := helmNamespacesArg(got.agentArgs); !ok || v != "kube-system,ingress-nginx" {
+		t.Errorf("agent --helm-namespaces = %q (passed %v), want kube-system,ingress-nginx", v, ok)
+	}
+}
+
+// The default stays the cluster-wide rule: no Role, no RoleBinding, no
+// --helm-namespaces. Without rbac.helmSecrets nothing is granted in either
+// mode; and the flag follows the value even then, or with rbac.create=false
+// (RBAC the user manages), so the agent reads where the user's Roles allow.
+func TestRenderedRBACHelmSecretsNamespacesModes(t *testing.T) {
+	got := renderRBAC(t)
+	if len(got.roles) != 0 || len(got.bindings) != 0 {
+		t.Errorf("default renders %d Roles and %d RoleBindings, want none", len(got.roles), len(got.bindings))
+	}
+	if _, ok := helmNamespacesArg(got.agentArgs); ok {
+		t.Error("default passes --helm-namespaces, want the whole cluster read")
+	}
+
+	got = renderRBAC(t, "rbac.helmSecrets=false", "rbac.helmSecretsNamespaces={apps}")
+	if len(got.roles) != 0 || len(got.bindings) != 0 {
+		t.Errorf("rbac.helmSecrets=false renders %d Roles and %d RoleBindings, want none", len(got.roles), len(got.bindings))
+	}
+	assertDenied(t, got.clusterRules, res("", "secrets", "get", "list"), res("", "configmaps", "get", "list"))
+	if v, _ := helmNamespacesArg(got.agentArgs); v != "apps" {
+		t.Errorf("rbac.helmSecrets=false: --helm-namespaces = %q, want apps", v)
+	}
+
+	got = renderRBAC(t, "rbac.create=false", "rbac.helmSecretsNamespaces={apps}")
+	if len(got.roles) != 0 || len(got.bindings) != 0 || got.clusterRules != nil {
+		t.Errorf("rbac.create=false renders RBAC: %d Roles, %d RoleBindings, ClusterRole %v", len(got.roles), len(got.bindings), got.clusterRules != nil)
+	}
+	if v, _ := helmNamespacesArg(got.agentArgs); v != "apps" {
+		t.Errorf("rbac.create=false: --helm-namespaces = %q, want apps", v)
+	}
+
+	// No agent, no RBAC of it: a server-only install.
+	got = renderRBAC(t, "agent.enabled=false", "server.enabled=true", "server.ingestToken=t", "rbac.helmSecretsNamespaces={apps}")
+	if len(got.roles) != 0 || len(got.bindings) != 0 {
+		t.Errorf("agent.enabled=false renders %d Roles and %d RoleBindings, want none", len(got.roles), len(got.bindings))
+	}
+}
+
+// Each entry is a namespace name (an RFC 1123 label, as the agent's
+// --helm-namespaces requires), and listed once: two Roles of one name in
+// one namespace would fail the install.
+func TestSchemaHelmSecretsNamespaces(t *testing.T) {
+	if out := renderErr(t, "rbac.helmSecretsNamespaces={kube-system,a1,"+strings.Repeat("a", 63)+"}"); out != "" {
+		t.Errorf("valid namespaces rejected: %s", out)
+	}
+	for _, bad := range []string{"Kube-System", "a.b", "-a", "a_b", strings.Repeat("a", 64)} {
+		if renderErr(t, "rbac.helmSecretsNamespaces={"+bad+"}") == "" {
+			t.Errorf("rbac.helmSecretsNamespaces={%.40q} rendered, want a schema error", bad)
+		}
+	}
+	if renderErr(t, writeValues(t, "rbac:\n  helmSecretsNamespaces: [\"\"]\n")) == "" {
+		t.Error(`rbac.helmSecretsNamespaces=[""] rendered, want a schema error`)
+	}
+	if renderErr(t, "rbac.helmSecretsNamespaces={apps,apps}") == "" {
+		t.Error("a namespace listed twice rendered, want a schema error")
 	}
 }

@@ -46,17 +46,31 @@ rbac:
   # KB rules either way). No wildcards, no watch, no
   # subresources such as nodes/proxy or pods/log.
   create: true
-  # -- Cluster-wide get/list on Secrets and ConfigMaps, for Helm release
-  # detection (releases stored by Helm's secrets and configmaps drivers).
-  # RBAC cannot filter Secrets by label or type, so true means the agent can
-  # read EVERY Secret and ConfigMap in the cluster. false removes both
-  # rules; the Helm capability is then not assessed (the reason is the
-  # forbidden lists) and Helm chart findings are missing from the report.
-  # Releases in Helm's sql driver have no object in the cluster, and charts
-  # that Argo CD renders with helm template have no release object either;
-  # add-on detection from container images still covers them, and
-  # rbac.gitops reads the charts GitOps tools declare.
+  # -- Get/list on Secrets and ConfigMaps, for Helm release detection
+  # (releases stored by Helm's secrets and configmaps drivers). RBAC cannot
+  # filter Secrets by label or type, so true means the agent can read EVERY
+  # Secret and ConfigMap in the cluster, or with rbac.helmSecretsNamespaces
+  # every one in those namespaces. false removes both rules; the Helm
+  # capability is then not assessed (the reason is the forbidden lists) and
+  # Helm chart findings are missing from the report. Releases in Helm's sql
+  # driver have no object in the cluster, and charts that Argo CD renders
+  # with helm template have no release object either; add-on detection from
+  # container images still covers them, and rbac.gitops reads the charts
+  # GitOps tools declare.
   helmSecrets: true
+  # -- Namespaces to read Helm releases in, instead of the whole cluster.
+  # Empty (the default) keeps the cluster-wide Secrets and ConfigMaps rule.
+  # Set, with rbac.helmSecrets, the ClusterRole has no Secrets or ConfigMaps
+  # rule; each namespace gets a Role (get/list on secrets and configmaps)
+  # and a RoleBinding to the agent's ServiceAccount, and the agent is passed
+  # --helm-namespaces so it lists only there (passed whenever this is set,
+  # rbac.create=false included). The helm capability is then reported
+  # partial: releases in other namespaces are not assessed. A release lives
+  # in its own namespace (helm install -n), so list every namespace that
+  # holds an add-on release; each must exist before the install. A Role
+  # still reads EVERY Secret in its namespace, and kube-system holds many
+  # sensitive ones: the gain is partial. DNS-1123 labels, each once.
+  helmSecretsNamespaces: []
   gitops:
     # -- Get/list on Argo CD Applications (argoproj.io/applications, nothing
     # else of that group), to read the chart, repoURL and targetRevision of

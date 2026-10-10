@@ -66,6 +66,12 @@
       "properties": {
         "create": { "type": "boolean" },
         "helmSecrets": { "type": "boolean" },
+        "helmSecretsNamespaces": {
+          "description": "Namespaces the agent reads Helm releases in, each a namespace name (an RFC 1123 label, as the agent's --helm-namespaces requires) and listed once: two Roles of one name in a namespace would fail the install.",
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$", "maxLength": 63 }
+        },
         "gitops": {
           "type": "object",
           "additionalProperties": false,

@@ -179,10 +179,29 @@ watches.
 | `get`/`list` namespaces, nodes, pods | Cluster ID (kube-system UID), team labels, kubelet versions, control-plane pods, add-on images |
 | `get` `/version`, `/metrics` | Server version; `apiserver_requested_deprecated_apis` (whether any client still calls deprecated APIs, not which) |
 | `get`/`list` on each group/resource the KB flags as deprecated or removed | Counting objects still stored at deprecated APIs. Generated into `files/kb-rbac-rules.yaml`; `rbac_test.go` fails when it drifts from the embedded KB |
-| `get`/`list` Secrets and ConfigMaps (only with `rbac.helmSecrets=true`, the default) | Helm release detection lists the objects labelled `owner=helm` (Helm's secrets and configmaps storage drivers) metadata-only, then reads one per release. RBAC cannot filter by label or type, so **this lets the agent read every Secret and ConfigMap in the cluster** |
+| `get`/`list` Secrets and ConfigMaps (only with `rbac.helmSecrets=true`, the default, and an empty `rbac.helmSecretsNamespaces`, the default) | Helm release detection lists the objects labelled `owner=helm` (Helm's secrets and configmaps storage drivers) metadata-only, then reads one per release. RBAC cannot filter by label or type, so **this lets the agent read every Secret and ConfigMap in the cluster** |
 | `get`/`list` Argo CD Applications, Flux HelmReleases and Flux OCIRepositories (only with `rbac.gitops.argocd` and `rbac.gitops.flux`, both off by default) | The charts GitOps tools deploy: chart, version and repository from each Application source and HelmRelease, for add-on detection. Only those resources: no AppProjects, ApplicationSets or the Secrets that hold repository credentials |
 | `get`/`update`/`patch` on the CRD `clusterreadinesses.upgradescope.basit.engineer` only (only with `agent.manageCRD=true`, the default) | Keeping the CRD schema in step with the agent binary by server-side apply |
 | `get`/`list`/`create` clusterreadinesses; `update`/`patch` and status `get`/`update`/`patch` on the one named `agent.crName` | The agent's own results object |
+
+`rbac.helmSecretsNamespaces` narrows that read to the namespaces it lists:
+the ClusterRole then has no Secret or ConfigMap rule, each listed namespace
+gets a Role (`get`/`list` on `secrets` and `configmaps`) and a RoleBinding
+to the agent's ServiceAccount, and the agent is passed `--helm-namespaces`
+so it lists only there:
+
+    helm upgrade --install upgradescope deploy/chart -n upgradescope \
+      --set 'rbac.helmSecretsNamespaces={kube-system,ingress-nginx,cert-manager}'
+
+A release lives in the namespace it was installed into (`helm install -n`),
+so list every namespace that holds an add-on release, and only namespaces
+that exist (a Role cannot be created in one that does not). Releases in
+other namespaces are not assessed: the helm capability is reported partial,
+naming the namespaces read. The gain is partial too: a Role still reads
+**every** Secret and ConfigMap of its namespace, and `kube-system` holds many
+sensitive ones. The
+[security page](https://abd-ulbasit.github.io/upgradescope/operations/security-model-and-rbac/#namespaced-helm-reads-rbachelmsecretsnamespaces)
+has the details and the hardened settings.
 
 `rbac.helmSecrets=false` removes the Secret and ConfigMap rules. The Helm
 capability is then not assessed, with the forbidden lists as the reason,
