@@ -111,7 +111,7 @@ CR=cluster
 # The chart's agent ServiceAccount: the release name, which contains the
 # chart name (templates/_helpers.tpl fullname).
 AGENT_SA=system:serviceaccount:$NS:$RELEASE
-CRD=clusterreadinesses.upgradescope.dev
+CRD=clusterreadinesses.upgradescope.basit.engineer
 # Inside the control-plane node (hack/e2e/kind-config.yaml).
 AUDIT_LOGS=/var/log/kubernetes/upgradescope-e2e
 
@@ -491,7 +491,7 @@ install_chart() {
 cr_has_verdict() {
   local score="" i
   for i in $(seq 1 36); do
-    score=$(k get clusterreadiness "$CR" -o jsonpath='{.status.targets[0].score}' 2>/dev/null || true)
+    score=$(k get "$CRD" "$CR" -o jsonpath='{.status.targets[0].score}' 2>/dev/null || true)
     [ -n "$score" ] && break
     nap 5
   done
@@ -500,7 +500,7 @@ cr_has_verdict() {
     echo "no status.targets[0].score on clusterreadiness/$CR after 180s" >&2
     return 1
   fi
-  k get clusterreadiness "$CR" -o json >"$work/cr.json" || return 1
+  k get "$CRD" "$CR" -o json >"$work/cr.json" || return 1
   jq '.status.targets[0] | {target, score, verdict, ready, blockers}' "$work/cr.json"
   # Default target (no spec.targets): the next minor above the server.
   jq -e --arg t "$NEXT" '.status.targets[0].target == $t' "$work/cr.json" >/dev/null ||
@@ -518,7 +518,7 @@ cr_has_verdict() {
 # ingress-nginx is a blocker here, and a blocker outranks a gap;
 # cr_unknown_once_blockers_accepted shows the same CR unknown without one.
 cr_reports_kb_coverage_gap() {
-  k get clusterreadiness "$CR" -o json >"$work/cr.json" || return 1
+  k get "$CRD" "$CR" -o json >"$work/cr.json" || return 1
   jq -e --arg t "$NEXT" '.status.targets[0].target == $t
       and any((.status.notAssessed // [])[]; startswith("kb-coverage: "))
       and any((.status.conditions // [])[]; .type == "Ready" and (.message | contains("kb-coverage (required)")))' \
@@ -545,7 +545,7 @@ cr_reports_kb_coverage_gap() {
 ACCEPTED_NS=ingress-nginx
 ACCEPTED_KEYS='["deprecated-api-in-use/resource.k8s.io/v1beta1/deviceclasses"]'
 cr_unknown_once_blockers_accepted() {
-  k get clusterreadiness "$CR" -o json >"$work/cr.json" || return 1
+  k get "$CRD" "$CR" -o json >"$work/cr.json" || return 1
   local cats patch gen i
   cats=$(jq -c '[.status.targets[0].topFindings[]? | select(.severity == "blocker") | .category] | unique' "$work/cr.json") ||
     return 1
@@ -554,16 +554,16 @@ cr_unknown_once_blockers_accepted() {
       reason: "e2e: accepted to observe the kb-coverage gap alone"}] + [$keys[] | {key: .,
       reason: "e2e: the v1beta1 DeviceClass apply of the deprecated-api step"}])}}' <<<"$cats") || return 1
   echo "accepting blocker categories $cats in namespace $ACCEPTED_NS, and keys $ACCEPTED_KEYS"
-  k patch clusterreadiness "$CR" --type merge -p "$patch" || return 1
-  gen=$(k get clusterreadiness "$CR" -o jsonpath='{.metadata.generation}') || return 1
+  k patch "$CRD" "$CR" --type merge -p "$patch" || return 1
+  gen=$(k get "$CRD" "$CR" -o jsonpath='{.metadata.generation}') || return 1
   [[ $gen =~ ^[0-9]+$ ]] || { echo "clusterreadiness/$CR metadata.generation is '$gen'" >&2; return 1; }
   # agent.interval=1m: the next tick evaluates the new generation.
   for i in $(seq 1 36); do
-    k get clusterreadiness "$CR" -o json >"$work/cr-accepted.json" || return 1
+    k get "$CRD" "$CR" -o json >"$work/cr-accepted.json" || return 1
     jq -e --argjson g "$gen" '(.status.observedGeneration // 0) >= $g' "$work/cr-accepted.json" >/dev/null && break
     nap 5
   done
-  k patch clusterreadiness "$CR" --type json -p '[{"op":"remove","path":"/spec/ignore"}]' ||
+  k patch "$CRD" "$CR" --type json -p '[{"op":"remove","path":"/spec/ignore"}]' ||
     { echo "could not remove the spec.ignore rules from clusterreadiness/$CR" >&2; return 1; }
   jq -e --argjson g "$gen" --arg t "$NEXT" '.status as $s | $s.targets[0] as $t0
       | ($s.observedGeneration // 0) >= $g
@@ -587,7 +587,7 @@ no_webhooks_or_finalizers() {
   now=$(webhook_configs) || return 1
   added=$(comm -13 <(sort <<<"$webhooks_before") <(sort <<<"$now"))
   [ -z "$added" ] || { echo "webhook configurations added by the install:" >&2; echo "$added" | sed 's/^/  /' >&2; return 1; }
-  k get clusterreadiness "$CR" -o json >"$work/cr.json" || return 1
+  k get "$CRD" "$CR" -o json >"$work/cr.json" || return 1
   jq -e '(.metadata.finalizers // []) == [] and (.metadata.ownerReferences // []) == []' "$work/cr.json" >/dev/null || {
     echo "clusterreadiness/$CR has finalizers or owner references:" >&2
     jq -c '.metadata | {finalizers, ownerReferences}' "$work/cr.json" >&2
@@ -720,7 +720,7 @@ upgrade_with_targets() {
     --set-string "agent.targets={$NEXT}" --wait --timeout 5m || return 1
   local i
   for i in $(seq 1 60); do
-    k get clusterreadiness "$CR" -o json | jq -e --arg t "$NEXT" '.spec.targets | index($t) != null' >/dev/null && return 0
+    k get "$CRD" "$CR" -o json | jq -e --arg t "$NEXT" '.spec.targets | index($t) != null' >/dev/null && return 0
     nap 2
   done
   echo "clusterreadiness/$CR spec.targets does not contain $NEXT 120s after the upgrade" >&2
@@ -743,7 +743,7 @@ uninstall_leaves_nothing() {
   ! k get clusterrole "$RELEASE-agent" >/dev/null 2>&1 || { echo "clusterrole/$RELEASE-agent left behind" >&2; return 1; }
   ! k get clusterrolebinding "$RELEASE-agent" >/dev/null 2>&1 || { echo "clusterrolebinding/$RELEASE-agent left behind" >&2; return 1; }
   # deploy/chart/README.md: Helm keeps crds/ on uninstall, by design.
-  k get crd clusterreadinesses.upgradescope.dev >/dev/null ||
+  k get crd "$CRD" >/dev/null ||
     { echo "the ClusterReadiness CRD is gone; the chart README says uninstall keeps it" >&2; return 1; }
 }
 
@@ -827,7 +827,7 @@ audit_agent_writes_only_its_cr() {
   n=$(count 'select(actor == "agent" and write and .objectRef.resource == "clusterreadinesses")') || return 1
   [ "$n" -gt 0 ] || { echo "the agent never wrote its ClusterReadiness: the write set is not observed" >&2; return 1; }
   bad=$(audit 'select(actor == "agent" and write) | select(
-      ((.objectRef.apiGroup == "upgradescope.dev" and .objectRef.resource == "clusterreadinesses"
+      ((.objectRef.apiGroup == "upgradescope.basit.engineer" and .objectRef.resource == "clusterreadinesses"
         and ((.objectRef.subresource // "") | IN("", "status"))
         and (.verb | IN("create", "update", "patch"))
         and ((.objectRef.name // "") == $cr or (.verb == "create" and (.objectRef.name // "") == "")))

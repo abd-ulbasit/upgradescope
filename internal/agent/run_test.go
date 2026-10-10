@@ -140,7 +140,7 @@ func TestRunFirstTickThenGracefulStop(t *testing.T) {
 
 	// EnsureCRD ran at startup against the apiextensions fake.
 	if _, err := apiext.ApiextensionsV1().CustomResourceDefinitions().Get(
-		context.Background(), "clusterreadinesses.upgradescope.dev", metav1.GetOptions{}); err != nil {
+		context.Background(), "clusterreadinesses.upgradescope.basit.engineer", metav1.GetOptions{}); err != nil {
 		t.Errorf("EnsureCRD did not install the CRD: %v", err)
 	}
 

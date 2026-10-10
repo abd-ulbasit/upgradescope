@@ -9,23 +9,30 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
+	"github.com/abd-ulbasit/upgradescope/internal/crd/apigroup"
 	"github.com/abd-ulbasit/upgradescope/internal/engine"
 	"github.com/abd-ulbasit/upgradescope/internal/suppress"
 )
 
 const (
-	Group    = "upgradescope.dev"
+	// Group is the API group, spelled once in internal/crd/apigroup.
+	Group    = apigroup.Group
 	Version  = "v1alpha1"
 	Kind     = "ClusterReadiness"
 	Plural   = "clusterreadinesses"
 	Singular = "clusterreadiness"
+	// CRDName is the ClusterReadiness CustomResourceDefinition's name.
+	CRDName = Plural + "." + Group
+	// AnnotationPrefix starts every annotation key upgradescope reads or
+	// writes, spelled once in internal/crd/apigroup.
+	AnnotationPrefix = apigroup.AnnotationPrefix
 	// DefaultName is the conventional singleton object name.
 	DefaultName = "cluster"
 	// StatusErrorAnnotation marks a ClusterReadiness whose status the agent
 	// failed to write, so the verdict it still shows is not read as
 	// current: its value is the time of the failure (RFC 3339, UTC) and a
 	// short reason. The next successful status write removes it.
-	StatusErrorAnnotation = Group + "/status-error"
+	StatusErrorAnnotation = apigroup.StatusErrorAnnotation
 )
 
 // GVR is the dynamic-client resource identifier for ClusterReadiness.

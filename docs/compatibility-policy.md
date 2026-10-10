@@ -14,7 +14,7 @@ patch release (0.x.y) never breaks anything below.
 | REST API | the `/api/v1` path prefix, [OpenAPI document](reference/api.md); report-shaped responses (a cluster's report, the gate's JSON answer) also lead with the JSON report's `schemaVersion` (1) and `toolVersion` | Paths, parameters and response fields keep their meaning; fields, and finding categories, may be added, so ignore unknown fields. The response schemas do not forbid unlisted fields, and a client generated from them keeps working when one is added. A breaking change goes under a new prefix (`/api/v2`) and `/api/v1` keeps serving for at least one minor release. |
 | Webhook payload | `schemaVersion` (1), [schema](reference/webhook.md) | As for the JSON report. |
 | Snapshot push protocol (agent to server) | envelope `schemaVersion` (1) and inventory `schemaVersion` (1) | The server refuses a version it does not know (422) rather than misreading it; a newer server keeps judging older agents' pushes, naming what it cannot judge. |
-| `ClusterReadiness` CRD | `upgradescope.dev/v1alpha1` | See below. |
+| `ClusterReadiness` CRD | `upgradescope.basit.engineer/v1alpha1` | See below. |
 | SARIF | SARIF 2.1.0, `tool.driver.version` | Rule ids are finding keys, which are stable. |
 | Finding keys | — | A finding's `key` (`removed-api/networking.k8s.io/v1beta1/Ingress`) is count-free and stable across runs and releases: baselines, ignore rules and notifications match on it. Changing a key format is a breaking change. |
 | The score formula | — | `max(0, 100 − min(75, 25 × blockers) − min(20, 5 × warnings))`. Changing it is a breaking change. |
@@ -88,6 +88,18 @@ releases. The path to `v1`:
 
 `spec.targets` and `spec.ignore` are the only user input and will keep
 their meaning across versions; `status` is the agent's to rewrite.
+
+**The API group** is `upgradescope.basit.engineer`, on a domain the
+maintainer owns, and so is the prefix of every annotation key
+(`upgradescope.basit.engineer/ignore`, `…/ignore-reason`). v0.1.x and the
+v0.2.0 release candidates used a group on a domain the project never
+owned. The first stable release moved both, before anything could be
+built on the old name: the scanner still reads the old annotation keys,
+with a deprecation warning that names the new ones, until v0.3.0, and
+nothing writes them. The agent leaves the old CRD installed and says how
+to remove it ([Upgrade](operations/upgrade.md#the-api-group-moved)).
+Changing the group again would be a breaking change, made only with a
+major release.
 
 ## Deprecation
 

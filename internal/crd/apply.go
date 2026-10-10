@@ -26,6 +26,8 @@ import (
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/yaml"
+
+	"github.com/abd-ulbasit/upgradescope/internal/crd/apigroup"
 )
 
 // Manifest is the embedded ClusterReadiness CRD manifest. It is the single
@@ -81,7 +83,8 @@ const FieldManager = "upgradescope-agent"
 
 // ErrCRDNotInstalled means the ClusterReadiness CRD is absent and the agent
 // may not create it. The Helm chart grants no CRD create: its crds/
-// directory installs the CRD, and the agent only keeps the schema current.
+// directory installs the CRD on first install only, and the agent only
+// keeps the schema current. InstallHint says how to install it.
 var ErrCRDNotInstalled = errors.New("ClusterReadiness CRD is not installed")
 
 // EnsureCRD keeps the ClusterReadiness CRD in step with the embedded
@@ -127,12 +130,38 @@ func EnsureCRD(ctx context.Context, apiext apiextensionsclient.Interface) error 
 	return nil
 }
 
+// LegacyCRDName is the CRD v0.1.x and the v0.2.0 release candidates
+// installed, on the group the project never owned (#68). Nothing reads or
+// writes its objects any more; the agent only says it can be removed.
+const LegacyCRDName = Plural + "." + apigroup.LegacyGroup
+
+// LegacyCRDCleanup is the command that removes the legacy CRD, and with it
+// every ClusterReadiness object stored under the old group.
+const LegacyCRDCleanup = "kubectl delete crd " + LegacyCRDName
+
+// UpgradeGuideURL is the migration guide from the legacy group: what to
+// install, carry over, rename and delete, in order.
+const UpgradeGuideURL = "https://abd-ulbasit.github.io/upgradescope/operations/upgrade/#the-api-group-moved"
+
+// LegacyCRDInstalled reports whether the legacy CRD is still installed. It
+// only reads: deleting the CRD deletes the objects under it, which is the
+// cluster owner's call. A failed read is returned, not taken for "absent".
+func LegacyCRDInstalled(ctx context.Context, apiext apiextensionsclient.Interface) (bool, error) {
+	_, err := apiext.ApiextensionsV1().CustomResourceDefinitions().Get(ctx, LegacyCRDName, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("get CRD %s: %w", LegacyCRDName, err)
+	}
+	return true, nil
+}
+
 // createCRD installs a missing CRD and waits for it to be Established.
 func createCRD(ctx context.Context, crds apiextensionsv1typed.CustomResourceDefinitionInterface, want *apiextensionsv1.CustomResourceDefinition) error {
 	_, err := crds.Create(ctx, want, metav1.CreateOptions{FieldManager: FieldManager})
 	if apierrors.IsForbidden(err) {
-		return fmt.Errorf("%w and the agent may not create it: install it from the Helm chart's crds/ "+
-			"(helm install, or kubectl apply -f deploy/chart/crds/): %w", ErrCRDNotInstalled, err)
+		return fmt.Errorf("%w and the agent may not create it: %w", ErrCRDNotInstalled, err)
 	}
 	if err != nil && !apierrors.IsAlreadyExists(err) {
 		return fmt.Errorf("create ClusterReadiness CRD: %w", err)
@@ -201,8 +230,7 @@ func EnsureObject(ctx context.Context, dyn dynamic.Interface, name string, targe
 	}
 	if apierrors.IsNotFound(err) {
 		// A create only 404s when the resource is not served at all.
-		return fmt.Errorf("create clusterreadiness %q: %w; install it with the chart's crds/ "+
-			"(helm install, or kubectl apply -f deploy/chart/crds/): %w", name, ErrCRDNotInstalled, err)
+		return fmt.Errorf("create clusterreadiness %q: %w: %w", name, ErrCRDNotInstalled, err)
 	}
 	return fmt.Errorf("create clusterreadiness %q: %w", name, err)
 }

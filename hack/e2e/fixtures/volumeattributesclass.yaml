@@ -5,7 +5,7 @@ kind: VolumeAttributesClass
 metadata:
   name: upgradescope-e2e-deprecated
   labels:
-    e2e.upgradescope.dev/applied-via: __APPLIED_VIA__
-driverName: e2e.upgradescope.dev
+    e2e.upgradescope.basit.engineer/applied-via: __APPLIED_VIA__
+driverName: e2e.upgradescope.basit.engineer
 parameters:
   tier: e2e

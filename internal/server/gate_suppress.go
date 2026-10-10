@@ -54,7 +54,7 @@ func gateIgnoreRules(w http.ResponseWriter, r *http.Request) ([]suppress.Rule, b
 }
 
 // suppressGate applies the request's ignore rules and the objects'
-// upgradescope.dev/ignore annotations to the proposed state's report, with
+// upgradescope.basit.engineer/ignore annotations to the proposed state's report, with
 // the code scan uses (suppress.Apply), and returns its warnings: expired
 // rules, which no longer apply, and annotations without a reason. Rule
 // file globs match the objects' file, which is ?path=.

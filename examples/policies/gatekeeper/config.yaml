@@ -14,6 +14,6 @@ metadata:
 spec:
   sync:
     syncOnly:
-      - group: upgradescope.dev
+      - group: upgradescope.basit.engineer
         version: v1alpha1
         kind: ClusterReadiness

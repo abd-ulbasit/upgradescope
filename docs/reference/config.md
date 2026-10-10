@@ -85,8 +85,8 @@ no expiry:
 
 | Annotation | Meaning |
 |---|---|
-| `upgradescope.dev/ignore` | Comma-separated categories or finding keys this object opts out of. |
-| `upgradescope.dev/ignore-reason` | Required. Without it the `ignore` annotation is not applied, and the scan warns. |
+| `upgradescope.basit.engineer/ignore` | Comma-separated categories or finding keys this object opts out of. |
+| `upgradescope.basit.engineer/ignore-reason` | Required. Without it the `ignore` annotation is not applied, and the scan warns. |
 
 ## In the cluster
 

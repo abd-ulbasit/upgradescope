@@ -170,7 +170,7 @@ func annotatedIngresses(n int, blocker bool) string {
 	var b strings.Builder
 	for i := range n {
 		fmt.Fprintf(&b, "---\napiVersion: extensions/v1beta1\nkind: Ingress\nmetadata:\n  name: pr%d\n  namespace: pay-prod\n"+
-			"  annotations:\n    upgradescope.dev/ignore: removed-api\n    upgradescope.dev/ignore-reason: deleted with the upgrade\n", i)
+			"  annotations:\n    upgradescope.basit.engineer/ignore: removed-api\n    upgradescope.basit.engineer/ignore-reason: deleted with the upgrade\n", i)
 	}
 	if blocker {
 		b.WriteString("---\napiVersion: extensions/v1beta1\nkind: Ingress\nmetadata: {name: pr-live, namespace: pay-prod}\n")

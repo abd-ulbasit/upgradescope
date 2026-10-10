@@ -18,7 +18,7 @@ const (
 	kwokNodeAnnotation = "kwok.x-k8s.io/node"
 	kwokNodeValue      = "fake"
 	// benchLabel marks everything this seeder creates.
-	benchLabel = "upgradescope.dev/bench"
+	benchLabel = "upgradescope.basit.engineer/bench"
 )
 
 // config is what to seed. Zero counts seed none of that kind.

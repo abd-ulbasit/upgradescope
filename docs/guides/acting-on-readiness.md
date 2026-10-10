@@ -20,7 +20,7 @@ README next to each before applying it.
 Both policies match a workload carrying the annotation
 
 ```yaml
-upgradescope.dev/upgrade-target: "1.37"
+upgradescope.basit.engineer/upgrade-target: "1.37"
 ```
 
 That annotation is the examples' convention, not something upgradescope

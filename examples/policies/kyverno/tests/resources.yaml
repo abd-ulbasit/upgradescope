@@ -6,7 +6,7 @@ metadata:
   name: upgrade-to-1-36
   namespace: default
   annotations:
-    upgradescope.dev/upgrade-target: "1.36"
+    upgradescope.basit.engineer/upgrade-target: "1.36"
 spec:
   replicas: 1
   selector:
@@ -25,7 +25,7 @@ metadata:
   name: upgrade-to-1-37
   namespace: default
   annotations:
-    upgradescope.dev/upgrade-target: "1.37"
+    upgradescope.basit.engineer/upgrade-target: "1.37"
 spec:
   replicas: 1
   selector:
@@ -44,7 +44,7 @@ metadata:
   name: upgrade-to-1-38
   namespace: default
   annotations:
-    upgradescope.dev/upgrade-target: "1.38"
+    upgradescope.basit.engineer/upgrade-target: "1.38"
 spec:
   replicas: 1
   selector:

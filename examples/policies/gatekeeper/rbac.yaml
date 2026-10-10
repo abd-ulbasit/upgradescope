@@ -8,7 +8,7 @@ kind: ClusterRole
 metadata:
   name: gatekeeper-upgradescope-clusterreadiness-reader
 rules:
-  - apiGroups: ["upgradescope.dev"]
+  - apiGroups: ["upgradescope.basit.engineer"]
     resources: ["clusterreadinesses"]
     verbs: ["get", "list", "watch"]
 ---

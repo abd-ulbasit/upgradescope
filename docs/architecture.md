@@ -60,7 +60,7 @@ for (a what-if) without going back to the cluster.
 | Package | Responsibility | Depends on |
 |---|---|---|
 | `internal/inventory` | The `Inventory` contract (what was observed) and Kubernetes `Version` parsing | nothing |
-| `internal/collect` | Builds an `Inventory` from a live cluster (client-go) or from rendered manifests | `inventory`, `kb`, `registry` |
+| `internal/collect` | Builds an `Inventory` from a live cluster (client-go) or from rendered manifests | `crd/apigroup`, `inventory`, `kb`, `registry` |
 | `registry` | The add-on EOL/compatibility dataset: schema, validator, embedded YAML loader | nothing internal (importable on its own) |
 | `api` | Embeds the published report schema so the MCP server can hand it to clients as a tool output schema | nothing internal |
 | `internal/kb` | Loads the knowledge base: API lifecycle data, the registry, and the version-skew policy | `inventory`, `registry` |
@@ -68,11 +68,12 @@ for (a what-if) without going back to the cluster.
 | `internal/sarif` | Renders a report as SARIF 2.1.0 | `engine`, `inventory` |
 | `internal/junit` | Renders a report as JUnit XML for Jenkins, GitLab and Azure Pipelines | `engine`, `inventory` |
 | `internal/codequality` | Renders a report as a GitLab Code Quality report | `engine`, `inventory` |
-| `internal/suppress` | Applies ignore rules, annotations and a baseline to a report | `engine`, `inventory` |
+| `internal/suppress` | Applies ignore rules, annotations and a baseline to a report | `crd/apigroup`, `engine`, `inventory` |
 | `internal/secretfile` | Reads a token or URL from a mounted file and re-reads it when the file changes | nothing internal |
 | `internal/textsafe` | Makes text a manifest or cluster controls safe to print to a terminal or a CI log | nothing internal |
 | `internal/mcp` | The MCP server behind `upgradescope mcp`: tools, schemas and the stdio and HTTP transports; what a scan does stays in the CLI's code, handed in through its config | `engine`, `registry`, `api` |
-| `internal/crd` | `ClusterReadiness` types, the embedded CRD manifest, and status projection and writes | `engine`, `suppress`, client-go |
+| `internal/crd` | `ClusterReadiness` types, the embedded CRD manifest, and status projection and writes | `crd/apigroup`, `engine`, `suppress`, client-go |
+| `internal/crd/apigroup` | The one place the API group and the annotation keys are spelled, with the read path for the pre-v0.2.0 keys | nothing internal |
 | `internal/agent` | The in-cluster loop and the snapshot push client | `collect`, `crd`, `engine`, `inventory`, `kb`, `secretfile`, `suppress` |
 | `internal/server` | Ingest, read API, what-if, gate, exports, team mapping, delta notifications, SPA serving | `codequality`, `collect` (manifests only), `engine`, `inventory`, `junit`, `kb`, `registry`, `sarif`, `secretfile`, `server/notify`, `server/store`, `suppress` |
 | `internal/server/store` | The `Store` interface and its SQLite and Postgres implementations, with embedded migrations | `engine` |
@@ -127,7 +128,7 @@ sha256(canonical inventory) changed, or --force-sync-every elapsed?
 The CRD status is written on every tick, even when the server is
 unreachable; only a spec the tick could not read, or `spec.targets` it
 could not set to `--targets`, stops the write, and the object is then
-marked stale (`upgradescope.dev/status-error`) instead. Collection gets the
+marked stale (`upgradescope.basit.engineer/status-error`) instead. Collection gets the
 tick deadline minus a reserve (30s, or half the deadline under a minute)
 that the status write, the stale marker and the push keep
 ([observability](observability.md#agent-logs)). The agent's local value never depends on the server. Pushes
@@ -673,7 +674,7 @@ knowledge base would produce silently green scans.
 
 ## The ClusterReadiness CRD
 
-`ClusterReadiness` (`upgradescope.dev/v1alpha1`, cluster-scoped, short name
+`ClusterReadiness` (`upgradescope.basit.engineer/v1alpha1`, cluster-scoped, short name
 `ucr`) is the per-cluster projection, for `kubectl get ucr`, GitOps health
 checks and policy engines that should not need to reach the server.
 
@@ -684,7 +685,7 @@ Kyverno policy, a Gatekeeper constraint and a Renovate preset; they are
 checked offline with the Kyverno CLI and gator, not on a live cluster, and
 cover in-cluster operations only. A policy
 engine reads the object with its own service account, so that account needs
-`get` and `list` on `clusterreadinesses` in the `upgradescope.dev` group. The
+`get` and `list` on `clusterreadinesses` in the `upgradescope.basit.engineer` group. The
 chart grants those verbs to the agent only, as the `clusterreadinesses` rows
 of the [agent's ClusterRole](operations/security-model-and-rbac.md#the-agents-clusterrole)
 show, and ships no read role for anything else; the examples carry the
@@ -756,7 +757,7 @@ if it is deleted, and writes status with conflict retry.
   manifests introduce count toward the verdict. Without `?cluster=`, the
   manifests are judged on their own (API usage, add-ons, and custom
   resources against the CRDs in the stream) as `scan --files` judges them.
-  Either way, `upgradescope.dev/ignore` annotations and the ignore rules of
+  Either way, `upgradescope.basit.engineer/ignore` annotations and the ignore rules of
   a `.upgradescope.yaml` sent in `?config=` are applied with `scan`'s code.
   The gate stores nothing; it answers JSON (leading with `schemaVersion`
   and `toolVersion`, like the server's other report responses), SARIF,

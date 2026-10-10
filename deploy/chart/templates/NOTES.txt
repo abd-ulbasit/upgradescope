@@ -1,9 +1,41 @@
 upgradescope {{ .Chart.AppVersion }} installed.
+{{- /* On upgrade the pre-v0.2.0 CRD may still be installed, and then
+       "clusterreadiness" and "ucr" match both CRDs: name ours in full. */}}
+{{- $ucr := ternary "clusterreadinesses.upgradescope.basit.engineer" "clusterreadiness" .Release.IsUpgrade }}
+{{- if .Release.IsUpgrade }}
+
+Upgrading from v0.1.x or a v0.2.0 release candidate? The ClusterReadiness
+CRD's API group is now upgradescope.basit.engineer, and Helm does not install
+a new CRD on upgrade.
+{{- if and .Values.agent.enabled .Values.agent.manageCRD }} The agent may not create it, so until it is installed
+the agent pod exits at startup with an error that names this command:
+{{- else if .Values.agent.enabled }} The agent may not create it, so until it is installed
+the agent pod stays up but never becomes Ready, and every tick fails with an
+error that names this command:
+{{- else }} Install it with:
+{{- end }}
+  kubectl apply -f https://raw.githubusercontent.com/abd-ulbasit/upgradescope/{{ .Chart.AppVersion }}/deploy/chart/crds/clusterreadinesses.upgradescope.basit.engineer.yaml
+(or helm pull oci://ghcr.io/abd-ulbasit/charts/upgradescope --version {{ .Chart.Version }} --untar,
+then kubectl apply -f upgradescope/crds/).
+{{- if and .Values.agent.enabled .Values.agent.manageCRD }} The pod's next restart picks
+the CRD up.
+{{- else if .Values.agent.enabled }} The next tick picks the CRD up.
+{{- end }}
+Then carry over the old object's spec, move ignore annotations to the
+upgradescope.basit.engineer/ keys (the old ones are read, deprecated, until
+v0.3.0), and point GitOps health checks and policies at the new group:
+  https://abd-ulbasit.github.io/upgradescope/operations/upgrade/#the-api-group-moved
+{{- if .Values.agent.enabled }}
+While the old CRD is installed, "kubectl get clusterreadiness" and "kubectl
+get ucr" may read the old object, whose status no longer changes; the
+commands below name the new resource in full.
+{{- end }}
+{{- end }}
 {{- if .Values.agent.enabled }}
 
 Watch readiness (the agent creates the object on its first tick):
-  kubectl get clusterreadiness {{ .Values.agent.crName }}
-  kubectl get clusterreadiness {{ .Values.agent.crName }} -o jsonpath='{.status.targets[0].score}'
+  kubectl get {{ $ucr }} {{ .Values.agent.crName }}
+  kubectl get {{ $ucr }} {{ .Values.agent.crName }} -o jsonpath='{.status.targets[0].score}'
 {{- if .Values.agent.targets }}
 
 Targets come from agent.targets ({{ join ", " .Values.agent.targets }}): the agent resets
@@ -11,7 +43,7 @@ spec.targets to them every tick, so change them with helm upgrade, not kubectl.
 {{- else }}
 
 Pin target versions without Helm:
-  kubectl patch clusterreadiness {{ .Values.agent.crName }} --type merge -p '{"spec":{"targets":["1.37"]}}'
+  kubectl patch {{ $ucr }} {{ .Values.agent.crName }} --type merge -p '{"spec":{"targets":["1.37"]}}'
 {{- end }}
 {{- end }}
 {{- if .Values.server.enabled }}
@@ -83,7 +115,7 @@ The agent reads namespaces, nodes, pods, the deprecated API resources the
 KB tracks{{ if .Values.rbac.helmSecrets }}, and every Secret and ConfigMap (Helm release detection;
 rbac.helmSecrets=false turns that off){{ end }}{{ if .Values.rbac.gitops.argocd }}, and Argo CD Applications (rbac.gitops.argocd){{ end }}{{ if .Values.rbac.gitops.flux }}, and Flux HelmReleases and OCIRepositories (rbac.gitops.flux){{ end }}. It may create ClusterReadiness
 objects (RBAC cannot scope create by name), and updates only
-ClusterReadiness/{{ .Values.agent.crName }}{{ if .Values.agent.manageCRD }} and the clusterreadinesses.upgradescope.dev CRD{{ end }}.
+ClusterReadiness/{{ .Values.agent.crName }}{{ if .Values.agent.manageCRD }} and the clusterreadinesses.upgradescope.basit.engineer CRD{{ end }}.
 The full rule list and its reasons are in the chart README.
 {{- end }}
 {{- if and .Values.server.enabled .Values.agent.enabled }}
@@ -139,8 +171,9 @@ A new file that is empty or unreadable keeps the old value, and the pod logs
 an error naming the file.{{ if and .Values.server.enabled (gt (int .Values.server.replicas) 1) }} Each server replica's kubelet syncs the Secret on its own schedule,
 so for up to that window a push can get a 401 from one replica and a 200 from
 another.{{ end }} A UPGRADESCOPE_*_TOKEN in server.extraEnv or agent.extraEnv no
-longer overrides these files: set the value in the Secret. No pod annotation carries a function of a secret
-value, so the pods are not restarted by a rotation.
+longer overrides these files: set the value in the Secret. No pod annotation
+carries a function of a secret value, so the pods are not restarted by a
+rotation.
 
 A restart is still needed for a value that does not come from the mounted
 files: the database URL (server.database.existingSecret), anything you pass in
@@ -151,4 +184,4 @@ started (a notification sink exists only if its URL was set at start). Then:
 {{- end }}
 
 Uninstall: helm uninstall keeps the CRD (Helm crds/ semantics). Full removal:
-  kubectl delete crd clusterreadinesses.upgradescope.dev
+  kubectl delete crd clusterreadinesses.upgradescope.basit.engineer

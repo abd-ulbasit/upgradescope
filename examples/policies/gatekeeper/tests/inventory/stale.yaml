@@ -1,4 +1,4 @@
-apiVersion: upgradescope.dev/v1alpha1
+apiVersion: upgradescope.basit.engineer/v1alpha1
 kind: ClusterReadiness
 metadata:
   name: cluster

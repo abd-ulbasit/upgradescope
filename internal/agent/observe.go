@@ -31,6 +31,7 @@ const (
 	msgTickComplete = "tick complete"
 	msgTickFailed   = "tick failed"
 	msgStopping     = "agent stopping"
+	msgLegacyCRD    = "the pre-v0.2.0 ClusterReadiness CRD is still installed; nothing uses it, delete it when no GitOps tool or policy reads it"
 )
 
 // tickReport is one tick's outcome. A tick fails when anything but the

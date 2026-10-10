@@ -115,7 +115,7 @@ func TestGateClusterSuppressedCustomResource(t *testing.T) {
 			Namespaces: map[string]int{"shop": 1}, Objects: []inventory.ObjectRef{{Namespace: "shop", Name: "legacy"}}}}
 	})
 	annotated := strings.Replace(widget("v1alpha1", "new"), "metadata: {name: new, namespace: shop}",
-		"metadata:\n  name: new\n  namespace: shop\n  annotations:\n    upgradescope.dev/ignore: crd-version\n    upgradescope.dev/ignore-reason: converted before the upgrade", 1)
+		"metadata:\n  name: new\n  namespace: shop\n  annotations:\n    upgradescope.basit.engineer/ignore: crd-version\n    upgradescope.basit.engineer/ignore-reason: converted before the upgrade", 1)
 	if !strings.Contains(annotated, "ignore-reason") {
 		t.Fatalf("annotation not added:\n%s", annotated)
 	}

@@ -20,8 +20,8 @@ import (
 
 const (
 	argoGuide     = "../../docs/guides/gitops-argo-flux.md"
-	argoHealthKey = "resource.customizations.health.upgradescope.dev_ClusterReadiness"
-	argoLibsKey   = "resource.customizations.useOpenLibs.upgradescope.dev_ClusterReadiness"
+	argoHealthKey = "resource.customizations.health.upgradescope.basit.engineer_ClusterReadiness"
+	argoLibsKey   = "resource.customizations.useOpenLibs.upgradescope.basit.engineer_ClusterReadiness"
 )
 
 // argoConfig returns the argocd-cm data the guide documents: the YAML

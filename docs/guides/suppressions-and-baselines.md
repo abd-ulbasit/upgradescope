@@ -1,7 +1,7 @@
 # Suppressions and baselines
 
 This page covers what a team can configure about which findings count:
-ignore rules in `.upgradescope.yaml`, the `upgradescope.dev/ignore`
+ignore rules in `.upgradescope.yaml`, the `upgradescope.basit.engineer/ignore`
 object annotations, baselines for CI, the server's gate, and the agent's
 `ClusterReadiness` `spec.ignore`. The file format, field by field, is in the
 [configuration file reference](../reference/config.md); the flags in
@@ -111,8 +111,8 @@ An object can opt out of findings itself:
 ```yaml
 metadata:
   annotations:
-    upgradescope.dev/ignore: removed-api, deprecated-api   # categories or keys, comma-separated
-    upgradescope.dev/ignore-reason: replaced by the HTTPRoute in routes.yaml
+    upgradescope.basit.engineer/ignore: removed-api, deprecated-api   # categories or keys, comma-separated
+    upgradescope.basit.engineer/ignore-reason: replaced by the HTTPRoute in routes.yaml
 ```
 
 The annotation works in `--files` mode (rendered manifests) and on live
@@ -178,7 +178,7 @@ how ready the cluster is.
 ## The server gate
 
 `POST /api/v1/gate` on `upgradescope serve` suppresses as `scan` does,
-with the same code. It applies the `upgradescope.dev/ignore` annotations of
+with the same code. It applies the `upgradescope.basit.engineer/ignore` annotations of
 the posted objects (and, with `?cluster=`, of the cluster's stored
 objects), and the ignore rules of a `.upgradescope.yaml` sent, URL-encoded,
 in the `config` query parameter:
@@ -235,7 +235,7 @@ The in-cluster agent reads the same rules from its `ClusterReadiness`
 object and applies them, along with the object annotations, on every tick:
 
 ```yaml
-apiVersion: upgradescope.dev/v1alpha1
+apiVersion: upgradescope.basit.engineer/v1alpha1
 kind: ClusterReadiness
 metadata:
   name: cluster
@@ -338,7 +338,7 @@ author who wants past it unless you pin its inputs:
   the repository root, so a pull request that adds one next to a manifest
   with a removed API turns exit 2 into exit 0. `--config <path>` (the
   Action's `config`) names the one file to read and stops that search.
-- **Annotations.** `upgradescope.dev/ignore` with `ignore-reason` on an
+- **Annotations.** `upgradescope.basit.engineer/ignore` with `ignore-reason` on an
   object always applies; no flag turns it off. Review the suppressed table,
   or fail the job when a suppression came from an annotation
   (`jq -e '[.suppressed[]? | select(.source == "annotation")] | length == 0'`

@@ -152,7 +152,7 @@ Kubernetes lets be longer, is cut to those limits instead: a
 capability's reason, which joins one failure per resource the agent
 could not read (without RBAC for custom resources, the default chart's,
 ~200 bytes per CRD at a deprecated version, past 64 KiB at ~320 of
-them), its skipped entries, and an object's `upgradescope.dev/ignore`
+them), its skipped entries, and an object's `upgradescope.basit.engineer/ignore`
 (to the tokens that fit whole) and `ignore-reason` annotations (up to
 256 KiB). The agent cuts them itself; the server cuts what an older
 agent sends, in the push and whenever it reads the snapshot back, which

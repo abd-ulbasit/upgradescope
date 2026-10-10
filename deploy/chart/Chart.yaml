@@ -30,7 +30,7 @@ annotations:
   artifacthub.io/crds: |
     - kind: ClusterReadiness
       version: v1alpha1
-      name: clusterreadinesses.upgradescope.dev
+      name: clusterreadinesses.upgradescope.basit.engineer
       displayName: ClusterReadiness
       description: Upgrade-readiness verdict, score and findings for one cluster, written by the agent.
   artifacthub.io/links: |

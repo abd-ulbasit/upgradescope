@@ -33,8 +33,8 @@ case "$*" in
   *"get --raw /version"*) echo "{\"major\":\"1\",\"minor\":\"${STUB_SERVER_MINOR:-31}+\"}" ;;
   *"jsonpath={.status.targets[0].score}"*) echo 40 ;;
   *"jsonpath={.metadata.generation}"*) [ -f "$STUB_STATE/ignore.json" ] && echo 3 || echo 2 ;;
-  *"get clusterreadiness cluster -o json"*)
-    [ -z "${STUB_FINALIZER:-}" ] || meta="\"metadata\":{\"name\":\"cluster\",\"finalizers\":[\"upgradescope.dev/hold\"]},"
+  *"get clusterreadinesses.upgradescope.basit.engineer cluster -o json"*)
+    [ -z "${STUB_FINALIZER:-}" ] || meta="\"metadata\":{\"name\":\"cluster\",\"finalizers\":[\"upgradescope.basit.engineer/hold\"]},"
     # Past the horizon (STUB_HORIZON, default 1.37), the agent records the
     # kb-coverage gap, unless STUB_CR_NO_KB_GAP. Once spec.ignore holds
     # rules (a merge patch), the agent has evaluated generation 3 (unless
@@ -55,9 +55,9 @@ case "$*" in
       fi
     fi
     echo "{${meta:-}\"spec\":{\"targets\":[\"$next\"]},\"status\":{\"observedGeneration\":$gen,\"targets\":[$target]$gaps,\"conditions\":[$ready]}}" ;;
-  *"patch clusterreadiness cluster --type merge -p "*)
+  *"patch clusterreadinesses.upgradescope.basit.engineer cluster --type merge -p "*)
     for a; do [ "$p" != -p ] || printf "%s\n" "$a" >"$STUB_STATE/ignore.json"; p=$a; done ;;
-  *"patch clusterreadiness cluster --type json -p "*)
+  *"patch clusterreadinesses.upgradescope.basit.engineer cluster --type json -p "*)
     [ -z "${STUB_UNPATCH_FAIL:-}" ] || exit 1
     rm -f "$STUB_STATE/ignore.json" ;;
   *"port-forward"*) exec sleep 30 ;;
@@ -204,7 +204,7 @@ fi
 applied="" via=""
 if [ -f "$STUB_STATE/applied.yaml" ]; then
   applied=$(sed -n 's/^apiVersion: //p' "$STUB_STATE/applied.yaml")
-  via=$(sed -n 's/^ *e2e.upgradescope.dev\/applied-via: //p' "$STUB_STATE/applied.yaml")
+  via=$(sed -n 's/^ *e2e.upgradescope.basit.engineer\/applied-via: //p' "$STUB_STATE/applied.yaml")
 fi
 [ "$via" != ga ] || [ -n "${STUB_GA_STILL_REPORTED:-}" ] || applied=""
 istio=""
@@ -265,15 +265,15 @@ ev() {
   ev kubernetes-admin "$SCAN_UA" get "" v1 secrets sh.helm.release.v1.ingress-nginx.v1 "/api/v1/namespaces/ingress-nginx/secrets/sh.helm.release.v1.ingress-nginx.v1"
   ev "$AGENT" "$SCAN_UA" list "" v1 secrets "" "/api/v1/secrets?labelSelector=owner%3Dhelm&limit=500"
   ev "$AGENT" "$SCAN_UA" get "" v1 secrets sh.helm.release.v1.ingress-nginx.v1 "/api/v1/namespaces/ingress-nginx/secrets/sh.helm.release.v1.ingress-nginx.v1"
-  ev "$AGENT" "$SCAN_UA" patch apiextensions.k8s.io v1 customresourcedefinitions clusterreadinesses.upgradescope.dev "/apis/apiextensions.k8s.io/v1/customresourcedefinitions/clusterreadinesses.upgradescope.dev?fieldManager=upgradescope-agent"
-  ev "$AGENT" "$SCAN_UA" create upgradescope.dev v1alpha1 clusterreadinesses cluster "/apis/upgradescope.dev/v1alpha1/clusterreadinesses"
-  ev "$AGENT" "$SCAN_UA" update upgradescope.dev v1alpha1 clusterreadinesses cluster "/apis/upgradescope.dev/v1alpha1/clusterreadinesses/cluster/status" "" status
+  ev "$AGENT" "$SCAN_UA" patch apiextensions.k8s.io v1 customresourcedefinitions clusterreadinesses.upgradescope.basit.engineer "/apis/apiextensions.k8s.io/v1/customresourcedefinitions/clusterreadinesses.upgradescope.basit.engineer?fieldManager=upgradescope-agent"
+  ev "$AGENT" "$SCAN_UA" create upgradescope.basit.engineer v1alpha1 clusterreadinesses cluster "/apis/upgradescope.basit.engineer/v1alpha1/clusterreadinesses"
+  ev "$AGENT" "$SCAN_UA" update upgradescope.basit.engineer v1alpha1 clusterreadinesses cluster "/apis/upgradescope.basit.engineer/v1alpha1/clusterreadinesses/cluster/status" "" status
   # Not upgradescope: kubectl applying the deprecated-API fixture (1.31's and
   # 1.37's row; the audit gates' positive control), the in-process ITs
   # writing their own CRD and CR, a controller writing a Secret.
   ev kubernetes-admin "$KUBECTL_UA" patch flowcontrol.apiserver.k8s.io v1beta3 flowschemas upgradescope-e2e-deprecated "/apis/flowcontrol.apiserver.k8s.io/v1beta3/flowschemas/upgradescope-e2e-deprecated?fieldManager=upgradescope-e2e" deprecated
   ev kubernetes-admin "$KUBECTL_UA" patch resource.k8s.io v1beta1 deviceclasses upgradescope-e2e-deprecated "/apis/resource.k8s.io/v1beta1/deviceclasses/upgradescope-e2e-deprecated?fieldManager=upgradescope-e2e" deprecated
-  ev kubernetes-admin "cli.test/v0.0.0 (linux/amd64) kubernetes/\$Format" create upgradescope.dev v1alpha1 clusterreadinesses it-agent "/apis/upgradescope.dev/v1alpha1/clusterreadinesses"
+  ev kubernetes-admin "cli.test/v0.0.0 (linux/amd64) kubernetes/\$Format" create upgradescope.basit.engineer v1alpha1 clusterreadinesses it-agent "/apis/upgradescope.basit.engineer/v1alpha1/clusterreadinesses"
   ev system:serviceaccount:kube-system:token-cleaner kube-controller-manager update "" v1 secrets bootstrap-token-abcdef "/api/v1/namespaces/kube-system/secrets/bootstrap-token-abcdef"
 } >"$work/audit.jsonl"
 # audit_with <name> <event...>: the good log plus these events, in $work/<name>.
@@ -326,7 +326,7 @@ has "the agent-targets upgrade uses --set-string" "$work/log" "--set-string agen
 has "the cluster is created from the e2e kind config" "$work/log" "--config "
 has "the kind config mounts the audit policy by absolute path" "$work/kind-config.yaml" "- hostPath: $PWD/hack/e2e/audit-policy.yaml"
 has "the deprecated-request audit gate passes" "$work/summary" "- PASS — audit: scan and the agent made no deprecated-API request outside the allowlist"
-has "the agent write-set audit gate passes" "$work/summary" "- PASS — audit: the agent wrote only ClusterReadiness/cluster (+ status) and the clusterreadinesses.upgradescope.dev CRD"
+has "the agent write-set audit gate passes" "$work/summary" "- PASS — audit: the agent wrote only ClusterReadiness/cluster (+ status) and the clusterreadinesses.upgradescope.basit.engineer CRD"
 has "the Secrets audit gate passes" "$work/summary" "- PASS — audit: Secrets were read only through Helm's owner=helm list and release GETs"
 has "the scan-writes audit gate passes" "$work/summary" "- PASS — audit: scan wrote nothing"
 has "the positive control is reported" "$work/out" "positive control: 1 request(s) through flowcontrol.apiserver.k8s.io/v1beta3 annotated k8s.io/deprecated"
@@ -426,7 +426,7 @@ has "the new webhook is named" "$work/out" "  validatingwebhookconfiguration.adm
 has "the webhook/finalizer gate is a FAIL in the summary" "$work/summary" "- **FAIL** — the install added no webhook configuration"
 
 run "a finalizer on the ClusterReadiness fails the run" 1 STUB_FINALIZER=1
-has "the finalizer is named" "$work/out" "upgradescope.dev/hold"
+has "the finalizer is named" "$work/out" "upgradescope.basit.engineer/hold"
 
 run "a ClusterRole left after uninstall fails the run" 1 STUB_LEFTOVER=1
 has "the leftover is named" "$work/out" "clusterrole/upgradescope-agent"
@@ -463,7 +463,7 @@ run "an agent write outside its CR fails the run" 1 STUB_AUDIT="$work/cm.jsonl"
 has "the write is named" "$work/out" "agent patch /api/v1/namespaces/default/configmaps/kube-root-ca.crt"
 has "the write-set gate is a FAIL in the summary" "$work/summary" "- **FAIL** — audit: the agent wrote only ClusterReadiness/cluster"
 
-audit_with othercr.jsonl "$(ev "$AGENT" "$SCAN_UA" update upgradescope.dev v1alpha1 clusterreadinesses someone-elses "/apis/upgradescope.dev/v1alpha1/clusterreadinesses/someone-elses/status" "" status)"
+audit_with othercr.jsonl "$(ev "$AGENT" "$SCAN_UA" update upgradescope.basit.engineer v1alpha1 clusterreadinesses someone-elses "/apis/upgradescope.basit.engineer/v1alpha1/clusterreadinesses/someone-elses/status" "" status)"
 run "an agent write to another ClusterReadiness fails the run" 1 STUB_AUDIT="$work/othercr.jsonl"
 has "the other CR is named" "$work/out" "clusterreadinesses/someone-elses/status"
 
@@ -555,10 +555,10 @@ has "1.37 at 1.38: the documented command targets 1.38" "$work/log" "api/v1/gate
 has "1.37 at 1.38: the unknown verdict is excused with allow-incomplete=true" "$work/log" "api/v1/gate?target=1.38&allow-incomplete=true&cluster=kind&format=sarif&path=rendered.yaml"
 has "1.37 at 1.38: the removed-API gate passes" "$work/summary" "- PASS — $gate_removed"
 has "the CR's blocker categories are accepted in ingress-nginx only, plus the run's own deprecated caller by key" "$work/log" \
-  'kubectl --context kind-upgradescope-demo patch clusterreadiness cluster --type merge -p {"spec":{"ignore":[{"category":"chart-incompat","namespace":"ingress-nginx","reason":"e2e: accepted to observe the kb-coverage gap alone"},{"category":"eol-addon","namespace":"ingress-nginx","reason":"e2e: accepted to observe the kb-coverage gap alone"},{"key":"deprecated-api-in-use/resource.k8s.io/v1beta1/deviceclasses","reason":"e2e: the v1beta1 DeviceClass apply of the deprecated-api step"}]}}'
+  'kubectl --context kind-upgradescope-demo patch clusterreadinesses.upgradescope.basit.engineer cluster --type merge -p {"spec":{"ignore":[{"category":"chart-incompat","namespace":"ingress-nginx","reason":"e2e: accepted to observe the kb-coverage gap alone"},{"category":"eol-addon","namespace":"ingress-nginx","reason":"e2e: accepted to observe the kb-coverage gap alone"},{"key":"deprecated-api-in-use/resource.k8s.io/v1beta1/deviceclasses","reason":"e2e: the v1beta1 DeviceClass apply of the deprecated-api step"}]}}'
 # The rules are removed again, before the later gates read the CR.
 accept_at=$(grep -n -- '--type merge' "$work/log" | head -1 | cut -d: -f1 || true)
-unaccept_at=$(grep -n -- 'patch clusterreadiness cluster --type json -p \[{"op":"remove","path":"/spec/ignore"}\]' "$work/log" | head -1 | cut -d: -f1 || true)
+unaccept_at=$(grep -n -- 'patch clusterreadinesses.upgradescope.basit.engineer cluster --type json -p \[{"op":"remove","path":"/spec/ignore"}\]' "$work/log" | head -1 | cut -d: -f1 || true)
 server_at=$(grep -n -- 'port-forward' "$work/log" | head -1 | cut -d: -f1 || true)
 if [ -n "$accept_at" ] && [ -n "$unaccept_at" ] && [ -n "$server_at" ] && [ "$accept_at" -lt "$unaccept_at" ] &&
   [ "$unaccept_at" -lt "$server_at" ] && [ ! -e "$work/state/ignore.json" ]; then
@@ -613,7 +613,7 @@ run "1.31 at 1.32 is within the KB horizon" 0
 has "the past-horizon scan is N/A within the horizon" "$work/summary" "- N/A — $horizon_gate (1.32 is within the KB horizon 1.37)"
 has "the CR gap check is N/A within the horizon" "$work/summary" "- N/A — $cr_gap_gate (1.32 is within the KB horizon 1.37)"
 has "the CR unknown check is N/A within the horizon" "$work/summary" "- N/A — $cr_unknown_gate (1.32 is within the KB horizon 1.37)"
-if grep -q -- 'patch clusterreadiness' "$work/log"; then
+if grep -q -- 'patch clusterreadinesses' "$work/log"; then
   echo "FAIL 1.31 still patched the ClusterReadiness" >&2; echo "FAIL 1.31 CR patched" >>"$work/results"
 else
   echo "ok   1.31 does not patch the ClusterReadiness" | tee -a "$work/results"

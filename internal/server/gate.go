@@ -608,7 +608,7 @@ func usageKeys(rep engine.Report) map[string]bool {
 // and every manifest ref, which can be more than inventory.MaxObjectRefs:
 // the engine and suppression see them all, so a Helm release's stored
 // copy of a cluster object is left to the live finding, and an object's
-// upgradescope.dev/ignore annotation or a ?config= rule naming it accepts
+// upgradescope.basit.engineer/ignore annotation or a ?config= rule naming it accepts
 // it, however many objects the PR posts, as in the baseline. The cap is
 // applied to the answer after suppression (capObjects), the manifests'
 // refs kept. Otherwise the room the manifests take could make a
