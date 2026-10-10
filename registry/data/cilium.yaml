@@ -40,3 +40,18 @@ cycles:
   - {cycle: "1.15", eol: "2025-07-29", citations: ["https://endoflife.date/cilium"]}
   - {cycle: "1.14", eol: "2025-02-04", citations: ["https://endoflife.date/cilium"]}
   - {cycle: "1.13", eol: "2024-07-24", citations: ["https://endoflife.date/cilium"]}
+# Kubernetes minimums, kept apart from `cycles` so that tools/eol-sync never
+# drops them (CONTRIBUTING, "Compatibility ranges on synced entries"). Read on
+# 2026-10-10 from each release's own docs.cilium.io "Kubernetes Compatibility"
+# page. 1.13 and 1.14 say "Older Kubernetes versions not listed in this table do
+# not have Cilium support", which is a minimum upstream states (1.16 and 1.19,
+# the first version of each table). Newer versions "depend on the forward /
+# backward compatibility offered by Kubernetes": no maximum, for any release.
+# 1.15 to 1.20 say that older ones depend on it too, so their tables are
+# tested-with lists and are not encoded: 1.15 1.26-1.29, 1.16 1.27-1.30, 1.17
+# 1.29-1.32, 1.18 1.30-1.33, 1.19 1.32-1.35, 1.20 1.33-1.36 ("All Kubernetes
+# versions listed are e2e tested"). Judging them would call a working install
+# incompatible.
+compat:
+  - {range: ">=1.13.0 <1.14.0", k8s_min: "1.16", citations: ["https://docs.cilium.io/en/v1.13/network/kubernetes/compatibility/"]}
+  - {range: ">=1.14.0 <1.15.0", k8s_min: "1.19", citations: ["https://docs.cilium.io/en/v1.14/network/kubernetes/compatibility/"]}
