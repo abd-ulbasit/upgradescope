@@ -2,6 +2,8 @@ package mcp
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -51,21 +53,47 @@ func newFleetClient() *http.Client {
 	}
 }
 
+// TrustRoots makes the client verify the server against roots (the system
+// roots plus a private CA: agent.LoadServerCAs) instead of the system roots
+// alone. Verification is never skipped, and the client still follows no
+// redirect.
+func (f *Fleet) TrustRoots(roots *x509.CertPool) {
+	f.Client = newFleetClient()
+	if roots == nil {
+		return
+	}
+	tr := http.DefaultTransport.(*http.Transport).Clone() // keeps the proxy, dial and idle settings
+	tr.TLSClientConfig = &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12}
+	f.Client.Transport = tr
+}
+
+// CleartextHost is the host:port of serverURL when a bearer token sent to
+// it would cross the network in the clear: the URL is plain http:// to a
+// host that is not loopback, and token is not empty. ok is false otherwise.
+// 'mcp --server-url' and 'clusters' warn on it.
+func CleartextHost(serverURL, token string) (host string, ok bool) {
+	u, err := url.Parse(serverURL)
+	if err != nil || token == "" || !strings.EqualFold(u.Scheme, "http") {
+		return "", false
+	}
+	h := u.Hostname()
+	if ip := net.ParseIP(h); strings.EqualFold(h, "localhost") || ip != nil && ip.IsLoopback() {
+		return "", false
+	}
+	return u.Host, true
+}
+
 // CleartextWarning says why reading serverURL with token is unsafe, or
 // returns "": a read token sent over plain http:// to a host that is not
 // loopback crosses the network in the clear, where anyone on the path can
 // replay it (as agent.CleartextPushWarning says of the ingest token).
 func CleartextWarning(serverURL, token string) string {
-	u, err := url.Parse(serverURL)
-	if err != nil || token == "" || !strings.EqualFold(u.Scheme, "http") {
-		return ""
-	}
-	host := u.Hostname()
-	if ip := net.ParseIP(host); strings.EqualFold(host, "localhost") || ip != nil && ip.IsLoopback() {
+	host, ok := CleartextHost(serverURL, token)
+	if !ok {
 		return ""
 	}
 	return fmt.Sprintf("reading %s over plain http: the read token crosses the network unencrypted, "+
-		"so anyone on the path can replay it; serve the server over https (--tls-cert-file, the chart's server.tls, or a TLS Ingress)", u.Host)
+		"so anyone on the path can replay it; serve the server over https (--tls-cert-file, the chart's server.tls, or a TLS Ingress)", host)
 }
 
 // get returns the 2xx JSON body of GET path. Any other status is an error

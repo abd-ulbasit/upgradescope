@@ -35,7 +35,10 @@ no ignore file is looked up. With --server-url, get_report and list_findings
 can read a cluster from an upgradescope server and fleet_summary summarises
 the fleet, using the server's read token (--read-token, --read-token-file
 or $UPGRADESCOPE_READ_TOKEN); a server that requires one rejects calls
-without it, and the tool shows that error.
+without it, and the tool shows that error. A server whose https certificate
+a private CA issued needs --server-ca-file (the CA bundle, trusted on top of
+the system roots); the read token over plain http to a host that is not
+loopback is sent in the clear, and the command warns.
 
 ```
 upgradescope mcp [flags]
@@ -70,6 +73,7 @@ upgradescope mcp [flags]
       --read-token string          with --server-url: the server's read token; omit it for an open read API (visible in process listings: prefer $UPGRADESCOPE_READ_TOKEN or --read-token-file)
       --read-token-file string     read --read-token from this file, e.g. a mounted Secret (surrounding whitespace is trimmed)
       --request-timeout duration   give up on a single API request of a scan after this long (0 = no per-request limit) (default 30s)
+      --server-ca-file string      PEM bundle of a private CA that issued the server's certificate, trusted on top of the system roots (for an https server behind a private CA; $SSL_CERT_FILE also adds roots, for the whole process); needs an https server URL. Verification is never skipped
       --server-url string          fleet mode: base URL of an upgradescope server, e.g. https://upgradescope.example.com
 ```
 
