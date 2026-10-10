@@ -267,6 +267,12 @@ status:
       message: "1.36: 2 blocker(s) (score 72)"
       observedGeneration: 3
       lastTransitionTime: "2026-10-01T09:10:00Z"
+    - type: AllTargetsReady      # every target; same reasons as Ready
+      status: "False"
+      reason: Blocked
+      message: "1.36 blocked (2 blockers)"
+      observedGeneration: 3
+      lastTransitionTime: "2026-10-01T09:10:00Z"
   targets: [...]
 ```
 
@@ -275,6 +281,18 @@ status:
 blockers were found but a required check was not assessed, or no target
 could be evaluated. `lastTransitionTime` changes only when the status
 does, so it reads as "blocked since".
+
+`AllTargetsReady` covers every target of `spec.targets`: `False` when any
+target is blocked (the message names each, such as `1.38 blocked (3
+blockers)`), `Unknown` when none is blocked but any is not assessed or no
+target was evaluated, `True` only when every target is ready. With several
+targets it is the condition to wait on; `Ready` and the `kubectl get`
+columns read the first target only.
+
+The agent reads the spec inside a tick, so an edit to it shows in the status
+at the next tick (up to the interval plus 10% jitter);
+`status.observedGeneration` below `metadata.generation` means it has not
+yet ([how to wait](getting-started/in-cluster.md#choose-the-targets)).
 
 `kubectl get ucr` shows `LastEvaluated`; more than about two intervals
 old means the agent is not ticking. In scripts and pipelines:

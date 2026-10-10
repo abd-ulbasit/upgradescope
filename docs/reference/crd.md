@@ -23,7 +23,8 @@ Served: true. Storage version: true.
 |---|---|---|---|
 | Target | string | `.status.targets[0].target` | — |
 | Score | integer | `.status.targets[0].score` | — |
-| Ready | string | `.status.targets[0].verdict` | Verdict for the first target — ready, blocked, or unknown (required checks not assessed). |
+| Ready | string | `.status.targets[0].verdict` | Verdict for the first target — ready, blocked, or unknown (required checks not assessed). With several targets, the AllTargetsReady condition covers all of them. |
+| Blockers | integer | `.status.targets[0].blockers` | Blocker count of the first target only. With several targets, the AllTargetsReady condition names any target that is blocked. |
 | LastEvaluated | date | `.status.lastEvaluated` | When the agent last wrote this status. Older than about two intervals means the agent is not ticking. |
 | Age | date | `.metadata.creationTimestamp` | — |
 
@@ -58,7 +59,7 @@ Served: true. Storage version: true.
 | `status.annualCostNote` | string | The provider's caveat on whom annualCostDelta is charged to, for example that GKE charges it only to clusters on the Extended release channel. Set with annualCostDelta when the knowledge base records one; show it beside the figure. | — |
 | `status.extendedSupportCondition` | string | Where the provider's extended support is opt-in (GKE, AKS), the configuration under which it applies to the cluster, as a clause completing "only if ...", for example "Long Term Support is enabled". The agent cannot see the cluster's configuration, so supportPhase extended means the provider's window, not that the cluster is enrolled in it. Absent for providers where extended support is the default (EKS) and when the provider offered none for the minor. | — |
 | `status.observedGeneration` | integer | The metadata.generation (spec version) the status was evaluated for. | format int64; minimum 0 |
-| `status.conditions` | array | Standard conditions. Ready summarizes the first target's verdict: True (ready), False (reason Blocked), or Unknown (reason NotAssessed: a required check was not assessed, or no target was evaluated). | — |
+| `status.conditions` | array | Standard conditions. Ready summarizes the first target's verdict: True (ready), False (reason Blocked), or Unknown (reason NotAssessed: a required check was not assessed, or no target was evaluated). AllTargetsReady covers every target: False (reason Blocked) when any target is blocked, Unknown (reason NotAssessed) when none is blocked but any is not assessed or no target was evaluated, True only when all are ready. | — |
 | `status.conditions[]` | object | — | — |
 | `status.conditions[].type` | string | — | required; max length 316 |
 | `status.conditions[].status` | string | — | required; one of `True`, `False`, `Unknown` |

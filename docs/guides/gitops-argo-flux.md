@@ -182,9 +182,34 @@ If `agent.targets` is set as well, the agent resets `spec.targets` to it on
 every tick and the two fight. `spec.ignore` takes the same rules as the
 CLI's `.upgradescope.yaml` ([suppressions](suppressions-and-baselines.md#the-agent-specignore)).
 
-The status carries a standard `Ready` condition and `observedGeneration`
-([status reference](../observability.md#clusterreadiness-status)), which is
-what health checks read.
+The status carries standard `Ready` and `AllTargetsReady` conditions and
+`observedGeneration` ([status reference](../observability.md#clusterreadiness-status)),
+which is what health checks read. `Ready` is the **first** target's verdict.
+`AllTargetsReady` covers every target: `False` when any is blocked (the
+message names it, such as `1.38 blocked (3 blockers)`), `Unknown` when none is
+blocked but one was not assessed, `True` only when all are ready. For a plan
+of several targets, gate on `AllTargetsReady`, not `Ready`: with
+`spec.targets: ["1.37","1.38"]`, a ready 1.37 and a blocked 1.38 leave
+`Ready` `True`.
+
+### A spec edit is applied at the next tick
+
+The agent reads the spec only inside a tick, so a commit that changes
+`spec.targets` or adds a `spec.ignore` rule (often to accept a blocker and
+unblock a gate) shows the old verdict until the next tick: up to
+`agent.interval` plus 10% jitter, about 11 minutes with the 10m default.
+Until then `status.observedGeneration` is lower than `metadata.generation`;
+that is how a health check or a script tells an old verdict from a current
+one. To wait for the edit to be applied (here generation 5):
+
+```sh
+kubectl wait ucr/cluster --for=jsonpath='{.status.observedGeneration}'=5 --timeout=15m
+```
+
+or lower `agent.interval` (1m at least) so the lag is short. The Argo CD
+health check below reports Progressing while the generations differ, and the
+Flux rule below treats the object as in progress. Allow the lag in any
+`timeout` of a sync wait or a Kustomization.
 
 ## Argo CD
 
@@ -244,19 +269,31 @@ data:
       end
     end
 
+    -- Ready is the first target's verdict. AllTargetsReady covers every
+    -- target of a multi-target plan; an agent older than v0.2.0 does not
+    -- write it, and then only Ready decides.
+    local ready, all
     for _, c in ipairs(obj.status.conditions) do
-      if c.type == "Ready" then
-        hs.message = c.message
-        if c.status == "True" then
-          hs.status = "Healthy"
-        else
-          -- False (Blocked) or Unknown (NotAssessed): not safe to upgrade.
-          hs.status = "Degraded"
-          hs.message = c.reason .. ": " .. c.message
-        end
-        return hs
-      end
+      if c.type == "Ready" then ready = c end
+      if c.type == "AllTargetsReady" then all = c end
     end
+    if ready == nil then
+      return hs
+    end
+    hs.message = ready.message
+    if ready.status ~= "True" then
+      -- False (Blocked) or Unknown (NotAssessed): not safe to upgrade.
+      hs.status = "Degraded"
+      hs.message = ready.reason .. ": " .. ready.message
+      return hs
+    end
+    if all ~= nil and all.status ~= "True" then
+      -- The first target is ready, a later one is blocked or not assessed.
+      hs.status = "Degraded"
+      hs.message = "AllTargetsReady " .. all.reason .. ": " .. all.message
+      return hs
+    end
+    hs.status = "Healthy"
     return hs
 ```
 
@@ -265,8 +302,9 @@ data:
 | no status yet | Progressing |
 | `observedGeneration` behind `metadata.generation` (spec just edited) | Progressing |
 | `lastEvaluated` older than `staleAfterSeconds` | Degraded |
-| `Ready=True` | Healthy |
+| `Ready=True` (and `AllTargetsReady=True`, where the agent writes it) | Healthy |
 | `Ready=False` (Blocked) or `Unknown` (NotAssessed) | Degraded |
+| `Ready=True` but `AllTargetsReady` False or Unknown (a later target is blocked or not assessed) | Degraded |
 
 Raise `staleAfterSeconds` if you run the agent with a longer `--interval`.
 The agent Deployment's own health in Argo CD follows its readiness probe.
@@ -275,8 +313,11 @@ The agent Deployment's own health in Argo CD follows its readiness probe.
 
 !!! warning "Not tested by this project"
     No CI job runs Flux against upgradescope. The rule below follows the
-    `Ready` condition the agent writes, which is tested
-    (`TestReadyCondition` in `internal/crd`); the Flux side is untested.
+    conditions the agent writes, which are tested (`TestReadyCondition` and
+    `TestAllTargetsReadyCondition` in `internal/crd`); the Flux side is
+    untested. That its health check honours `observedGeneration` was read in
+    Flux's source (`runtime/cel/status_evaluator.go` in fluxcd/pkg, on
+    2026-10-11), not run.
 
 Flux's kustomize-controller can wait on custom resources it applies. A
 `Kustomization` that applies the `ClusterReadiness` object above can state
@@ -298,11 +339,27 @@ spec:
   healthCheckExprs:
     - apiVersion: upgradescope.basit.engineer/v1alpha1
       kind: ClusterReadiness
-      current: status.conditions.filter(e, e.type == 'Ready').all(e, e.status == 'True')
-      failed: status.conditions.filter(e, e.type == 'Ready').all(e, e.status == 'False')
+      current: status.conditions.exists(e, e.type == 'AllTargetsReady' && e.status == 'True')
+      failed: status.conditions.exists(e, e.type == 'AllTargetsReady' && e.status == 'False')
 ```
 
-`Ready=Unknown` (no blocker found, but a required check was not assessed)
+The rule reads `AllTargetsReady`, so a blocked later target of a plan holds
+the rollout; for a single target it is the same as `Ready`. Use `Ready` in
+both expressions to follow the first target alone. The expressions use
+`exists`, not `filter(...).all(...)`, because `all` is true over an empty
+list: with no matching condition, they stay in progress instead of passing.
+
+Flux's health check for custom resources compares `status.observedGeneration`
+with `metadata.generation` before it evaluates `current` and `failed`: while
+the status lags the spec, the object is in progress, whatever the old
+conditions say (kstatus does the same). So a spec edit does not pass on the
+old verdict; the Kustomization waits for the next tick, up to about 11
+minutes with the default interval, and its `timeout` should allow that. An
+agent older than v0.2.0 does not write `AllTargetsReady`: neither expression
+then matches and the Kustomization stays in progress until its timeout; use
+`Ready` there.
+
+`AllTargetsReady=Unknown` (no blocker found, but a required check was not assessed)
 matches neither expression, so the Kustomization stays in progress until
 its timeout. Downstream Kustomizations can then `dependsOn` this one to
 hold a rollout until the cluster reads ready.

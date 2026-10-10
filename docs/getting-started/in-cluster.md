@@ -31,12 +31,23 @@ kubectl get ucr
 ```
 
 The columns come from the CRD: `TARGET` (the first target), `SCORE`,
-`READY` (the verdict: `ready`, `blocked` or `unknown`), `LASTEVALUATED` and
-`AGE`. For example:
+`READY` (the verdict: `ready`, `blocked` or `unknown`), `BLOCKERS` (the
+first target's blocker count), `LASTEVALUATED` and `AGE`. For example:
 
 ```text
-NAME      TARGET   SCORE   READY     LASTEVALUATED   AGE
-cluster   1.37     75      blocked   4m              2d
+NAME      TARGET   SCORE   READY     BLOCKERS   LASTEVALUATED   AGE
+cluster   1.37     75      blocked   2          4m              2d
+```
+
+Every column, and the `Ready` condition, read the **first** target. With
+several targets, the `AllTargetsReady` condition covers all of them: `False`
+when any target is blocked (its message names them, such as `1.38 blocked
+(3 blockers)`), `Unknown` when none is blocked but one was not assessed,
+`True` only when every target is ready. Read it when the plan has more than
+one hop:
+
+```sh
+kubectl get ucr cluster -o jsonpath='{.status.conditions[?(@.type=="AllTargetsReady")].message}'
 ```
 
 `kubectl get ucr cluster -o yaml` has the full status: per target the score,
@@ -53,6 +64,10 @@ answer. To block a script or pipeline on readiness:
 ```sh
 kubectl wait clusterreadiness/cluster --for=condition=Ready --timeout=15m
 ```
+
+`Ready` is the first target's verdict. For a plan of several targets, wait
+on `AllTargetsReady` instead (`--for=condition=AllTargetsReady`), so a blocked
+later target does not pass.
 
 The object is named by `agent.crName` (`--cr-name`), which must be an RFC
 1123 subdomain: dot-separated labels of lowercase letters, digits and `-`, each
@@ -108,6 +123,21 @@ Git ([GitOps](../guides/gitops-argo-flux.md)):
 kubectl patch ucr cluster --type merge -p '{"spec":{"targets":["1.37","1.38"]}}'
 ```
 
+An edit to `spec.targets` or `spec.ignore` takes effect at the agent's
+**next tick**, not at once: the agent reads the spec only inside a tick, so
+the old verdict stays until then, up to `agent.interval` plus its 10% jitter
+(about 11 minutes with the 10m default; the interval may be set up to 1h).
+`status.observedGeneration` is the signal: while it is lower than
+`metadata.generation`, the status does not yet reflect your edit. To wait
+for it (here for generation 5; read the current one with
+`kubectl get ucr cluster -o jsonpath='{.metadata.generation}'`):
+
+```sh
+kubectl wait ucr/cluster --for=jsonpath='{.status.observedGeneration}'=5 --timeout=15m
+```
+
+To shorten the lag, lower `agent.interval` (1m at least).
+
 A target past the knowledge base's horizon reads `unknown`, with a
 `kb-coverage` gap: the knowledge base cannot know what that release removes.
 The default target becomes such a target once the cluster runs the horizon
@@ -117,7 +147,9 @@ minor itself, until a release with a newer knowledge base is installed.
 
 `spec.ignore` takes the same rules as the CLI's `.upgradescope.yaml`, with a
 required reason and an optional expiry; suppressed findings are counted in
-the status but leave the score and verdict.
+the status but leave the score and verdict. Like a target edit, a new rule
+applies at the next tick; see [Choose the targets](#choose-the-targets) for
+how to wait for it.
 [Suppressions and baselines](../guides/suppressions-and-baselines.md#the-agent-specignore)
 has the format.
 
