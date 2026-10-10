@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"path/filepath"
@@ -197,5 +198,50 @@ func TestServeAllowedHosts(t *testing.T) {
 		if err := execServe(t, []string{"--allowed-host", bad}, serveOK()); err == nil || !strings.Contains(err.Error(), "--allowed-host") {
 			t.Errorf("--allowed-host %q: err = %v, want a refusal naming the flag", bad, err)
 		}
+	}
+}
+
+// --require-read-credential keeps the read API closed whatever the
+// database holds (#295): the flag reaches the server, it is off by default,
+// and it contradicts --allow-anonymous-read, which opens the API.
+func TestServeRequireReadCredential(t *testing.T) {
+	var got serveOptions
+	capture := func(_ context.Context, opts serveOptions) error {
+		got = opts
+		return nil
+	}
+	if err := execServe(t, []string{"--ingest-token", "t"}, capture); err != nil {
+		t.Fatal(err)
+	}
+	if got.requireReadCredential {
+		t.Error("requireReadCredential must default to false")
+	}
+	if err := execServe(t, []string{"--ingest-token", "t", "--listen", ":8080", "--require-read-credential"}, capture); err != nil {
+		t.Fatalf("--require-read-credential on an exposed address: %v, want it accepted (the API is not open)", err)
+	}
+	if !got.requireReadCredential {
+		t.Error("--require-read-credential did not reach the options")
+	}
+	err := execServe(t, []string{"--ingest-token", "t", "--require-read-credential", "--allow-anonymous-read"}, serveOK())
+	if err == nil || !strings.Contains(err.Error(), "--require-read-credential") || !strings.Contains(err.Error(), "--allow-anonymous-read") {
+		t.Errorf("both flags: err = %v, want a refusal naming both", err)
+	}
+}
+
+// With the real wiring, on every interface and an empty database, the flag
+// starts the server where serve would otherwise refuse (see
+// TestServeAnonymousReadGuard); it runs until its context ends, then exits
+// cleanly. (The server package's tests cover the 401s over HTTP.)
+func TestServeRequireReadCredentialStartsOnAnExposedAddress(t *testing.T) {
+	cmd := newServeCmd() // runServe is the real wiring: no execServe stub
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	ctx, cancel := context.WithTimeout(context.Background(), 700*time.Millisecond)
+	defer cancel()
+	cmd.SetContext(ctx)
+	cmd.SetArgs([]string{"--listen", "0.0.0.0:0", "--db", filepath.Join(t.TempDir(), "closed.db"), "--require-read-credential"})
+	if err := cmd.Execute(); err != nil {
+		t.Errorf("serve --listen 0.0.0.0:0 --require-read-credential with an empty database: %v, want it to run until cancelled", err)
 	}
 }

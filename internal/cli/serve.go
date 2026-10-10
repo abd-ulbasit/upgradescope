@@ -70,10 +70,13 @@ type serveOptions struct {
 	maxSnapshotBytes   int64
 	maxGateBytes       int64
 	allowAnonymousRead bool
-	tlsCertFile        string
-	tlsKeyFile         string
-	staleAfter         time.Duration
-	retention          string
+	// requireReadCredential is --require-read-credential: the read API is
+	// never open (server.Config.RequireReadCredential).
+	requireReadCredential bool
+	tlsCertFile           string
+	tlsKeyFile            string
+	staleAfter            time.Duration
+	retention             string
 
 	// parsedRetention is --retention parsed by validateServeOptions.
 	parsedRetention time.Duration
@@ -159,6 +162,7 @@ var runServe = func(ctx context.Context, opts serveOptions) error {
 		ExtraTargets:            extraTargets,
 		TeamMap:                 opts.parsedTeamMap,
 		AllowAnonymousRead:      opts.allowAnonymousRead,
+		RequireReadCredential:   opts.requireReadCredential,
 		TrustTeamHeader:         opts.trustTeamHeader,
 		TrustedProxies:          opts.parsedProxies,
 		AllowedHosts:            opts.allowedHosts,
@@ -217,7 +221,15 @@ a credential: --read-token (fleet-wide), read tokens minted with
 'upgradescope tokens create --read --teams ...' (each scoped to teams, or
 '*' for the fleet), or an authenticating proxy's team header
 (--trust-team-header with --trusted-proxy-cidr); or an explicit
---allow-anonymous-read.`,
+--allow-anonymous-read.
+
+Whether a read token has been minted lives in the database, so a lost,
+emptied or restored database reopens a read API that relied on minted tokens
+(and --allow-anonymous-read allows it). --require-read-credential closes it
+for good: reads are never open, and return 401 until a credential exists.
+While the read API is open, a request that presents a bearer nothing knows
+gets 401, and an anonymous request must name a host the server answers for
+(--allowed-host), on any listen address.`,
 		Example: `  # Local dashboard at http://127.0.0.1:8080/, SQLite in ./upgradescope.db
   upgradescope serve
 
@@ -272,7 +284,7 @@ a credential: --read-token (fleet-wide), read tokens minted with
 		addSecretFlag(cmd, &opts.ingestToken, "ingest-token", "UPGRADESCOPE_INGEST_TOKEN",
 			"optional shared bearer token that may push snapshots as ANY cluster; omit it to accept only per-cluster tokens from 'upgradescope tokens create' (serve warns at startup, not later, when both are in use)"),
 		addSecretFlag(cmd, &opts.readToken, "read-token", "UPGRADESCOPE_READ_TOKEN",
-			"bearer token for the read API and /api/v1/gate (empty = OPEN read access; refused on non-loopback --listen without --allow-anonymous-read)"),
+			"bearer token for the read API and /api/v1/gate (empty = OPEN read access unless a read token is minted in the database; refused on non-loopback --listen without --allow-anonymous-read; --require-read-credential keeps it closed whatever the database holds)"),
 		addSecretFlag(cmd, &opts.adminToken, "admin-token", "UPGRADESCOPE_ADMIN_TOKEN",
 			"bearer token for cluster administration: DELETE and PATCH (rename) /api/v1/clusters/{id}, 'upgradescope clusters delete|rename --server'; it also reads (empty = administration refused)"),
 		addSecretFlag(cmd, &opts.slackWebhook, "slack-webhook", "UPGRADESCOPE_SLACK_WEBHOOK",
@@ -288,7 +300,11 @@ a credential: --read-token (fleet-wide), read tokens minted with
 	for _, s := range secrets {
 		s.follow(cmd)
 	}
-	cmd.Flags().BoolVar(&opts.allowAnonymousRead, "allow-anonymous-read", false, "serve the read API and /api/v1/gate without a read token on a non-loopback --listen address")
+	cmd.Flags().BoolVar(&opts.allowAnonymousRead, "allow-anonymous-read", false, "serve the read API and /api/v1/gate without a read token on a non-loopback --listen address "+
+		"(it is open only while no read credential exists: --read-token, a read token minted in the database, or a trusted team header; a lost or restored database reopens it, and a request that presents a bearer nothing knows gets 401); "+
+		"anonymous reads must name a host the server answers for (see --allowed-host); excludes --require-read-credential")
+	cmd.Flags().BoolVar(&opts.requireReadCredential, "require-read-credential", false, "never open the read API: a read with no credential, or with a bearer nothing knows, gets 401 even when the database holds no read token "+
+		"(a lost or restored database cannot reopen it); serve warns at startup while no credential exists yet, and mint the first with: upgradescope tokens create --read --teams '*' (same --db or --db-url), or set --read-token; excludes --allow-anonymous-read")
 	cmd.Flags().StringVar(&opts.targets, "targets", "", "extra target versions evaluated on every snapshot, CSV, e.g. 1.37,1.38; at most 4 distinct minors")
 	cmd.Flags().StringVar(&opts.trustTeamHeader, "trust-team-header", "",
 		"DANGEROUS unless the proxy strips client-supplied copies: scope a read from a --trusted-proxy-cidr peer to the teams this request header lists, comma separated and each percent-encoded where it must be "+
@@ -298,7 +314,7 @@ a credential: --read-token (fleet-wide), read tokens minted with
 	cmd.MarkFlagsRequiredTogether("trust-team-header", "trusted-proxy-cidr")
 	cmd.Flags().StringSliceVar(&opts.allowedHosts, "allowed-host", nil,
 		"a host name (or IP) requests may name in their Host header, any port, repeatable or comma separated (default $"+allowedHostsEnv+"): "+
-			"on a loopback --listen, or with --trust-team-header, any other Host than localhost, a loopback address, the --listen host (not 0.0.0.0 or ::) "+
+			"on a loopback --listen, with --trust-team-header, or for an anonymous request while the read API is open (any --listen address), any other Host than localhost, a loopback address, the --listen host (not 0.0.0.0 or ::) "+
 			"or the address the request arrived on gets 421, which stops DNS-rebinding pages; name the Service, Ingress or proxy host the server is reached under")
 	cmd.Flags().StringVar(&opts.teamMap, "team-map", "", "YAML file of {pattern, team} namespace globs overriding team labels (first match wins)")
 	cmd.Flags().StringVar(&opts.registryDir, "registry-dir", "", registryDirUsage)
@@ -415,6 +431,10 @@ func validateServeOptions(opts *serveOptions) error {
 	if opts.readToken != "" && opts.readToken == opts.ingestToken {
 		return fmt.Errorf("--read-token must differ from --ingest-token: " +
 			"every agent's push token would read the whole fleet, and every reader could push as any cluster")
+	}
+	if opts.requireReadCredential && opts.allowAnonymousRead {
+		return errors.New("--require-read-credential and --allow-anonymous-read contradict each other: " +
+			"one keeps the read API closed whatever the database holds, the other opens it")
 	}
 	if err := parseAllowedHosts(opts); err != nil {
 		return err
