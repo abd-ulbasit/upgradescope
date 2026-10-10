@@ -175,13 +175,14 @@ release; `upgradescope version` prints the newest Kubernetes minor it
 covers. A target past that is `unknown`, by design.
 [Knowledge base](https://abd-ulbasit.github.io/upgradescope/concepts/knowledge-base/).
 
-**Not checked by this version**: field-level removals and in-tree
-volume-plugin removals inside served APIs. The engine judges the
-`apiVersion` and `kind` of an object, so a pod spec that uses a removed
-volume plugin (`glusterfs`, `awsElasticBlockStore`, `cephfs`, `rbd`, among
-others) or the deprecated `gitRepo` volume is not flagged, and a `READY` with
-a score of 100 does not cover it. The table and Markdown reports say so in a
-closing line; the score, verdict, exit code and JSON are not affected.
+**Not checked by this version**: field-level removals other than in-tree
+volume plugins. The engine judges the `apiVersion` and `kind` of an object,
+and the in-tree volume plugins its pods and PersistentVolumes name; another
+removed field or annotation inside a served API (the seccomp alpha
+annotations, `Service.spec.externalIPs`, `beta.kubernetes.io/os`) is not
+flagged, and a `READY` with a score of 100 does not cover it. The table and
+Markdown reports say so in a closing line; the score, verdict, exit code and
+JSON are not affected.
 
 Tested against Kubernetes 1.24 to the newest minor: 1.29 and up as whole
 kind clusters, 1.24 to 1.28 as real kube-apiservers through envtest (the

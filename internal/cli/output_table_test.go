@@ -322,7 +322,9 @@ const (
 // judge. Both reports end with this sentence, pinned verbatim. It is text
 // only: score, verdict and JSON are the engine's and do not change.
 func TestReportsStateWhatIsNotChecked(t *testing.T) {
-	const sentence = "Not checked by this version: field-level removals and in-tree volume-plugin removals inside served APIs."
+	// In-tree volume plugins are checked (#351), so the line names only the
+	// field-level removals that are not.
+	const sentence = "Field-level removals other than in-tree volume plugins are not checked by this version."
 	r := engine.Report{ClusterID: "files", Target: inventory.Version{Major: 1, Minor: 36}, KBVersion: "test-kb", Score: 100, Ready: true, Verdict: engine.VerdictReady}
 	var table, md, js bytes.Buffer
 	if err := WriteTable(&table, r); err != nil {
@@ -338,7 +340,7 @@ func TestReportsStateWhatIsNotChecked(t *testing.T) {
 	if !strings.HasSuffix(md.String(), "\n**Scope.** "+sentence+"\n") {
 		t.Errorf("markdown does not end with the scope line:\n%s", md.String())
 	}
-	if strings.Contains(js.String(), "Not checked") || strings.Contains(js.String(), "volume-plugin") {
+	if strings.Contains(js.String(), "not checked by this version") || strings.Contains(js.String(), "Field-level") {
 		t.Errorf("the JSON report carries the scope line, which is a rendering only:\n%s", js.String())
 	}
 }

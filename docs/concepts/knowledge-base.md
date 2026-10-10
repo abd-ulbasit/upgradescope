@@ -184,7 +184,8 @@ the horizon minor, until you upgrade to a release with a newer KB.
   `unrecognizedImages` in the inventory and the report, and never become
   findings.
 - Feature gates, flags and behaviour changes that are not API removals.
-- Field-level removals and in-tree volume-plugin removals inside an API that
-  is still served (`glusterfs`, `awsElasticBlockStore`, `cephfs`, `rbd`, the
-  `gitRepo` volume): only the `apiVersion` and `kind` of an object are
-  judged. The reports say so ([Verdict and score](verdict-and-score.md#what-a-verdict-does-not-cover)).
+- Field-level removals inside an API that is still served, other than
+  in-tree volume plugins ([Volume plugins](volume-plugins.md)): the seccomp
+  alpha annotations, `Service.spec.externalIPs`, `beta.kubernetes.io/os`.
+  Only the `apiVersion` and `kind` of an object, and the volume plugins its
+  pods name, are judged. The reports say so ([Verdict and score](verdict-and-score.md#what-a-verdict-does-not-cover)).

@@ -77,13 +77,14 @@ the reason `files mode`.
 
 `ready` means that no blocker was found among what the engine judges, and
 that every required check ran. The engine judges the `apiVersion` and `kind`
-of each object against the API lifecycle data. It does **not** assess
-field-level removals or in-tree volume-plugin removals inside an API that is
-still served: a pod spec that uses `glusterfs`, `awsElasticBlockStore`,
-`cephfs` or `rbd` volumes, or the deprecated `gitRepo` volume, scans as
-`ready` with a score of 100. The table and Markdown reports end with a line
-saying so ("Not checked by this version: field-level removals and in-tree
-volume-plugin removals inside served APIs."). This is a disclosure, not a
+of each object against the API lifecycle data, and the in-tree volume
+plugins that pods and PersistentVolumes name ([Volume plugins](volume-plugins.md)).
+It does **not** assess other field-level removals inside an API that is
+still served: an object that uses the seccomp alpha annotations,
+`Service.spec.externalIPs` or `beta.kubernetes.io/os` scans as `ready` with a
+score of 100. The table and Markdown reports end with a line saying so
+("Field-level removals other than in-tree volume plugins are not checked by
+this version."). This is a disclosure, not a
 check: it changes no score, verdict or exit code, and the JSON report does
 not carry it.
 
