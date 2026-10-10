@@ -10,7 +10,10 @@ upgradescope tells you what blocks a Kubernetes cluster, or a directory of
 rendered manifests, from moving to the next minor: APIs that are removed or
 deprecated at the target (found by who still writes them, and by what the
 apiserver is still asked for), add-ons past end of life, version skew
-outside the upstream policy, and Helm charts that exclude the target. The
+outside the upstream policy, Helm charts that exclude the target, and
+[in-tree volume plugins](https://abd-ulbasit.github.io/upgradescope/concepts/volume-plugins/)
+(`glusterfs`, `gitRepo`, `awsElasticBlockStore`) that the target removed or
+serves only through a CSI driver. The
 answer is a verdict (`ready`, `blocked` or `unknown` when a required check
 could not run), a 0–100 score and cited findings, as a table, JSON, SARIF,
 Markdown, JUnit or GitLab Code Quality, an exit code for CI, and a
