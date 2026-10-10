@@ -976,7 +976,12 @@ type addOnSubject struct {
 // registry does not map yet (a label is never taken for those). One found
 // from labels alone has no version label it can trust; one found from a
 // Helm release records no appVersion, and no pod image tag (or, when
-// consulted, label) gave one. node marks the subject of node container
+// consulted, label) gave one. For an inventory from an agent that predates
+// the label rule the inventory cannot say that much: a v0.1.x agent
+// reported the chart version where the app version belongs (legacyView
+// blanks it), so the release may well record an appVersion and a pod tag
+// may give one, and the release candidates did read it. The sentence then
+// says only that none was read. node marks the subject of node container
 // runtimes; a source the engine does not know gets a neutral sentence.
 func noVersionReason(ins []addOnInstall, node, labelsConsulted bool) string {
 	var parts []string
@@ -1001,7 +1006,7 @@ func noVersionReason(ins []addOnInstall, node, labelsConsulted bool) string {
 		case via == "chart" && labelsConsulted:
 			add("The Helm release records no appVersion, and no pod image tag or app.kubernetes.io/version label gives a version.")
 		case via == "chart":
-			add("The Helm release records no appVersion, and no pod image tag gives a version." + unread)
+			add("No app version was read from the Helm release or from a pod image tag: either the release records none, or the collecting agent did not collect it (a v0.1.x agent reported only the chart version)." + unread)
 		case via == "gitops" && labelsConsulted:
 			add("The GitOps chart reference gives no app version, and no running pod's image tag or app.kubernetes.io/version label does.")
 		case via == "gitops":

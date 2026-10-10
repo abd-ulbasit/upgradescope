@@ -206,7 +206,7 @@ func TestEvalAddOnsNoDataDetail(t *testing.T) {
 func TestEvalAddOnsNoDataDetailSaysWhenTheAgentDidNotReadPodLabels(t *testing.T) {
 	const (
 		image = "No version was read from the image: either its tag names no version (a digest, :latest) or it is a component image whose release line the registry does not map yet. The collecting agent predates reading a pod's app.kubernetes.io/version label for an image without a tag, so such a label may carry the version; upgrade the agent."
-		chart = "The Helm release records no appVersion, and no pod image tag gives a version. The collecting agent predates reading a pod's app.kubernetes.io/version label for an image without a tag, so such a label may carry the version; upgrade the agent."
+		chart = "No app version was read from the Helm release or from a pod image tag: either the release records none, or the collecting agent did not collect it (a v0.1.x agent reported only the chart version). The collecting agent predates reading a pod's app.kubernetes.io/version label for an image without a tag, so such a label may carry the version; upgrade the agent."
 		gitop = "The GitOps chart reference gives no app version, and no running pod's image tag does. The collecting agent predates reading a pod's app.kubernetes.io/version label for an image without a tag, so such a label may carry the version; upgrade the agent."
 	)
 	for _, tc := range []struct{ source, chart, want string }{
@@ -226,7 +226,7 @@ func TestEvalAddOnsNoDataDetailSaysWhenTheAgentDidNotReadPodLabels(t *testing.T)
 					t.Errorf("%s, schema 0: detail %q lacks %q", tc.source, d, tc.want)
 				}
 				// Nothing may say a label was consulted and gave no version.
-				for _, said := range []string{"gives a usable app.kubernetes.io/version", "image tag or app.kubernetes.io/version label"} {
+				for _, said := range []string{"gives a usable app.kubernetes.io/version", "image tag or app.kubernetes.io/version label", "records no appVersion", "no pod image tag gives"} {
 					if strings.Contains(d, said) {
 						t.Errorf("%s, schema 0: detail %q says the label was consulted (%q)", tc.source, d, said)
 					}

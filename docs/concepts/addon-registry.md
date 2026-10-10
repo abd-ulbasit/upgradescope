@@ -121,7 +121,12 @@ At the installed version, independent of the target unless noted:
   `collectorSchema`) never took a pod's version label for such an image, so
   the detail names only the tag or component reason and says the agent did
   not read the label, and to upgrade it. A Helm release or GitOps chart
-  without an app version is worded the same way.
+  without an app version is worded the same way, with one difference for a
+  Helm release found by such an agent: a v0.1.x agent reported the chart
+  version where the app version belongs, which the server sets aside, so the
+  release may well record an appVersion, and the detail says only that no
+  app version was read (the release records none, or the agent did not
+  collect it), never that the release records none.
 
 Each install (one per namespace, two where a Helm release and images on
 another release line share one, or one per node for a runtime) is judged

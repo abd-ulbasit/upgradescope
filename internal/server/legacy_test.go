@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/abd-ulbasit/upgradescope/internal/engine"
 	"github.com/abd-ulbasit/upgradescope/internal/inventory"
 	"github.com/abd-ulbasit/upgradescope/internal/kb"
 	"github.com/abd-ulbasit/upgradescope/registry"
@@ -343,6 +344,41 @@ func TestClusterDetailJudgesMarkerLikeReport(t *testing.T) {
 		}
 		if rep := h.report(cluster, "1.35"); rep.Verdict != "ready" || len(rep.NotAssessed) != 0 {
 			t.Errorf("agent %q: report = %s, notAssessed %+v, want ready with none", agent, rep.Verdict, rep.NotAssessed)
+		}
+	}
+}
+
+// TestLegacyChartAddOnNoDataDetailClaimsNothingItCannotKnow: legacyView
+// blanks the version of every Helm-found add-on a v0.1.x agent reported
+// (it was the chart version), and the app version was never collected. The
+// addon-no-data detail then must not say the release "records no
+// appVersion" or that no pod image tag gave a version: the release may
+// record one, and v0.1.x reported the chart version even where a pod tag
+// gave one (#301). The release candidates are schema 0 too and did read
+// the appVersion, so the sentence has to hold for both generations.
+func TestLegacyChartAddOnNoDataDetailClaimsNothingItCannotKnow(t *testing.T) {
+	for _, agent := range []string{"0.1.1", "v0.1.0", "dev", ""} {
+		inv := legacyView(unmarked(argoChartInventory("7.1.0")), agent)
+		rep := engine.Evaluate(inv, legacyKB(), inventory.Version{Major: 1, Minor: 35}, aug1)
+		var detail string
+		for _, f := range rep.Findings {
+			if f.Category == engine.CatAddOnNoData && strings.Contains(f.Title, "Argo CD") {
+				detail = f.Detail
+			}
+		}
+		if detail == "" {
+			t.Fatalf("agent %q: no addon-no-data finding for Argo CD in %+v", agent, rep.Findings)
+		}
+		if !strings.Contains(detail, "via chart 7.1.0") {
+			t.Errorf("agent %q: detail %q lacks the chart version as evidence", agent, detail)
+		}
+		for _, said := range []string{"records no appVersion", "no pod image tag gives a version"} {
+			if strings.Contains(detail, said) {
+				t.Errorf("agent %q: detail %q says %q, which the inventory cannot show", agent, detail, said)
+			}
+		}
+		if !strings.Contains(detail, "No app version was read") || !strings.Contains(detail, "upgrade the agent") {
+			t.Errorf("agent %q: detail %q does not say that no app version was read and to upgrade the agent", agent, detail)
 		}
 	}
 }

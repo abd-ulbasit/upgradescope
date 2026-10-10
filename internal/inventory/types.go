@@ -111,7 +111,10 @@ const CurrentCollectorSchema = 1
 // a finding says is missing from it must not say the label was unreadable.
 // It equals CurrentCollectorSchema because v0.2.0 has not been released:
 // no released agent stamps 1 without it, and the stamp and the label rule
-// ship together. Raise CurrentCollectorSchema past it for a later change;
+// ship together. Unreleased builds of main between the stamp and the label
+// rule (agentVersion "dev" or a pseudo-version) are the exception: they
+// stamp 1 without reading the label, so their inventories read as having
+// consulted it. Raise CurrentCollectorSchema past it for a later change;
 // do not move this one.
 const LabelVersionCollectorSchema = 1
 

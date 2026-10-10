@@ -875,8 +875,9 @@ const manyPodsDigest = "quay.io/jetstack/cert-manager-controller@sha256:3b1ab0b5
 
 // Matching is linear in the pods sharing one image. The label version of
 // an image without a tag is folded once per (namespace, image, add-on),
-// not rescanned per pod: 2,000 such pods cost 3.4 GB and 3.6 s a tick when
-// each pod scanned them all (measured at 602a9251, 2026-10-10). Bytes
+// not rescanned per pod: 2,000 such pods allocated 3.4 GB a tick when
+// each pod scanned them all (measured at 602a9251, 2026-10-10; the time is
+// machine- and load-dependent, so it is not cited). Bytes
 // allocated at three times the pods must stay near three times the bytes
 // (linear), not nine (quadratic): a ratio holds under -race, whose
 // instrumentation inflates absolute figures, and TotalAlloc is cumulative,
