@@ -500,7 +500,10 @@ interval, with its jitter of up to 10%), and a tick does not reuse a pass
 that is `--pod-pass-max-age` old or more, which bites first on a long
 interval (at 30 minutes the default hour allows the first reuse, which is
 a pass of about 30 minutes, and loses the second on the ticks the jitter
-spaces widely; from an hour, none). The age is measured when the tick reuses the pass, and
+spaces widely; at an hour only the ticks the jitter brings early reuse the
+pass, about half of the first ticks after one, and none does from an
+interval of about 67 minutes, the hour over 0.9, a little less where a
+tick takes time). The age is measured when the tick reuses the pass, and
 that tick's report and ClusterReadiness status stay up until the next
 one, so a viewer can see evidence up to about the maximum age plus one
 interval old. An add-on removed or one whose last pod went away is
@@ -516,14 +519,20 @@ every one of those reuses to work, and the floor is needed but not
 enough: the ticks' run time comes on top. At the default interval of 10
 minutes and `--pod-pass-every 3` the floor is 22 minutes, and 21 fails
 on the draws where the two spacings and their run time reach 21 minutes;
-25 works unless a tick takes over a minute (a reusing tick took 2.4 s
-here, a full one 4.4 s, the first 35 s). The default hour clears it. A
+25 works unless the ticks take more than a minute and a half each (two
+spacings of up to 11 minutes and two run times must stay under 25; a
+reusing tick took 2.4 s here, a full one 4.4 s, the first 35 s). The default hour clears it. A
 maximum age at or below `--interval` defeats the setting most: the
 pass is about one interval old at the next tick, so every tick lists every
 pod but one the jitter brings early. Between the interval and the floor the
 first reuses work and the last ones depend on the draw. The agent logs a
 warning at start for any maximum age at or below the floor, with the floor
-in its `mustExceed` field (`TestRunWarnsWhenPodPassMaxAgeIsTooShortForPodPassEvery`).
+in its `mustExceed` field, and the largest `--pod-pass-every` that fits the
+maximum age you set in `podPassEveryThatFits` (`TestRunWarnsWhenPodPassMaxAgeIsTooShortForPodPassEvery`):
+at a 30-minute interval the default hour fits 2, whose floor is 33 minutes,
+not the default 3, whose floor is 66. A `--pod-pass-every` of billions
+does not overflow the floor: it saturates at the largest duration, and the
+warning is raised (`TestPodPassMaxAgeFloorSaturates`).
 
 Which add-ons can be behind. Those in `kube-system` cannot: their pods are
 read on every tick. A change made through Helm (a new release, or a new

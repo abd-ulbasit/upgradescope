@@ -150,11 +150,19 @@ To accept a finding for now, with a reason and an expiry, use an
   time, not quite enough: at `--interval 10m --pod-pass-every 3` the floor
   is 22 minutes, and 21 minutes fails on the second reuse whenever the
   two spacings and their run time come to 21 minutes or more; 25 minutes
-  works unless ticks take more than a minute each. At a 30-minute
-  interval the default hour is under the floor of 66 minutes, so the last
-  of the two reuses is lost on the ticks the jitter spaces widely. Or set
-  `--pod-pass-every=1` (`agent.podPassEvery=1`) if reading every pod on
-  every tick is what you want, which also ends the warning.
+  works unless the ticks take more than a minute and a half each (two
+  spacings of up to 11 minutes and two run times must stay under 25). At
+  a 30-minute interval the default hour is under the floor of 66 minutes,
+  so the last of the two reuses is lost on the ticks the jitter spaces
+  widely. Instead of raising the maximum age, lower `--pod-pass-every`
+  (`agent.podPassEvery`) until its floor, `--interval` times 1.1 times
+  (`--pod-pass-every` minus one), fits under the maximum age with room for
+  the run time: the warning's `podPassEveryThatFits` field is the largest
+  that does. At the 30-minute interval and the default hour that is 2,
+  whose floor is 33 minutes, at the price of an add-on being behind for
+  one tick (30 minutes) instead of two. Or set `--pod-pass-every=1`
+  (`agent.podPassEvery=1`) if reading every pod on every tick is what you
+  want, which also ends the warning.
 - **An add-on I just installed or upgraded is missing, or still shows its
   old version.** The agent lists the pods outside `kube-system` only every
   `--pod-pass-every` ticks (3 by default, so about every 30 minutes at the

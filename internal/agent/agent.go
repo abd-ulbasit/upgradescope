@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"math/rand/v2"
 	"net"
 	"net/http"
@@ -252,12 +253,40 @@ func forceSyncInEffect(forceSync, interval time.Duration) time.Duration {
 // between two ticks, 11/10 of the interval. It is a floor and not enough:
 // the sleep starts after a tick ends, so each spacing also holds that
 // tick's run time, which the floor leaves out because the agent does not
-// know it ahead. 0 when every is 1 or less, which reuses nothing.
+// know it ahead. 0 when every is 1 or less, which reuses nothing. A
+// product beyond the largest Duration (a --pod-pass-every of billions,
+// which nothing bounds above) saturates there instead of wrapping to a
+// small or negative age: no max age exceeds it, so the warning is raised.
 func podPassMaxAgeFloor(interval time.Duration, every int) time.Duration {
 	if every <= 1 {
 		return 0
 	}
-	return time.Duration(every-1) * jitterBy(interval, int64(interval/5))
+	spacing := jitterBy(interval, int64(interval/5))
+	n := time.Duration(every - 1)
+	if spacing > 0 && n > math.MaxInt64/spacing {
+		return math.MaxInt64
+	}
+	return n * spacing
+}
+
+// podPassEveryThatFits is the largest --pod-pass-every whose
+// podPassMaxAgeFloor is below maxAge, and at least 1 (which lists every
+// pod on every tick, the only setting left when maxAge is not above one
+// longest spacing). The warning offers it as the way to keep the max age
+// and still reuse the pass; the ticks' run time comes on top of the floor,
+// so a slow tick may call for one less.
+func podPassEveryThatFits(interval, maxAge time.Duration) int {
+	spacing := jitterBy(interval, int64(interval/5))
+	if spacing <= 0 || maxAge <= spacing {
+		return 1
+	}
+	// Every k satisfies (k-1) x spacing < maxAge, that is
+	// k-1 <= (maxAge-1)/spacing.
+	n := int64((maxAge - 1) / spacing)
+	if n >= math.MaxInt-1 {
+		return math.MaxInt
+	}
+	return 1 + int(n)
 }
 
 // podPassMaxAgeTooShort reports a --pod-pass-max-age that is not above
@@ -863,9 +892,9 @@ func Run(ctx context.Context, clients collect.Clients, dyn dynamic.Interface, ap
 	}
 	if podPassMaxAgeTooShort(cfg) {
 		floor := podPassMaxAgeFloor(cfg.Interval, cfg.PodPassEvery)
-		log.Warn("pod-pass-max-age is too short for pod-pass-every: the ticks after a full pass can be as far as 1.1 times the interval apart, plus the time a tick takes, so a pass is not reliably reused for pod-pass-every minus one of them (not at all at or below the interval, but by a tick the jitter brings early) and the pods outside kube-system are listed on ticks that pod-pass-every would reuse; raise pod-pass-max-age above mustExceed plus the run time of the ticks in between (a few seconds each at 2,001 nodes), or set pod-pass-every to 1 to say that listing them every tick is meant",
+		log.Warn("pod-pass-max-age is too short for pod-pass-every: the ticks after a full pass can be as far as 1.1 times the interval apart, plus the time a tick takes, so a pass is not reliably reused for pod-pass-every minus one of them (not at all at or below the interval, but by a tick the jitter brings early) and the pods outside kube-system are listed on ticks that pod-pass-every would reuse; raise pod-pass-max-age above mustExceed plus the run time of the ticks in between (a few seconds each at 2,001 nodes), or lower pod-pass-every to podPassEveryThatFits (less if ticks are slow; 1 lists every pod on every tick, which also ends this warning)",
 			"podPassMaxAge", cfg.PodPassMaxAge.String(), "interval", cfg.Interval.String(), "podPassEvery", cfg.PodPassEvery,
-			"mustExceed", floor.String())
+			"mustExceed", floor.String(), "podPassEveryThatFits", podPassEveryThatFits(cfg.Interval, cfg.PodPassMaxAge))
 	}
 	obs := newObserver(log, k, cfg.Interval)
 	healthAddr := ""

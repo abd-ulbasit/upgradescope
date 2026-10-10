@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"math"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -448,6 +449,13 @@ func TestAgentPodPassFlags(t *testing.T) {
 	got, err = execAgent(t, "--pod-pass-every", "1", "--pod-pass-max-age", "20m")
 	if err != nil || got.podPassEvery != 1 || got.podPassMaxAge != 20*time.Minute {
 		t.Fatalf("set = %d, %v, err %v; want 1 and 20m", got.podPassEvery, got.podPassMaxAge, err)
+	}
+	// No upper bound is set: a count of ticks beyond the lifetime of any
+	// process is accepted, and the agent's start-up warning saturates its
+	// floor instead of overflowing (agent.TestPodPassMaxAgeFloorSaturates).
+	got, err = execAgent(t, "--pod-pass-every", "9223372036854775807")
+	if err != nil || got.podPassEvery != math.MaxInt {
+		t.Fatalf("--pod-pass-every at the largest int = %d, err %v; want it accepted", got.podPassEvery, err)
 	}
 	for _, tc := range []struct{ flag, val string }{
 		{"--pod-pass-every", "0"}, {"--pod-pass-every", "-2"}, {"--pod-pass-max-age", "0"}, {"--pod-pass-max-age", "-1m"},
