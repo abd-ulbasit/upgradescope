@@ -48,10 +48,13 @@ a CI gate.
   new file keeps the old value, and the log names the file, never its
   content; a read or admin token file that empties or disappears never opens
   the read API. A value from a flag or an environment variable is still read
-  once. New `serve --optional-secret-file` names the `--*-file` flags whose
-  file may be missing at start, as a key absent from a Secret you manage is:
-  removing a required ingest-token file keeps the old token, and removing
-  the optional one leaves per-cluster tokens only (#255).
+  once, as are `--db-url-file` and the `mcp` token files. New `serve
+  --optional-secret-file` takes a comma-separated list of `ingest-token`,
+  `slack-webhook`, `webhook` and `webhook-secret` (each also needs its
+  `--<name>-file`) whose file may be missing at start, as a key absent from
+  a Secret you manage is: removing a required ingest-token file keeps the
+  old token, and removing the optional one leaves per-cluster tokens only
+  (#255).
 - `agent --pprof-addr HOST:PORT` serves Go's profiler on its own listener.
   It is off by default and refused on any address but loopback; reach it in
   a pod with `kubectl port-forward` ("Profiling the agent" in
@@ -498,6 +501,16 @@ a CI gate.
 
 ### Changed
 
+- `scan --files` and `POST /api/v1/gate` now fail with a blocker for a
+  manifest at an API version the target does not serve yet ("not served
+  until 1.X"), so a manifest that passed a CI gate at an older target can
+  now exit `2`: run the gate against the new target before you upgrade. Its
+  key ends in `/unserved`; see the entry on that key (#300). A
+  namespace-scoped ignore rule no longer accepts an add-on install that has
+  no namespace in files mode, nor a cluster-scoped IngressClass; use a rule
+  without `namespace`. Such a finding carries the new optional report field
+  `unnamespaced` (`api/report.schema.json` and the OpenAPI schema) (#237,
+  #266).
 - **Breaking:** the `ClusterReadiness` CRD group is now
   `upgradescope.basit.engineer`, not `upgradescope.dev` (a domain the
   project does not own), and every annotation key moved with it:
@@ -536,16 +549,17 @@ a CI gate.
   scope. To keep an open read API, set `server.allowAnonymousRead=true`
   explicitly. A release that set `server.ingress.allowAnonymousRead=true`
   only to use minted tokens (the earlier advice) stays open after a database
-  loss until you drop it. `metrics.serviceMonitor` without
-  `server.readToken` fails the render, and so does a `server.extraArgs`
+  loss until you drop it. `metrics.serviceMonitor` with no
+  `server.readToken` fails the render unless `server.allowAnonymousRead=true`
+  (or `server.ingress.allowAnonymousRead=true`), and so does a `server.extraArgs`
   entry that contradicts the mode the chart renders
   (`--allow-anonymous-read` or `--require-read-credential`, either way). On
   any read API that is open, a bearer that matches no known credential now
   gets `401` instead of fleet scope (leave a CI `READ_TOKEN` placeholder
-  empty), and a request whose Host is not `localhost`, a loopback address,
-  the address it arrived on, a chart-named Service name or an
-  `--allowed-host` gets `421`, on every listener, not only a loopback one: a
-  NodePort or LoadBalancer IP needs `server.allowedHosts`
+  empty), and an anonymous request (no bearer) whose Host is not
+  `localhost`, a loopback address, the address it arrived on, a chart-named
+  Service name or an `--allowed-host` gets `421`, on every listener, not only
+  a loopback one: a NodePort or LoadBalancer IP needs `server.allowedHosts`
   (`--allowed-host`). Minting or revoking a read token takes effect within
   about a second, with no restart (#295, #309).
 - A suppression or baseline for an API the target does not serve yet (the
@@ -632,9 +646,10 @@ a CI gate.
   api-usage, helm and addons checks marked partial, so it reads `unknown`,
   never `ready`, in reports, what-ifs and the CI gate, until the agent runs
   the server's version; a v0.1.x agent, which sends no `kbVersion`, is
-  covered too. Expect a burst of verdict changes, and notifications, on a
-  server upgrade until the agents follow, and give the server the
-  `agent.extraRegistry` entries too (`--registry-dir`). Ingest refuses
+  covered too. Expect clusters to read `unknown` (not ready) in reports and
+  the CI gate until the agents run the server's version; that move sends no
+  notification. Give the server the `agent.extraRegistry` entries too
+  (`--registry-dir`). Ingest refuses
   (`422`) an `agentVersion` over 128 bytes, a `kbVersion` over 512 bytes, or
   either when it is not printable ASCII (#268).
 - A target below the knowledge base's oldest covered minor (1.16) is refused
@@ -642,10 +657,18 @@ a CI gate.
   --targets` and the gate's `target`, which now answers `400` instead of
   `422`; the error says that `target: 1.30` in YAML is the number 1.3. The
   Action's `target` must match `^[0-9]+\.[0-9]+$` (`v1.36` and `1.36.2` were
-  accepted before). The support-lifecycle finding's key carries its phase
-  (ending, extended or ended), so a suppression or baseline of one phase no
-  longer hides a worse later one; an existing rule keyed without the phase
-  matches only the phase it names (#237, #266).
+  accepted before) (#237, #266).
+- The support-lifecycle finding's key is now
+  `support-lifecycle/<provider>/<minor>/<phase>`, with `ending`, `extended`
+  or `ended`, so a suppression or baseline of one phase no longer hides a
+  worse later one. A rule or baseline with the old key, without the phase,
+  matches nothing, and `scan` warns and names the key to write: write it
+  with the phase you accept (a category rule still takes every phase).
+  Until then the finding is back, a blocker in the `extended` and `ended`
+  phases; against an old baseline it is new, so it fails the gate when it is
+  a blocker, and the server's next evaluation of a cluster in `extended` or
+  `ended` sends one new-blocker notification. "The support-lifecycle key
+  names its phase" in `docs/operations/upgrade.md` has the steps (#266).
 - RKE2 clusters get an `eol-approaching` warning, and Flux installed from
   manifests, RKE1 ingress (`-rancherN` builds of
   `rancher/nginx-ingress-controller`) and Kubernetes Dashboard v1 become
@@ -1326,11 +1349,8 @@ a CI gate.
   as a partial gap, the Helm releases, manifest objects, add-on installs and
   images the server would refuse, so an object with a hostile name can no
   longer stop a cluster's reports (#268).
-- Files mode and the gate report a manifest at an API version the target
-  does not serve yet ("not served until 1.X"); a namespace-scoped ignore
-  rule no longer suppresses an add-on install that has no namespace in files
-  mode; and `storage.k8s.io/v1alpha1` VolumeAttachment is dated removed in
-  1.23, when kube-apiserver stopped serving it (#237, #266).
+- `storage.k8s.io/v1alpha1` VolumeAttachment is dated removed in 1.23, when
+  kube-apiserver stopped serving it (#237, #266).
 - A removed or deprecated alpha API with no replacement chain, one whose
   kind has only a later pre-GA version, now remediates to the newest later
   version the target serves, with its stability (`migrate to
