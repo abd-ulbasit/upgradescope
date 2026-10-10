@@ -20,10 +20,32 @@ needs. Running `upgradescope agent` on a workstation, prefer
 stops the agent at startup with `health listener: address already in use`).
 `--health-addr ""` turns the listener off.
 
+## Profiling the agent
+
+`--pprof-addr 127.0.0.1:6060` serves Go's profiler (`/debug/pprof/`) on a
+listener of its own, off by default and **loopback only**: a profile shows
+the process's heap and goroutine stacks, so the agent refuses a port with no
+host, a wildcard (`:6060`, `0.0.0.0`) or a routable address at startup. In a
+pod, set it through the chart (`agent.extraArgs: ["--pprof-addr=127.0.0.1:6060"]`)
+and reach it with `kubectl port-forward`, which enters the pod's own network
+namespace:
+
+```sh
+kubectl -n upgradescope port-forward deploy/upgradescope-agent 6060:6060 &
+go tool pprof -top "http://127.0.0.1:6060/debug/pprof/profile?seconds=60"
+```
+
+The profile covers the seconds it is asked for, so start it just before a
+tick is due (the agent's log says when the last one ended; the next is due
+0.9 to 1.1 intervals after) and let it run past the tick's end. It samples
+the process's CPU time, so under a CPU quota it shows CPU-seconds, not the
+wall time a throttled tick spends waiting for its quota.
+`docs/operations/scale.md` ("The tick after a partial Helm step") reads one.
+
 ## Agent logs
 
 The agent writes a startup line (version, KB version and horizon, interval,
-tick deadline and tick reserve, server URL or CRD-only, health address) and exactly one line
+tick deadline and tick reserve, server URL or CRD-only, health address, profiler address) and exactly one line
 per tick. `--log-format=json` makes every line a JSON object;
 `--log-level` is `debug`, `info`, `warn` or `error`. Chart values:
 `agent.logFormat`, `agent.logLevel`.
