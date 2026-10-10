@@ -2,6 +2,7 @@ package engine
 
 import (
 	"fmt"
+	"math"
 	"reflect"
 	"slices"
 	"strings"
@@ -211,5 +212,25 @@ func TestEvaluateVolumePluginGateMixedObjects(t *testing.T) {
 	i := slices.IndexFunc(r.Findings, func(f Finding) bool { return f.Key == "volume-plugin/rbd" })
 	if i < 0 || !strings.Contains(r.Findings[i].Detail, "in: cluster-scoped or no namespace set (2)") {
 		t.Errorf("findings %+v, want the rbd one counting 2 cluster-scoped or with no namespace set", r.Findings)
+	}
+}
+
+// #361 with #362: the gate saturates a row's ObjectsOmitted at
+// math.MaxInt, and a row naming objects sums them with its refs. That sum
+// saturates too: a cluster row naming a PersistentVolume with every other
+// object omitted at MaxInt still reads as one naming PersistentVolumes or
+// StorageClasses, not as pods alone, and keeps its blocker.
+func TestEvaluateVolumePluginRefsSaturate(t *testing.T) {
+	inv := clusterInv()
+	inv.VolumePlugins = []inventory.VolumePluginUse{{Plugin: "rbd", Count: math.MaxInt, Namespaces: map[string]int{"": math.MaxInt},
+		Objects: []inventory.ObjectRef{{Name: "pv-rbd"}}, ObjectsOmitted: math.MaxInt}}
+	r := Evaluate(inv, volumeKB(t), inventory.Version{Major: 1, Minor: 31}, testNow)
+	i := slices.IndexFunc(r.Findings, func(f Finding) bool { return f.Key == "volume-plugin/rbd" })
+	if i < 0 || r.Findings[i].Severity != SevBlocker {
+		t.Fatalf("findings %+v, want the rbd blocker", r.Findings)
+	}
+	f := r.Findings[i]
+	if want := fmt.Sprintf("%d PersistentVolumes or StorageClasses name it, in: ", math.MaxInt); !strings.HasPrefix(f.Detail, want) || f.ObjectsOmitted != math.MaxInt {
+		t.Errorf("detail %q, ObjectsOmitted %d; want it to start %q, MaxInt omitted", f.Detail, f.ObjectsOmitted, want)
 	}
 }

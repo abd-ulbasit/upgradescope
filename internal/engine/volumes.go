@@ -2,6 +2,7 @@ package engine
 
 import (
 	"fmt"
+	"math"
 	"slices"
 	"strings"
 
@@ -52,7 +53,10 @@ func evalVolumePlugins(inv inventory.Inventory, k kb.KB, target inventory.Versio
 			continue
 		}
 		listed := volumeObjectsListed(inv.Source, u.Objects)
-		refs := len(u.Objects) + u.ObjectsOmitted
+		// refs saturates at math.MaxInt: the gate saturates ObjectsOmitted
+		// there (#361), and a wrapped sum would read the row as naming
+		// nothing.
+		refs := len(u.Objects) + min(max(u.ObjectsOmitted, 0), math.MaxInt-len(u.Objects))
 		named := refs > 0
 		// unlisted is what the row counts but names no object of: a
 		// cluster's pods (its refs are its PersistentVolumes and
