@@ -122,6 +122,28 @@ To accept a finding for now, with a reason and an expiry, use an
   it means an unchanged inventory is pushed on every tick, and the
   agent logs a warning with the period in effect, nine tenths of the
   interval, the shortest gap the tick jitter leaves between two ticks.
+- **The agent exits at once with `invalid --pod-pass-every` or `invalid
+  --pod-pass-max-age`.** `--pod-pass-every` is a number of ticks, at least
+  1 (1 reads the pods outside `kube-system` on every tick, as before
+  #228), and `--pod-pass-max-age` a positive duration; 0 does not mean the
+  default (3 and 1h). The chart's `agent.podPassEvery` and
+  `agent.podPassMaxAge` are refused at `helm install` for the same values.
+- **An add-on I just installed or upgraded is missing, or still shows its
+  old version.** The agent lists the pods outside `kube-system` only every
+  `--pod-pass-every` ticks (3 by default, so about every 30 minutes at the
+  default interval), or sooner when the last full pass is
+  `--pod-pass-max-age` old (1h), and detects add-ons from that pass's
+  images and labels in between. An add-on changed right after a pass is
+  reported as it was for at most `--pod-pass-every` minus one ticks, and
+  never for longer than `--pod-pass-max-age`. `status.addOnEvidenceAgeSeconds`
+  (also `addOnEvidenceAgeSeconds` in the report and the
+  `upgradescope_addon_evidence_age_seconds` gauge) says how old the evidence
+  of the last tick was: absent or 0 means every pod was read. Wait for the
+  next full pass, or set `agent.podPassEvery=1` to read the pods on every
+  tick, at the request count [Scale and cost](operations/scale.md) gives
+  for it. Helm releases, Argo CD and Flux charts, IngressClasses and the
+  `kube-system` pods are read on every tick, so an add-on installed with
+  Helm or found in `kube-system` is never behind. `scan` reads every pod.
 - **The pod never becomes Ready.** Readiness waits for a successful tick.
   `kubectl logs` shows one line per tick, with `tick failed` and the error.
   A tick fails when no target can be evaluated (no `spec.targets` and an
