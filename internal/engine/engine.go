@@ -1913,10 +1913,11 @@ func evalUpgradePath(inv inventory.Inventory, target inventory.Version) []Findin
 // collector's, or one with no capabilities map — must not read ready on
 // evidence it does not carry (#194). The source is the inventory's own
 // claim, so ingest accepts only cluster ones. An absent optional one is
-// no gap, except crds, which
-// collectors older than it do not report: an inventory without it (an
-// older agent's, or a files inventory an older CLI saved) is a crds gap,
-// so its CRD versions read as not assessed rather than clean.
+// no gap, except crds and volumes, which
+// collectors older than them do not report: an inventory without one (an
+// older agent's, or a files inventory an older CLI saved) is a gap of it,
+// so its CRD versions or volume plugins read as not assessed rather than
+// clean.
 func assessmentGaps(inv inventory.Inventory, k kb.KB, target inventory.Version) []CapabilityGap {
 	required := map[inventory.Capability]bool{inventory.CapAPIUsage: true, GapKBCoverage: true}
 	cluster := inv.Source != inventory.SourceFiles // "" = cluster (v0.1 agents)
@@ -1971,6 +1972,7 @@ func assessmentGaps(inv inventory.Inventory, k kb.KB, target inventory.Version) 
 		gaps = append(gaps, CapabilityGap{Capability: inventory.CapCRDs,
 			Reason: "not reported by the collector, which predates CRD checks; upgrade it to assess CRD versions"})
 	}
+	gaps = append(gaps, volumesGap(inv)...)
 	if st, ok := inv.Capabilities[inventory.CapVersions]; (!ok && !cluster) || (ok && st.Available) {
 		const notEvaluated = "kubelet and control-plane skew were not evaluated"
 		if inv.ServerVersion == "" {
@@ -2298,6 +2300,7 @@ func evaluate(inv inventory.Inventory, k kb.KB, target inventory.Version, now ti
 		func() { b.addAll(&findings, evalUpgradePath(inv, target)) },
 		func() { b.addAll(&findings, supportFindings) },
 		func() { findings = append(findings, evalCRDVersions(inv, target, b)...) },
+		func() { findings = append(findings, evalVolumePlugins(inv, k, target, b)...) },
 	}
 	for _, step := range steps {
 		if b.exceeded() {

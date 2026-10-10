@@ -5,6 +5,7 @@
   "serverVersion": "v1.34.2-gke.1234000",
   "provider": "gke",
   "capabilities": {
+    "volumes": {"available": true},
     "crds": {"available": true},
     "api-usage": {"available": true},
     "deprecated-calls": {"available": true},

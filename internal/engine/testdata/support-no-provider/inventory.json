@@ -4,6 +4,7 @@
   "collectedAt": "2026-12-02T00:00:00Z",
   "serverVersion": "v1.34.2-eks-3abc123",
   "capabilities": {
+    "volumes": {"available": true},
     "crds": {"available": true},
     "api-usage": {"available": true},
     "deprecated-calls": {"available": true},

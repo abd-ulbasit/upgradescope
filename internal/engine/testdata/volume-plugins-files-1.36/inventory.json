@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "clusterId": "files",
+  "collectorSchema": 1,
+  "source": "files",
+  "collectedAt": "2026-06-10T00:00:00Z",
+  "capabilities": {
+    "volumes": {"available": true},
+    "crds": {"available": true},
+    "api-usage": {"available": true},
+    "deprecated-calls": {"available": false, "reason": "files mode"},
+    "helm": {"available": false, "reason": "files mode"},
+    "addons": {"available": true},
+    "versions": {"available": false, "reason": "files mode"}
+  },
+  "apiUsage": [
+    {"group": "apps", "version": "v1", "kind": "Deployment", "count": 1, "namespaces": {"shop": 1},
+     "objects": [{"namespace": "shop", "name": "web", "file": "f.yaml", "line": 1}]}
+  ],
+  "volumePlugins": [
+    {"plugin": "awsElasticBlockStore", "count": 1, "namespaces": {"shop": 1},
+     "objects": [{"namespace": "shop", "name": "web", "file": "f.yaml", "line": 1}]},
+    {"plugin": "cephfs", "count": 1, "namespaces": {"": 1},
+     "objects": [{"name": "data", "file": "f.yaml", "line": 29}]},
+    {"plugin": "flexVolume", "count": 1, "namespaces": {"": 1},
+     "objects": [{"name": "flex", "file": "pv/flex.yaml", "line": 1}]},
+    {"plugin": "gitRepo", "count": 2, "namespaces": {"shop": 1, "": 1},
+     "objects": [{"name": "sync", "file": "f.yaml", "line": 16}, {"namespace": "shop", "name": "web", "file": "f.yaml", "line": 1}]},
+    {"plugin": "glusterfs", "count": 1, "namespaces": {"shop": 1},
+     "objects": [{"namespace": "shop", "name": "web", "file": "f.yaml", "line": 1}]},
+    {"plugin": "photonPersistentDisk", "count": 1, "namespaces": {"shop": 1}}
+  ]
+}
