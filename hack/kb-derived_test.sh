@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Tests hack/kb-derived.sh (make kb-derived) and its use in kb-refresh.yml
-# (make hack-test), offline, against a stub go (the build jobs live in
-# kb-refresh-build.yml, the PR jobs in kb-refresh.yml; #273):
+# Tests hack/kb-derived.sh (make kb-derived) and its use in kb-refresh-build.yml
+# and kb-refresh.yml (make hack-test), offline, against a stub go (the build
+# jobs live in kb-refresh-build.yml, the PR jobs in kb-refresh.yml; #273):
 #  - it runs each pinning test with -update, anchored to that one test, and
 #    each test it names exists in the package it names;
 #  - kb-refresh-build.yml's registry job runs `make kb-derived` after

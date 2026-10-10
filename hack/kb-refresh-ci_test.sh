@@ -11,9 +11,10 @@
 #    modules, make gen-kb, go test, make eol-sync) hold contents: read only,
 #    keep no token in their checkout and save no Go cache; kb-refresh.yml's
 #    *-pr jobs that hold the writes run no repository or dependency code,
-#    take their patch from that run by run id, and apply only a patch of
-#    their PR's paths (refusing anything else, renames, copies and symlinks,
-#    against crafted patches);
+#    take their patch from the -verify job (which checked that run and
+#    downloaded from it by run id, hack/kb-refresh-scope_test.sh), and apply
+#    only a patch of their PR's paths (refusing anything else, renames,
+#    copies and symlinks, against crafted patches);
 #  - kb-refresh.yml: each PR-opening job runs 'Approve the PR's CI runs'
 #    exactly when the PR was created or updated, with actions: write on that
 #    job only; against a stub gh it polls the head commit's pull_request
@@ -100,11 +101,12 @@ sed '/^on:/q' "$kb" >"$work/header"
 grep -q 'GITHUB_TOKEN' "$work/header" && grep -q 'action_required' "$work/header" && grep -q '/approve' "$work/header" &&
   ok "$kb's header explains the held runs and the approval" ||
   fail "$kb's header comment does not explain why and how the PR's held CI runs are approved"
-if job "$kb" report-failure | grep -q 'actions: write' ||
+if job "$kb" report-failure | grep -q 'actions: write' || job "$kb" cleanup | grep -q 'actions: write' ||
+  job "$kb" api-lifecycle-verify | grep -q 'actions: write' || job "$kb" registry-verify | grep -q 'actions: write' ||
   awk '/^permissions:/{p=1;next} p&&/^[^ ]/{exit} p' "$kb" | grep -q 'actions:'; then
-  fail "actions: write is granted beyond the PR-opening jobs"
+  fail "actions: write is granted beyond the PR-opening jobs and the jobs that dispatch the build run"
 else
-  ok "actions: write is granted to the PR-opening jobs only"
+  ok "actions: write is granted to the PR-opening jobs and the jobs that dispatch the build run only"
 fi
 
 mkdir -p "$work/bin"
@@ -316,7 +318,7 @@ for p in api-lifecycle:gen-kb registry:eol-sync; do
   grep -qE "^          name: kb-refresh-$j$" <<<"$body" && grep -q 'uses: actions/upload-artifact@' <<<"$body" &&
     ok "$j hands its patch over as the kb-refresh-$j artifact" || fail "$j does not upload a kb-refresh-$j artifact"
   pr=$(job "$kb" "$j-pr")
-  grep -qE "^    needs: build$" <<<"$pr" && ok "$j-pr needs build (the run of kb-refresh-build.yml)" || fail "$j-pr does not need build"
+  grep -qE "^    needs: $j-verify$" <<<"$pr" && ok "$j-pr needs $j-verify (the checked patch of the kb-refresh-build.yml run)" || fail "$j-pr does not need $j-verify"
   uses=$(grep -oE 'uses: [a-z0-9_.-]+/[a-z0-9_.-]+@' <<<"$pr" | sort -u | tr '\n' ' ')
   [ "$uses" = "uses: actions/checkout@ uses: actions/download-artifact@ uses: peter-evans/create-pull-request@ " ] &&
     ok "$j-pr uses only checkout, download-artifact and create-pull-request" ||

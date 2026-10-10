@@ -1,31 +1,37 @@
 #!/usr/bin/env bash
 # Tests that kb-refresh's unreviewed build runs outside main's cache scope
-# and its artifact namespace (make hack-test, #273, IR-22).
+# and outside the other pipeline's artifact namespace, and that the result
+# is verified before it is used (make hack-test, #273, IR-22, IR-23).
 #
 # kb-refresh used to build freshly bumped, unreviewed modules (go get of the
 # newest k8s.io modules, make gen-kb, go test, make eol-sync) in a job of a
 # workflow scheduled from main. Any job can write the GitHub Actions cache
 # with the runner's token, whatever its permissions: block, and writes go to
 # the scope of the run's ref: main's CI and a tag's release run restore what
-# main's scope holds. The two pipelines also shared one run's artifact
-# namespace, so unreviewed code could upload under the other pipeline's name.
-# So the structure is now:
-#  - kb-refresh.yml (main): its `build` job points bot/kb-refresh-build at
-#    main's head, dispatches kb-refresh-build.yml on it, waits, and outputs
-#    the run id and each pipeline's result; it runs gh only (no checkout, go,
-#    make or setup-go); nothing else in the file runs unreviewed code, and
-#    the file uploads no artifact;
-#  - kb-refresh-build.yml: triggered by workflow_dispatch only, every job
-#    guarded to run only on refs/heads/bot/kb-refresh-build (never main),
-#    contents: read only, no cache restored or saved (setup-go cache: false,
-#    no actions/cache), one artifact per pipeline under its own name;
-#  - the *-pr jobs take their pipeline's patch from that run by run id
-#    (download-artifact run-id, github-token), under that pipeline's name,
-#    and only when that pipeline's build succeeded.
+# main's scope holds. The same token reaches the artifact store of the job's
+# own run, so two pipelines in one run could upload, delete or replace each
+# other's artifact. So the structure is now:
+#  - kb-refresh.yml (main): `stage` points bot/kb-refresh-build at main's
+#    head; per pipeline, `<p>-run` dispatches kb-refresh-build.yml on it FOR
+#    THAT PIPELINE (a run of its own) and waits, `<p>-verify` checks that run
+#    through the API before downloading from it (workflow file, branch,
+#    commit, event, status and conclusion, repository and head repository,
+#    run name, jobs, artifacts), reads the patch's sha256 from the run's
+#    `seal` job log, downloads the artifact by run id with a read-only token,
+#    compares the sha256 and uploads the checked patch again in its own run,
+#    and `<p>-pr` (which holds the writes) takes that one. Nothing in the
+#    file runs go, make or repository code;
+#  - kb-refresh-build.yml: triggered by workflow_dispatch only, every build
+#    job guarded to run only on refs/heads/bot/kb-refresh-build (never main)
+#    and only for its own `pipeline` input, contents: read only, no cache
+#    restored or saved, one artifact per run; the `seal` job (no repository
+#    code) prints the artifact's digest in a log the build job cannot write.
 # The structure rules run against the real workflows and against mutants that
 # must each fail the rule they break (the old structure, in which the
 # unreviewed jobs sit in the file scheduled from main, is one of them); the
-# `build` job's script runs against a stub gh. Offline. Needs node and jq.
+# scripts in the workflows run against stub gh and stub artifacts, with the
+# refusals pinned by mutating the stubbed run field by field. Offline. Needs
+# node and jq.
 #
 # KB_ENTRY / KB_BUILD override the two workflow paths (to point the audit at
 # another version of them).
@@ -72,6 +78,10 @@ perms_of() { awk '/^    permissions:/{p=1;next} p&&/^    [^ ]/{exit} p' <<<"$1" 
 triggers() { awk '/^on:/{o=1;next} o&&/^[^ #]/{exit} o&&/^  [a-z_]+:/{sub(/^  /,"");sub(/:.*/,"");print}' "$1" | sort | tr '\n' ' ' | sed 's/ $//'; }
 # runs_code <text>: does it run repository or dependency code?
 runs_code() { grep -qE '^ +(run: .*\b(go|make) |uses: actions/setup-go@)|^ +(go|make|cd [^ ]+ && go) ' <<<"$1"; }
+# strip_comments <text>: the YAML lines without full-line comments.
+strip_comments() { grep -vE '^ *#' <<<"$1" || true; }
+# line_of <text> <fixed string>: the first line number holding it, or 0.
+line_of() { { grep -nF -- "$2" <<<"$1" || true; } | head -1 | cut -d: -f1 | grep . || echo 0; }
 
 # expr <expression> <context-json>: the expression's value (the same
 # evaluation as kb-refresh-ci_test.sh).
@@ -97,102 +107,213 @@ expr_bad() {
   # Memoised: the mutants repeat the real file's expressions.
   if [ -f "$work/memo.$key" ]; then got=$(cat "$work/memo.$key"); else
     got=$(expr "$1" "$3" 2>/dev/null) || { echo "cannot evaluate '$1'"; return; }
-    printf '%s' "$got" >"$work/memo.$key"
+    printf '%s' "$got" >"$work/memo.$key.$$" && mv "$work/memo.$key.$$" "$work/memo.$key"
   fi
   [ "$got" = "$2" ] || echo "'$1' is '$got' (want '$2') for $3"
 }
+# tag <prefix>: prefixes every line on stdin.
+tag() { sed "s|^|$1|"; }
+
+other_of() { if [ "$1" = api-lifecycle ]; then echo registry; else echo api-lifecycle; fi; }
 
 # --- the structure rules ------------------------------------------------------
 
 # audit <entry> <build>: one line per violated rule, "<tag>: what"; nothing
 # when the structure holds.
 audit() {
-  local e=$1 b=$2 j body ids n m expected pr up name names dup cond guard s
+  local e=$1 b=$2 j p body ids n m cond guard s dl up names dup co vn bn
+  local ln_check ln_dl ln_cmp ln_up chk need other
   [ -f "$e" ] && [ -f "$b" ] || { echo "files: $e or $b is missing"; return; }
 
-  # The build workflow is only ever dispatched, and only on the staging branch.
+  # ---- the build workflow: only dispatched, only on the staging branch,
+  # one pipeline per run.
   [ "$(triggers "$b")" = workflow_dispatch ] ||
     echo "trigger: $b is triggered by '$(triggers "$b")', not workflow_dispatch alone"
   [ "$(triggers "$e")" = "schedule workflow_dispatch" ] ||
     echo "entry-trigger: $e is triggered by '$(triggers "$e")', not schedule and workflow_dispatch"
   ids=$(job_ids "$b")
-  [ "$ids" = "$(printf 'api-lifecycle\nregistry')" ] || echo "jobs: $b has jobs '$(tr '\n' ' ' <<<"$ids")', want api-lifecycle and registry"
-  for j in $ids; do
-    body=$(job "$b" "$j")
+  [ "$ids" = "$(printf 'api-lifecycle\nregistry\nseal')" ] || echo "jobs: $b has jobs '$(tr '\n' ' ' <<<"$ids")', want api-lifecycle, registry and seal"
+  grep -qxF 'run-name: kb-refresh-build ${{ inputs.pipeline }} ${{ inputs.request }}' "$b" ||
+    echo "run-name: $b's run-name does not carry the pipeline and the request (the dispatcher finds its run by it)"
+  [ "$(awk '/^      pipeline:/{p=1;next} p&&/^      [a-z]/{exit} p&&/^          - /{sub(/^ *- /,"");printf "%s ",$0}' "$b")" = 'api-lifecycle registry ' ] ||
+    echo "input: $b's pipeline input does not offer exactly api-lifecycle and registry"
+  names=''
+  for p in api-lifecycle registry; do
+    body=$(job "$b" "$p")
+    other=$(other_of "$p")
     guard=$(field 4 if <<<"$body")
     if [ -z "$guard" ]; then
-      echo "ref-guard: $b: job $j has no if: restricting it to $branch"
+      echo "ref-guard: $b: job $p has no if: restricting it to $branch and its pipeline"
     else
       for s in "refs/heads/main" "refs/heads/feature" "refs/tags/v0.2.0" "refs/pull/1/merge" ""; do
-        expr_bad "$guard" false "{\"github\":{\"ref\":\"$s\"}}" | sed "s|^|ref-guard: $b: job $j, ref '$s': |"
+        expr_bad "$guard" false "{\"github\":{\"ref\":\"$s\"},\"inputs\":{\"pipeline\":\"$p\"}}" | tag "ref-guard: $b: job $p, ref '$s': "
       done
-      expr_bad "$guard" true "{\"github\":{\"ref\":\"refs/heads/$branch\"}}" | sed "s|^|ref-guard: $b: job $j: |"
+      expr_bad "$guard" true "{\"github\":{\"ref\":\"refs/heads/$branch\"},\"inputs\":{\"pipeline\":\"$p\"}}" | tag "ref-guard: $b: job $p: "
+      # One pipeline per run: the artifact store is the point.
+      expr_bad "$guard" false "{\"github\":{\"ref\":\"refs/heads/$branch\"},\"inputs\":{\"pipeline\":\"$other\"}}" | tag "pipeline-guard: $b: job $p runs in the $other run: "
+      expr_bad "$guard" false "{\"github\":{\"ref\":\"refs/heads/$branch\"},\"inputs\":{\"pipeline\":\"\"}}" | tag "pipeline-guard: $b: job $p runs with no pipeline: "
     fi
-    [ "$(perms_of "$body")" = "contents: read" ] || echo "perms: $b: job $j has permissions '$(perms_of "$body")', want contents: read"
-    runs_code "$body" || echo "build-runs-code: $b: job $j runs no go or make (is the unreviewed build still here?)"
-    grep -qE '^          cache: false( |$)' <<<"$body" || echo "cache: $b: job $j runs unreviewed code without setup-go cache: false"
+    [ "$(perms_of "$body")" = "contents: read" ] || echo "perms: $b: job $p has permissions '$(perms_of "$body")', want contents: read"
+    runs_code "$body" || echo "build-runs-code: $b: job $p runs no go or make (is the unreviewed build still here?)"
+    grep -qE '^          cache: false( |$)' <<<"$body" || echo "cache: $b: job $p runs unreviewed code without setup-go cache: false"
+    n=$(grep -c 'uses: actions/upload-artifact@' <<<"$body" || true)
+    up=$(grep -A3 'uses: actions/upload-artifact@' <<<"$body" | sed -n 's/^ *name: //p')
+    if [ "$n" = 1 ] && [ "$up" = "kb-refresh-$p" ]; then names="$names $up"; else
+      echo "artifact-names: $b: job $p uploads $n artifact(s) named '$up', want exactly one named kb-refresh-$p"; fi
   done
+  dup=$(tr ' ' '\n' <<<"$names" | grep -v '^$' | sort | uniq -d || true)
+  [ -z "$dup" ] || echo "artifact-names: the pipelines share the artifact name $dup"
   awk '/^permissions:/{p=1;next} p&&/^[^ ]/{exit} p' "$b" | sed 's/ *#.*//; s/^ *//' | grep -v '^$' | tr '\n' ' ' | grep -qx 'contents: read ' ||
     echo "perms: $b: the workflow-level permissions are not contents: read"
 
-  # No job that runs unreviewed code restores or saves a cache, in either file.
+  # seal: after the build job, no repository code, prints the digest.
+  body=$(job "$b" seal)
+  if [ -z "$body" ]; then echo "seal: $b has no seal job"; else
+    [ "$(perms_of "$body")" = "contents: read" ] || echo "seal: $b: seal has permissions '$(perms_of "$body")', want contents: read"
+    runs_code "$body" && echo "seal: $b: seal runs go, make or setup-go"
+    grep -qE 'uses: actions/(checkout|upload-artifact)@' <<<"$body" && echo "seal: $b: seal checks out code or uploads an artifact"
+    grep -qE '^    needs: \[api-lifecycle, registry\]$' <<<"$body" || echo "seal: $b: seal does not need both build jobs"
+    cond=$(field 4 if <<<"$body")
+    if [ -z "$cond" ]; then echo "seal: $b: seal has no if:"; else
+      for p in api-lifecycle registry; do
+        other=$(other_of "$p")
+        expr_bad "$cond" true "{\"github\":{\"ref\":\"refs/heads/$branch\"},\"needs\":{\"$p\":{\"result\":\"success\"},\"$other\":{\"result\":\"skipped\"}}}" | tag "seal: $b: "
+        expr_bad "$cond" false "{\"github\":{\"ref\":\"refs/heads/$branch\"},\"needs\":{\"$p\":{\"result\":\"failure\"},\"$other\":{\"result\":\"skipped\"}}}" | tag "seal: $b: "
+      done
+      expr_bad "$cond" false "{\"github\":{\"ref\":\"refs/heads/main\"},\"needs\":{\"api-lifecycle\":{\"result\":\"success\"},\"registry\":{\"result\":\"skipped\"}}}" | tag "seal: $b: "
+    fi
+    dl=$(grep -A6 'uses: actions/download-artifact@' <<<"$body" | awk 'NR > 1 && /^      - /{exit} {print}')
+    grep -qF 'name: kb-refresh-${{ inputs.pipeline }}' <<<"$dl" || echo "seal: $b: seal does not download kb-refresh-\${{ inputs.pipeline }}"
+    grep -qE '^          (run-id|github-token):' <<<"$dl" && echo "seal: $b: seal downloads from another run"
+    grep -qF 'echo "kb-refresh-patch-sha256 $PIPELINE $hash"' <<<"$body" || echo "seal: $b: seal does not print the kb-refresh-patch-sha256 line"
+  fi
+
+  # ---- no cache restored or saved, in either file.
   for f in "$e" "$b"; do
     grep -nE 'uses: actions/cache(/restore|/save)?@|type=gha|cache-from|cache-to|uses: actions/setup-node@' "$f" |
       sed "s|^|cache: $f: |" || true
     grep -nE '^ +cache(-dependency-path)?:' "$f" | grep -vE 'cache: false( |$)' | sed "s|^|cache: $f: a cache setting that is not false: |" || true
   done
 
-  # The file scheduled from main builds nothing and uploads nothing.
+  # ---- the entry workflow (main) builds nothing.
   for j in $(job_ids "$e"); do
     body=$(job "$e" "$j")
     if runs_code "$body"; then echo "entry-runs-code: $e: job $j runs go, make or setup-go on the ref the schedule runs on"; fi
-    if grep -q 'uses: actions/upload-artifact@' <<<"$body"; then echo "entry-artifact: $e: job $j uploads an artifact"; fi
-  done
-  body=$(job "$e" build)
-  if [ -z "$body" ]; then
-    echo "build-job: $e has no build job"
-  else
-    [ "$(perms_of "$body")" = "contents: write actions: write" ] ||
-      echo "build-job: $e: build has permissions '$(perms_of "$body")', want contents: write and actions: write only"
-    grep -qE 'uses: actions/(checkout|setup-[a-z]+)@' <<<"$body" && echo "build-job: $e: build checks out or sets up code; it must run gh only"
-    grep -qE "gh workflow run $(basename "$b") --ref \"\\\$BUILD_BRANCH\"" <<<"$body" ||
-      echo "build-job: $e: build does not dispatch $(basename "$b") on \$BUILD_BRANCH"
-    [ "$(field 6 BUILD_BRANCH <<<"$body")" = "$branch" ] || echo "build-job: $e: BUILD_BRANCH is not $branch (the build workflow's guard)"
-  fi
-
-  # Artifacts: one per pipeline, distinct names, in the build run; the PR
-  # jobs read them by run id and by that name, and only after that
-  # pipeline's build succeeded.
-  names=''
-  for pr in api-lifecycle registry; do
-    expected=kb-refresh-$pr
-    body=$(job "$b" "$pr")
-    n=$(grep -c 'uses: actions/upload-artifact@' <<<"$body" || true)
-    up=$(grep -A3 'uses: actions/upload-artifact@' <<<"$body" | sed -n 's/^ *name: //p')
-    if [ "$n" = 1 ] && [ "$up" = "$expected" ]; then names="$names $up"; else
-      echo "artifact-names: $b: job $pr uploads $n artifact(s) named '$up', want exactly one named $expected"; fi
-    body=$(job "$e" "$pr-pr")
-    if [ -z "$body" ]; then echo "pr-job: $e has no $pr-pr job"; continue; fi
-    grep -qE '^    needs: build$' <<<"$body" || echo "pr-job: $e: $pr-pr does not need build alone"
-    cond=$(field 4 if <<<"$body")
-    if [ -z "$cond" ]; then echo "pr-job: $e: $pr-pr runs even when the build did not succeed"; else
-      expr_bad "$cond" true "{\"needs\":{\"build\":{\"result\":\"success\",\"outputs\":{\"$pr-result\":\"success\"}}}}" | sed "s|^|pr-job: $e: $pr-pr: |"
-      expr_bad "$cond" false "{\"needs\":{\"build\":{\"result\":\"success\",\"outputs\":{\"$pr-result\":\"failure\"}}}}" | sed "s|^|pr-job: $e: $pr-pr: |"
-      expr_bad "$cond" false "{\"needs\":{\"build\":{\"result\":\"success\",\"outputs\":{\"$pr-result\":\"missing\"}}}}" | sed "s|^|pr-job: $e: $pr-pr: |"
-      expr_bad "$cond" false "{\"needs\":{\"build\":{\"result\":\"failure\",\"outputs\":{\"$pr-result\":\"success\"}}}}" | sed "s|^|pr-job: $e: $pr-pr: |"
+    if grep -q 'uses: actions/upload-artifact@' <<<"$body"; then
+      case $j in *-verify) ;; *) echo "entry-artifact: $e: job $j uploads an artifact" ;; esac
     fi
-    # The download: this pipeline's name, from the build run, by id.
-    dl=$(grep -A8 'uses: actions/download-artifact@' <<<"$body" | awk 'NR > 1 && /^      - /{exit} {print}')
-    [ "$(grep -c 'uses: actions/download-artifact@' <<<"$body" || true)" = 1 ] || echo "download: $e: $pr-pr does not download exactly one artifact"
-    grep -qE "^          name: $expected$" <<<"$dl" || echo "download: $e: $pr-pr does not download $expected"
-    grep -qF 'run-id: ${{ needs.build.outputs.run-id }}' <<<"$dl" ||
-      echo "download: $e: $pr-pr downloads without run-id: \${{ needs.build.outputs.run-id }}, so it reads this run's artifacts by name"
-    grep -qF 'github-token: ${{ github.token }}' <<<"$dl" || echo "download: $e: $pr-pr's download names no github-token (a run-id download needs one)"
+    # A cross-run download presents a token that must not carry a write.
+    if grep -qE '^          (run-id|github-token):' <<<"$(strip_comments "$body")" && grep -qE ': write' <<<"$(perms_of "$body")"; then
+      echo "download-token: $e: job $j downloads from another run, or names a github-token, while holding '$(perms_of "$body")'"
+    fi
   done
-  dup=$(tr ' ' '\n' <<<"$names" | grep -v '^$' | sort | uniq -d || true)
-  [ -z "$dup" ] || echo "artifact-names: the pipelines share the artifact name $dup"
+  [ "$(job_ids "$e" | tr '\n' ' ')" = 'stage api-lifecycle-run api-lifecycle-verify api-lifecycle-pr registry-run registry-verify registry-pr cleanup report-failure ' ] ||
+    echo "jobs: $e has jobs '$(job_ids "$e" | tr '\n' ' ')'"
 
-  # Pinned actions, no token kept in a checkout, in both files.
+  body=$(job "$e" stage)
+  if [ -z "$body" ]; then echo "stage: $e has no stage job"; else
+    [ "$(perms_of "$body")" = "contents: write" ] || echo "stage: $e: stage has permissions '$(perms_of "$body")', want contents: write only"
+    grep -qE 'uses: actions/(checkout|setup-[a-z]+)@' <<<"$body" && echo "stage: $e: stage checks out or sets up code; it must run gh only"
+    grep -qF -- '-X POST "repos/$GH_REPO/git/refs"' <<<"$body" || echo "stage: $e: stage does not create the branch"
+    grep -qF -- '-X DELETE "repos/$GH_REPO/git/refs/$ref"' <<<"$body" || echo "stage: $e: stage does not delete a leftover branch before creating it"
+    grep -qF -- '-X PATCH' <<<"$body" && echo "stage: $e: stage moves a leftover branch (a ref update that moves workflow files can be refused)"
+    [ "$(field 6 BUILD_BRANCH <<<"$body")" = "$branch" ] || echo "stage: $e: BUILD_BRANCH is not $branch (the build workflow's guard)"
+  fi
+  body=$(job "$e" cleanup)
+  [ "$(perms_of "$body")" = "contents: write" ] || echo "cleanup: $e: cleanup has permissions '$(perms_of "$body")', want contents: write only"
+  runs_code "$body" && echo "cleanup: $e: cleanup runs code"
+
+  vn=''
+  for p in api-lifecycle registry; do
+    # -- the run job: dispatch for this pipeline, wait, hold actions: write
+    # and nothing that reads the artifact.
+    body=$(job "$e" "$p-run")
+    if [ -z "$body" ]; then echo "run-job: $e has no $p-run job"; else
+      [ "$(perms_of "$body")" = "actions: write contents: read" ] ||
+        echo "run-job: $e: $p-run has permissions '$(perms_of "$body")', want actions: write and contents: read only"
+      grep -qE '^    needs: stage$' <<<"$body" || echo "run-job: $e: $p-run does not need stage alone"
+      grep -qE 'uses: actions/(checkout|setup-[a-z]+|download-artifact|upload-artifact)@' <<<"$body" && echo "run-job: $e: $p-run uses an action; it must run gh only"
+      [ "$(field 6 PIPELINE <<<"$body")" = "$p" ] || echo "run-job: $e: $p-run's PIPELINE is not $p"
+      [ "$(field 6 BUILD_BRANCH <<<"$body")" = "$branch" ] || echo "run-job: $e: $p-run's BUILD_BRANCH is not $branch"
+      grep -qF "gh workflow run $(basename "$b") --ref \"\$BUILD_BRANCH\" -f pipeline=\"\$PIPELINE\" -f request=\"\$REQUEST\"" <<<"$body" ||
+        echo "run-job: $e: $p-run does not dispatch $(basename "$b") on \$BUILD_BRANCH for \$PIPELINE"
+      grep -qF 'select(.displayTitle == "kb-refresh-build " + env.PIPELINE + " " + env.REQUEST and .headSha == env.SHA)' <<<"$body" ||
+        echo "run-job: $e: $p-run does not find its run by pipeline, request and commit"
+      grep -qF '[ "$conclusion" = success ]' <<<"$body" || echo "run-job: $e: $p-run does not fail on a run that did not succeed"
+    fi
+
+    # -- the verify job: a read-only token, the run checked BEFORE the
+    # download, the digest compared AFTER it, the checked patch re-uploaded.
+    body=$(job "$e" "$p-verify")
+    if [ -z "$body" ]; then echo "verify: $e has no $p-verify job"; else
+      [ "$(perms_of "$body")" = "actions: read contents: read" ] ||
+        echo "verify: $e: $p-verify has permissions '$(perms_of "$body")', want actions: read and contents: read only (the cross-run download token)"
+      grep -qE "^    needs: $p-run\$" <<<"$body" || echo "verify: $e: $p-verify does not need $p-run alone"
+      runs_code "$body" && echo "verify: $e: $p-verify runs go, make or setup-go"
+      grep -qE 'uses: actions/checkout@' <<<"$body" && echo "verify: $e: $p-verify checks out the repository"
+      [ "$(field 6 PIPELINE <<<"$body")" = "$p" ] || echo "verify: $e: $p-verify's PIPELINE is not $p"
+      grep -qF 'RUN_ID: ${{ needs.'"$p"'-run.outputs.run-id }}' <<<"$body" || echo "verify: $e: $p-verify does not check the run $p-run dispatched"
+      chk=$(step "Check the run and read the patch's digest" <<<"$body")
+      for need in \
+        '.id | tostring) != $id' \
+        'sub("@.*$"; "")) != ".github/workflows/kb-refresh-build.yml"' \
+        '.head_branch != $branch' '.head_sha != $sha' '.event != "workflow_dispatch"' \
+        '.status != "completed"' '.conclusion != "success"' \
+        '.repository.full_name != $repo' '.head_repository.full_name != $repo' \
+        '.display_title != $title' \
+        'select(.name == $p or .name == "seal")' 'select(.conclusion == "success")' \
+        '.name != $p and .name != "seal" and .conclusion != "skipped"' \
+        '= "kb-refresh-$PIPELINE" ]' '.expired' \
+        'kb-refresh-patch-sha256 $PIPELINE [0-9a-f]{64}$'; do
+        grep -qF -- "$need" <<<"$chk" || echo "verify-run: $e: $p-verify does not check '$need' before it downloads"
+      done
+      grep -qF 'echo "sha256=${lines##* }" >>"$GITHUB_OUTPUT"' <<<"$chk" || echo "verify-run: $e: $p-verify does not hand on the sealed digest"
+      [ "$(grep -c 'uses: actions/download-artifact@' <<<"$body" || true)" = 1 ] || echo "download: $e: $p-verify does not download exactly one artifact"
+      dl=$(grep -A8 'uses: actions/download-artifact@' <<<"$body" | awk 'NR > 1 && /^      - /{exit} {print}')
+      grep -qE "^          name: kb-refresh-$p\$" <<<"$dl" || echo "download: $e: $p-verify does not download kb-refresh-$p"
+      grep -qF 'run-id: ${{ needs.'"$p"'-run.outputs.run-id }}' <<<"$dl" || echo "download: $e: $p-verify downloads without run-id of its own build run"
+      grep -qF 'github-token: ${{ github.token }}' <<<"$dl" || echo "download: $e: $p-verify's download names no github-token (a run-id download needs one)"
+      ln_check=$(line_of "$body" "- name: Check the run and read the patch's digest")
+      ln_dl=$(line_of "$body" 'uses: actions/download-artifact@')
+      ln_cmp=$(line_of "$body" '[ "$got" = "$DIGEST" ]')
+      ln_up=$(line_of "$body" 'uses: actions/upload-artifact@')
+      if ! { [ "$ln_check" -gt 0 ] && [ "$ln_check" -lt "$ln_dl" ] && [ "$ln_dl" -lt "$ln_cmp" ] && [ "$ln_cmp" -lt "$ln_up" ]; }; then
+        echo "verify-order: $e: $p-verify must check the run, then download, then compare the digest, then upload (lines $ln_check, $ln_dl, $ln_cmp, $ln_up)"
+      fi
+      step 'Check the patch against the digest' <<<"$body" | grep -qF '[ "$got" = "$DIGEST" ] || {' ||
+        echo "digest: $e: $p-verify does not refuse a patch whose sha256 differs from the sealed digest"
+      step 'Check the patch against the digest' <<<"$body" | grep -qF 'got=$(sha256sum "$patch" | cut -d'"' '"' -f1)' ||
+        echo "digest: $e: $p-verify does not recompute the patch's sha256"
+      [ "$(grep -c 'uses: actions/upload-artifact@' <<<"$body" || true)" = 1 ] || echo "verify: $e: $p-verify does not upload exactly one artifact"
+      up=$(grep -A3 'uses: actions/upload-artifact@' <<<"$body" | sed -n 's/^ *name: //p')
+      [ "$up" = "kb-refresh-$p-verified" ] || echo "artifact-names: $e: $p-verify uploads '$up', want kb-refresh-$p-verified"
+      vn="$vn $up"
+    fi
+
+    # -- the PR job: the verified patch from its own run, no run id, no
+    # token; only after its verify job succeeded.
+    body=$(job "$e" "$p-pr")
+    if [ -z "$body" ]; then echo "pr-job: $e has no $p-pr job"; continue; fi
+    grep -qE "^    needs: $p-verify\$" <<<"$body" || echo "pr-job: $e: $p-pr does not need $p-verify alone"
+    cond=$(field 4 if <<<"$body")
+    if [ -z "$cond" ]; then echo "pr-job: $e: $p-pr runs even when its verify job did not succeed"; else
+      for s in success failure skipped cancelled; do
+        want=false; [ "$s" != success ] || want=true
+        expr_bad "$cond" "$want" "{\"needs\":{\"$p-verify\":{\"result\":\"$s\"}}}" | tag "pr-job: $e: $p-pr: "
+      done
+    fi
+    [ "$(grep -c 'uses: actions/download-artifact@' <<<"$body" || true)" = 1 ] || echo "pr-download: $e: $p-pr does not download exactly one artifact"
+    dl=$(grep -A8 'uses: actions/download-artifact@' <<<"$body" | awk 'NR > 1 && /^      - /{exit} {print}')
+    grep -qE "^          name: kb-refresh-$p-verified\$" <<<"$dl" || echo "pr-download: $e: $p-pr does not download kb-refresh-$p-verified"
+    grep -qE '^          (run-id|github-token|repository):' <<<"$(strip_comments "$body")" &&
+      echo "pr-download: $e: $p-pr names a run id, a github-token or a repository; the job that holds the writes must present no token to the artifact API"
+    grep -q 'uses: actions/upload-artifact@' <<<"$body" && echo "pr-download: $e: $p-pr uploads an artifact"
+    grep -qF "kb-refresh-$p-verified/kb-refresh-$p.patch" <<<"$body" || echo "pr-download: $e: $p-pr applies a patch from somewhere else than the verified artifact"
+  done
+  dup=$(tr ' ' '\n' <<<"$vn" | grep -v '^$' | sort | uniq -d || true)
+  [ -z "$dup" ] || echo "artifact-names: the pipelines share the verified artifact name $dup"
+
+  # ---- pinned actions, no token kept in a checkout, in both files.
   for f in "$e" "$b"; do
     grep -E '^ +(- )?uses: ' "$f" | grep -vE '@[0-9a-f]{40}( |$)' | sed "s|^|pin: $f: not pinned by full SHA: |" || true
     n=$(grep -c 'uses: actions/checkout@' "$f" || true)
@@ -200,23 +321,28 @@ audit() {
     [ "$n" = "$m" ] || echo "checkout: $f: $((n - m)) of $n checkouts keep their token"
   done
 
-  # A failed build is not silent: report-failure runs on it.
+  # ---- a failed build is not silent: report-failure runs on it.
   body=$(job "$e" report-failure)
   cond=$(field 4 if <<<"$body")
   if [ -z "$cond" ]; then echo "report: $e: report-failure has no if:"; else
-    grep -qE '^    needs: \[build, api-lifecycle-pr, registry-pr\]$' <<<"$body" || echo "report: $e: report-failure does not need build and both PR jobs"
-    # build ok, PR jobs ok: quiet. Anything else, and not cancelled: reports.
-    expr_bad "$cond" false '{"needs":{"build":{"result":"success","outputs":{"api-lifecycle-result":"success","registry-result":"success"}},"api-lifecycle-pr":{"result":"success"},"registry-pr":{"result":"success"}}}' | sed "s|^|report: $e: |"
-    expr_bad "$cond" true '{"needs":{"build":{"result":"failure","outputs":{}},"api-lifecycle-pr":{"result":"skipped"},"registry-pr":{"result":"skipped"}}}' | sed "s|^|report: $e: |"
-    expr_bad "$cond" true '{"needs":{"build":{"result":"success","outputs":{"api-lifecycle-result":"failure","registry-result":"success"}},"api-lifecycle-pr":{"result":"skipped"},"registry-pr":{"result":"success"}}}' | sed "s|^|report: $e: |"
-    expr_bad "$cond" true '{"needs":{"build":{"result":"success","outputs":{"api-lifecycle-result":"success","registry-result":"missing"}},"api-lifecycle-pr":{"result":"success"},"registry-pr":{"result":"skipped"}}}' | sed "s|^|report: $e: |"
-    expr_bad "$cond" true '{"needs":{"build":{"result":"success","outputs":{"api-lifecycle-result":"success","registry-result":"success"}},"api-lifecycle-pr":{"result":"success"},"registry-pr":{"result":"failure"}}}' | sed "s|^|report: $e: |"
+    grep -qE '^    needs: \[stage, api-lifecycle-run, registry-run, api-lifecycle-verify, registry-verify, api-lifecycle-pr, registry-pr, cleanup\]$' <<<"$body" ||
+      echo "report: $e: report-failure does not need every job before it"
+    local all='stage api-lifecycle-run registry-run api-lifecycle-verify registry-verify api-lifecycle-pr registry-pr cleanup' ctx k
+    ctx=$(for k in $all; do printf '"%s":{"result":"success","outputs":{}},' "$k"; done)
+    ctx="{\"needs\":{${ctx%,}}}"
+    expr_bad "$cond" false "$ctx" | tag "report: $e: "
+    for k in stage api-lifecycle-run registry-run api-lifecycle-verify registry-verify api-lifecycle-pr registry-pr; do
+      expr_bad "$cond" true "$(jq -c --arg k "$k" '.needs[$k].result = "failure"' <<<"$ctx")" | tag "report: $e: $k failing: "
+    done
+    # A pipeline whose run failed has its verify and PR jobs skipped: the
+    # run job's failure reports it.
+    expr_bad "$cond" true "$(jq -c '.needs["api-lifecycle-run"].result = "failure" | .needs["api-lifecycle-verify"].result = "skipped" | .needs["api-lifecycle-pr"].result = "skipped"' <<<"$ctx")" | tag "report: $e: "
   fi
 }
 
 real=$(audit "$entry" "$build") || true
 if [ -z "$real" ]; then
-  ok "$entry and $build: unreviewed jobs only in a run on $branch, no cache, artifacts by run id under distinct names"
+  ok "$entry and $build: unreviewed jobs only in a run per pipeline on $branch, no cache, the run verified before download, the digest compared, no token from a write job"
 else
   fail "the structure rules fail on the real workflows:"
   sed 's/^/     /' <<<"$real" >&2
@@ -225,9 +351,14 @@ fi
 # --- mutants: each must fail the rule it breaks ------------------------------
 
 # mutant <name> <tag> <entry-perl|-> <build-perl|->: copies of the two files
-# with the perl substitutions applied; the audit must report <tag>.
+# with the perl substitutions applied; the audit must report <tag>. Run at
+# most KB_JOBS (default 4) at a time: each audit is a few hundred greps.
 mutant() {
-  local name=$1 tag=$2 ep=$3 bp=$4 d got
+  while [ "$(jobs -rp | wc -l | tr -d ' ')" -ge "${KB_JOBS:-4}" ]; do sleep 0.2; done
+  mutant_run "$@" &
+}
+mutant_run() {
+  local name=$1 tg=$2 ep=$3 bp=$4 d got
   d=$work/mutant-$(tr -c 'a-z0-9\n' - <<<"$name")
   mkdir -p "$d"
   cp "$entry" "$d/kb-refresh.yml" && cp "$build" "$d/kb-refresh-build.yml"
@@ -238,8 +369,8 @@ mutant() {
     return
   fi
   got=$(audit "$d/kb-refresh.yml" "$d/kb-refresh-build.yml") || true
-  if grep -q "^$tag:" <<<"$got"; then ok "mutant fails $tag: $name"; else
-    fail "mutant '$name' is not caught by '$tag'; the audit says: ${got:-nothing}"; fi
+  if grep -q "^$tg:" <<<"$got"; then ok "mutant fails $tg: $name"; else
+    fail "mutant '$name' is not caught by '$tg'; the audit says: ${got:-nothing}"; fi
 }
 
 # The old structure: the unreviewed jobs in the file the schedule runs.
@@ -252,39 +383,92 @@ mutant "the unreviewed jobs back in the file scheduled from main" entry-runs-cod
 mutant "the build workflow also runs on a schedule" trigger - 's/^on:\n/on:\n  schedule:\n    - cron: "0 1 * * 1"\n/m'
 mutant "the build workflow also runs on push" trigger - 's/^on:\n/on:\n  push:\n    branches: [main]\n/m'
 mutant "the build workflow also runs on pull_request" trigger - 's/^on:\n/on:\n  pull_request:\n/m'
-mutant "a build job without the ref guard" ref-guard - 's/^    if: github.ref == .refs\/heads\/bot\/kb-refresh-build.\n//m'
-mutant "a build job guarded to main" ref-guard - 's/refs\/heads\/bot\/kb-refresh-build\x27$/refs\/heads\/main\x27/m'
-mutant "a build job guarded on a prefix match" ref-guard - 's/github.ref == \x27refs\/heads\/bot\/kb-refresh-build\x27/startsWith(github.ref, \x27refs\/heads\/\x27)/m'
+mutant "a build job without the ref guard" ref-guard - 's/ref == .refs\/heads\/bot\/kb-refresh-build. && inputs.pipeline == .registry./inputs.pipeline == \x27registry\x27/m'
+mutant "a build job guarded to main" ref-guard - 's/refs\/heads\/bot\/kb-refresh-build\x27 && inputs.pipeline == \x27registry/refs\/heads\/main\x27 \&\& inputs.pipeline == \x27registry/m'
+mutant "a build job guarded on a prefix match" ref-guard - 's/github.ref == \x27refs\/heads\/bot\/kb-refresh-build\x27 && inputs.pipeline == \x27api-lifecycle\x27/startsWith(github.ref, \x27refs\/heads\/\x27) \&\& inputs.pipeline == \x27api-lifecycle\x27/m'
+# Both pipelines' jobs in one run: each could upload the other's name first.
+mutant "the registry job also runs in the api-lifecycle run" pipeline-guard - 's/ && inputs.pipeline == .registry.\n/\n/m'
+mutant "both build jobs run in either run (one shared artifact store)" pipeline-guard - 's/ && inputs.pipeline == .[a-z-]+.\n/\n/g'
+mutant "the registry job runs in every run whose pipeline is set" pipeline-guard - 's/inputs.pipeline == .registry./inputs.pipeline != \x27\x27/m'
+mutant "the run name drops the pipeline" run-name - 's/^run-name: kb-refresh-build \$\{\{ inputs.pipeline \}\} /run-name: kb-refresh-build /m'
 mutant "setup-go with a cache in an unreviewed job" cache - 's/cache: false\n/cache: true\n/'
 mutant "an actions/cache step in the build workflow" cache - 's/(      - name: Validate the regenerated KB\n)/      - uses: actions\/cache\@0000000000000000000000000000000000000000 # v4\n        with:\n          path: ~\/go\/pkg\/mod\n          key: k\n$1/'
 mutant "an unreviewed job with write permissions" perms - 's/^(  registry:\n(?:.*\n)*?    permissions:\n      contents: )read/${1}write/m'
 mutant "an unreviewed job with an extra permission" perms - 's/^(  api-lifecycle:\n(?:.*\n)*?      contents: read\n)/$1      actions: write\n/m'
 mutant "the registry pipeline uploads under the api pipeline's name" artifact-names - 's/name: kb-refresh-registry/name: kb-refresh-api-lifecycle/'
-mutant "a shared artifact name in both pipelines and both downloads" artifact-names \
-  's/kb-refresh-registry/kb-refresh-api-lifecycle/g' 's/kb-refresh-registry/kb-refresh-api-lifecycle/g'
-mutant "a PR job that downloads by name from its own run" download 's/^          run-id: .*\n//m' -
-mutant "a PR job downloading the other pipeline's artifact" download 's/(  registry-pr:\n(?:.*\n)*?          name: )kb-refresh-registry/${1}kb-refresh-api-lifecycle/' -
-mutant "a PR job that does not wait for the build result" pr-job 's/^    if: needs.build.result == .success. && needs.build.outputs.registry-result == .success.\n//m' -
-mutant "a PR job that runs whatever the other pipeline did" pr-job 's/needs.build.outputs.api-lifecycle-result == .success./needs.build.outputs.registry-result == \x27success\x27/' -
-mutant "the build job dispatches on main" build-job 's/--ref "\$BUILD_BRANCH"/--ref main/' -
-mutant "the build job checks out the repository" build-job 's/(    steps:\n)(      - name: Run the unreviewed build)/$1      - uses: actions\/checkout\@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n        with:\n          persist-credentials: false\n$2/' -
-mutant "the build job holds more than it needs" build-job 's/(      actions: write # dispatch[^\n]*\n)/$1      pull-requests: write\n/' -
+mutant "the verified artifacts share one name" artifact-names 's/kb-refresh-registry-verified/kb-refresh-api-lifecycle-verified/g' -
+mutant "the seal job checks out the repository" seal - 's/(  seal:\n(?:.*\n)*?    steps:\n)/$1      - uses: actions\/checkout\@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n        with:\n          persist-credentials: false\n/m'
+mutant "the seal job prints no digest" seal - 's/echo "kb-refresh-patch-sha256 \$PIPELINE \$hash"/echo sealed/'
+mutant "the seal job runs when the build job failed" seal - 's/needs.api-lifecycle.result == .success. \|\| needs.registry.result == .success./needs.api-lifecycle.result != \x27x\x27/'
+mutant "the seal job downloads from another run" seal - 's/(      - uses: actions\/download-artifact\@[0-9a-f]{40} # v8.0.2\n        with:\n)(          name: kb-refresh-\$\{\{ inputs.pipeline \}\})/$1          run-id: 1\n$2/'
+
+# The consumer's verification.
+mutant "a PR job that downloads by run id from the build run" pr-download 's/(  registry-pr:\n(?:.*\n)*?      - uses: actions\/download-artifact\@[0-9a-f]{40} # v8.0.2\n        with:\n)/$1          run-id: \${{ needs.registry-run.outputs.run-id }}\n/' -
+mutant "a PR job whose download names a token" pr-download 's/(  api-lifecycle-pr:\n(?:.*\n)*?      - uses: actions\/download-artifact\@[0-9a-f]{40} # v8.0.2\n        with:\n)/$1          github-token: \${{ github.token }}\n/' -
+mutant "a PR job downloading the other pipeline's artifact" pr-download 's/(  registry-pr:\n(?:.*\n)*?          name: )kb-refresh-registry-verified/${1}kb-refresh-api-lifecycle-verified/' -
+mutant "a PR job downloading the build run's artifact, not the verified one" pr-download 's/(  registry-pr:\n(?:.*\n)*?          name: kb-refresh-registry)-verified/$1/' -
+mutant "the verify job holds a write permission (its download token)" verify 's/(  registry-verify:\n(?:.*\n)*?      actions: )read/${1}write/' -
+mutant "the verify job also holds contents: write" verify 's/(  api-lifecycle-verify:\n(?:.*\n)*?      contents: )read/${1}write/' -
+mutant "the verify job checks out the repository" verify 's/(  registry-verify:\n(?:.*\n)*?    steps:\n)/$1      - uses: actions\/checkout\@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n        with:\n          persist-credentials: false\n/' -
+mutant "a download from another run in a job that holds writes" download-token 's/(  registry-pr:\n(?:.*\n)*?      - uses: actions\/download-artifact\@[0-9a-f]{40} # v8.0.2\n        with:\n)/$1          github-token: \${{ github.token }}\n/' -
+mutant "the verify job downloads without a run id" download 's/(  api-lifecycle-verify:\n(?:.*\n)*?)          run-id: \$\{\{ needs.api-lifecycle-run.outputs.run-id \}\}\n/$1/' -
+mutant "the verify job downloads the other pipeline's artifact" download 's/(  registry-verify:\n(?:.*\n)*?          name: )kb-refresh-registry\n/${1}kb-refresh-api-lifecycle\n/' -
+mutant "the verify job downloads with no token" download 's/(  registry-verify:\n(?:.*\n)*?)          github-token: \$\{\{ github.token \}\}\n/$1/' -
+# Each field of the run the verify job must check: dropping its line fails
+# the structure rule.
+for pair in \
+  'id|\(if \(\(\.id \| tostring\) != \$id\)' \
+  'workflow file|\(if \(\(\.path \/\/ ""\)' \
+  'branch|\(if \.head_branch != \$branch' \
+  'commit|\(if \.head_sha != \$sha' \
+  'event|\(if \.event != "workflow_dispatch"' \
+  'status|\(if \.status != "completed"' \
+  'conclusion|\(if \.conclusion != "success"' \
+  'repository|\(if \.repository\.full_name != \$repo' \
+  'head repository (fork)|\(if \.head_repository\.full_name != \$repo' \
+  'name|\(if \.display_title != \$title'; do
+  mutant "the verify job does not check the run's ${pair%%|*}" verify-run "s/^ +(?:\\[ )?${pair#*|}[^\\n]*\\n//m" -
+done
+mutant "the verify job does not check the pipeline's jobs succeeded" verify-run 's/\| select\(\.conclusion == "success"\) //' -
+mutant "the verify job does not check for jobs of the other pipeline" verify-run 's/\.name != \$p and \.name != "seal" and \.conclusion != "skipped"/.name == "none"/' -
+mutant "the verify job does not check the run's artifacts" verify-run 's/\[ "\$found" = "kb-refresh-\$PIPELINE" \]/true/' -
+mutant "the verify job does not read the sealed digest from one line" verify-run 's/kb-refresh-patch-sha256 \$PIPELINE \[0-9a-f\]\{64\}\$/kb-refresh-patch-sha256 [a-z-]+ [0-9a-f]{64}/' -
+mutant "the verify job compares no digest" digest 's/\[ "\$got" = "\$DIGEST" \] \|\| \{/[ -n "\$got" ] || {/' -
+mutant "the verify job does not recompute the digest" digest 's/got=\$\(sha256sum "\$patch" \| cut -d. . -f1\)/got=\$DIGEST/' -
+mutant "the verify job downloads before checking the run" verify-order \
+  's/(      # Refuse any run that is not the one this workflow dispatched.*?\n)(      - uses: actions\/download-artifact\@[0-9a-f]{40} # v8.0.2\n        with:\n          # The checked run.*?\n          path: [^\n]*\n\n)/$2$1/s' -
+mutant "the verify job uploads before comparing the digest" verify-order \
+  's/(      # The downloaded patch is the one the seal job hashed\.\n.*?\n\n)(      - uses: actions\/upload-artifact\@[0-9a-f]{40} # v7.0.2\n.*?retention-days: 1\n)/$2\n$1/s' -
+
+mutant "a run job holding more than it needs" run-job 's/(  registry-run:\n(?:.*\n)*?      contents: )read/${1}write/' -
+mutant "a run job dispatching without a pipeline" run-job 's/ -f pipeline="\$PIPELINE"//' -
+mutant "the registry run job dispatching the api-lifecycle pipeline" run-job 's/(  registry-run:\n(?:.*\n)*?      PIPELINE: )registry/${1}api-lifecycle/' -
+mutant "a run job that does not fail on a failed run" run-job 's/\[ "\$conclusion" = success \]/true/' -
+mutant "a run job that finds its run by request only" run-job 's/ and \.headSha == env\.SHA//' -
+mutant "the stage job moves a leftover branch" stage 's/gh api -X DELETE "repos\/\$GH_REPO\/git\/refs\/\$ref" >\/dev\/null/gh api -X PATCH "repos\/\$GH_REPO\/git\/refs\/\$ref" -f sha="\$SHA" -F force=true >\/dev\/null/' -
+mutant "the stage job checks out the repository" stage 's/(  stage:\n(?:.*\n)*?    steps:\n)/$1      - uses: actions\/checkout\@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n        with:\n          persist-credentials: false\n/' -
+mutant "the stage job holds more than it needs" stage 's/(  stage:\n(?:.*\n)*?      contents: write[^\n]*\n)/$1      actions: write\n/' -
+mutant "the stage job stages main on another branch" stage 's/(  stage:\n(?:.*\n)*?      BUILD_BRANCH: )bot\/kb-refresh-build/${1}bot\/other/' -
+mutant "the cleanup job holds more than it needs" cleanup 's/(  cleanup:\n(?:.*\n)*?      contents: write[^\n]*\n)/$1      actions: write\n/' -
+mutant "a PR job that runs whatever its verify did" pr-job 's/^    if: needs\.registry-verify\.result == .success.\n//m' -
+mutant "a PR job that runs whatever the other pipeline did" pr-job 's/needs\.api-lifecycle-verify\.result == .success./needs.registry-verify.result == \x27success\x27/' -
 mutant "an action not pinned by SHA" pin 's/actions\/download-artifact\@[0-9a-f]{40}/actions\/download-artifact\@v8/' -
 mutant "a checkout that keeps its token" checkout - 's/(uses: actions\/checkout\@[0-9a-f]{40} # v7.0.1\n        with:\n          persist-credentials: )false/${1}true/'
-mutant "a failed build that report-failure ignores" report 's/^    if: >-\n.*?\n    runs-on/    if: failure()\n    runs-on/ms' -
+mutant "a failed build run that report-failure ignores" report 's/ needs\.api-lifecycle-run\.result == .failure. \|\|//' -
+mutant "a failed stage that report-failure ignores" report 's/needs\.stage\.result == .failure. \|\| *//' -
+mutant "a failed verify that report-failure ignores" report 's/ \|\|\n      needs\.api-lifecycle-verify\.result == .failure. \|\| needs\.registry-verify\.result == .failure.//' -
 
-# --- the build job's script, against a stub gh -------------------------------
+wait
 
-body=$(job "$entry" build)
-step 'Run the unreviewed build on the staging branch' <<<"$body" | run_block >"$work/build.sh"
-step 'Remove the staging branch' <<<"$body" | run_block >"$work/cleanup.sh"
-[ -s "$work/build.sh" ] && [ -s "$work/cleanup.sh" ] || fail "the build job has no 'Run the unreviewed build' or 'Remove the staging branch' run block"
+# --- the entry workflow's scripts, against a stub gh --------------------------
 
 mkdir -p "$work/bin"
 # gh: logs each call. Answers from files in $STUB: ref-exists (present: the
 # staging branch exists), list.json (gh run list's JSON), status.N (the n-th
-# run status reading, the last once they run out), jobs.json (the run's
-# jobs). `gh api` / `gh run list` apply --jq with jq, as gh does.
+# run reading of the build run, "<status> <conclusion>", the last once they
+# run out), run.json / jobs.json / artifacts.json / logs.txt (the build run as
+# the verify job reads it). `gh api` / `gh run list` apply --jq with jq, as gh
+# does.
 cat >"$work/bin/gh" <<'STUB'
 #!/usr/bin/env bash
 echo "gh $*" >>"$GH_LOG"
@@ -295,17 +479,22 @@ case "$1 $2" in
     echo '{}' ;;
   "api -X")
     case "$3 $4" in
-      "PATCH repos/o/r/git/refs/heads/bot/kb-refresh-build" | "POST repos/o/r/git/refs" | "DELETE repos/o/r/git/refs/heads/bot/kb-refresh-build") echo '{}' ;;
+      "POST repos/o/r/git/refs" | "DELETE repos/o/r/git/refs/heads/bot/kb-refresh-build") echo '{}' ;;
       *) echo "stub gh: unexpected call: $*" >&2; exit 2 ;;
     esac ;;
   "workflow run") : ;;
   "run list") jqf "$@" <"$STUB/list.json" ;;
   "run cancel") : ;;
-  "api repos/o/r/actions/runs/777/jobs?per_page=100") jqf "$@" <"$STUB/jobs.json" ;;
   "api repos/o/r/actions/runs/777")
-    n=$(($(cat "$STUB/status.n" 2>/dev/null || echo 0) + 1)); echo "$n" >"$STUB/status.n"
-    last=$(ls "$STUB" | grep -c '^status\.[0-9]' || true)
-    echo "{\"status\":\"$(cat "$STUB/status.$((n < last ? n : last))")\"}" | jqf "$@" ;;
+    if [ -e "$STUB/run.json" ]; then jqf "$@" <"$STUB/run.json"; else
+      n=$(($(cat "$STUB/status.n" 2>/dev/null || echo 0) + 1)); echo "$n" >"$STUB/status.n"
+      last=$(ls "$STUB" | grep -c '^status\.[0-9]' || true)
+      read -r st co <"$STUB/status.$((n < last ? n : last))"
+      jq -n --arg s "$st" --arg c "${co:-none}" '{status: $s, conclusion: (if $c == "none" then null else $c end)}' | jqf "$@"
+    fi ;;
+  "api repos/o/r/actions/runs/777/jobs?per_page=100") jqf "$@" <"$STUB/jobs.json" ;;
+  "api repos/o/r/actions/runs/777/artifacts?per_page=100") jqf "$@" <"$STUB/artifacts.json" ;;
+  "api repos/o/r/actions/jobs/13/logs") cat "$STUB/logs.txt" ;;
   *) echo "stub gh: unexpected call: $*" >&2; exit 2 ;;
 esac
 STUB
@@ -314,97 +503,261 @@ cat >"$work/bin/sleep" <<'STUB'
 echo "$*" >>"$SLEEP_LOG"
 STUB
 chmod +x "$work/bin/gh" "$work/bin/sleep"
-
 sha=1111111111111111111111111111111111111111
-# build_case <label> <exists|absent> <list.json> <jobs.json> <status>...: runs
-# the script; leaves rc, output, outputs and the gh log in $work/bc.*.
-build_case() {
-  local exists=$1 list=$2 jobs=$3
-  shift 3
+out() { sort "$work/bc.out" | tr '\n' ' ' | sed 's/ $//'; }
+
+# -- stage
+stage_body=$(job "$entry" stage)
+step "Point the staging branch at main's head" <<<"$stage_body" | run_block >"$work/stage.sh"
+[ -s "$work/stage.sh" ] || fail "the stage job has no 'Point the staging branch' run block"
+stage_case() { # exists|absent
+  export STUB=$work/stub
+  rm -rf "$STUB"; mkdir -p "$STUB"
+  [ "$1" = exists ] && touch "$STUB/ref-exists"
+  : >"$work/st.gh"; SC_RC=0
+  PATH="$work/bin:$PATH" GH_LOG="$work/st.gh" GH_REPO=o/r SHA=$sha BUILD_BRANCH=$branch GH_TOKEN=stub \
+    bash --noprofile --norc -e "$work/stage.sh" >"$work/st.log" 2>&1 || SC_RC=$?
+}
+stage_case absent
+if [ "$SC_RC" = 0 ] && grep -q "api -X POST repos/o/r/git/refs -f ref=refs/heads/$branch -f sha=$sha" "$work/st.gh" && ! grep -qE -- '-X (PATCH|DELETE)' "$work/st.gh"; then
+  ok "stage: creates the staging branch at the commit"
+else fail "stage: new branch: rc $SC_RC: $(cat "$work/st.gh")"; fi
+stage_case exists
+if [ "$SC_RC" = 0 ] && ! grep -q -- '-X PATCH' "$work/st.gh" &&
+  [ "$(grep -n -- '-X DELETE' "$work/st.gh" | head -1 | cut -d: -f1)" -lt "$(grep -n -- '-X POST' "$work/st.gh" | head -1 | cut -d: -f1)" ]; then
+  ok "stage: deletes a leftover staging branch and creates it again, never moves it"
+else fail "stage: leftover branch: rc $SC_RC: $(cat "$work/st.gh")"; fi
+
+# -- <p>-run
+title_of() { echo "kb-refresh-build $1 55-1"; }
+# run_case <pipeline> <list.json> <status "<status> <conclusion>">...: runs
+# the pipeline's run script; leaves rc, outputs and the gh log in $work/bc.*.
+run_case() {
+  local p=$1 list=$2 i=0 s
+  shift 2
   export STUB=$work/stub
   rm -rf "$STUB" "$work"/bc.*
   mkdir -p "$STUB"
-  [ "$exists" = exists ] && touch "$STUB/ref-exists"
-  echo "$list" >"$STUB/list.json"; echo "$jobs" >"$STUB/jobs.json"
-  local i=0 s
+  echo "$list" >"$STUB/list.json"
   for s in "$@"; do i=$((i + 1)); echo "$s" >"$STUB/status.$i"; done
   : >"$work/bc.gh"; : >"$work/bc.sleep"; : >"$work/bc.out"
+  step "Run the unreviewed $p build on the staging branch" < <(job "$entry" "$p-run") | run_block >"$work/run-$p.sh"
+  [ -s "$work/run-$p.sh" ] || { fail "$p-run has no run block"; BC_RC=99; return; }
   BC_RC=0
   PATH="$work/bin:$PATH" GH_LOG="$work/bc.gh" SLEEP_LOG="$work/bc.sleep" GITHUB_OUTPUT="$work/bc.out" \
-    GITHUB_SERVER_URL=https://github.com GH_REPO=o/r SHA=$sha REQUEST=55-1 BUILD_BRANCH=$branch GH_TOKEN=stub \
-    bash --noprofile --norc -e "$work/build.sh" >"$work/bc.log" 2>&1 || BC_RC=$?
+    GITHUB_SERVER_URL=https://github.com GH_REPO=o/r SHA=$sha REQUEST=55-1 BUILD_BRANCH=$branch PIPELINE=$p GH_TOKEN=stub \
+    bash --noprofile --norc -e "$work/run-$p.sh" >"$work/bc.log" 2>&1 || BC_RC=$?
 }
-title='kb-refresh-build 55-1'
-list_ok="[{\"databaseId\":776,\"displayTitle\":\"$title\",\"headSha\":\"2222222222222222222222222222222222222222\"},{\"databaseId\":775,\"displayTitle\":\"kb-refresh-build 54-1\",\"headSha\":\"$sha\"},{\"databaseId\":777,\"displayTitle\":\"$title\",\"headSha\":\"$sha\"}]"
-jobs_ok='{"jobs":[{"name":"api-lifecycle","conclusion":"success"},{"name":"registry","conclusion":"success"}]}'
-jobs_mixed='{"jobs":[{"name":"api-lifecycle","conclusion":"failure"},{"name":"registry","conclusion":"success"}]}'
-jobs_skipped='{"jobs":[{"name":"api-lifecycle","conclusion":"skipped"}]}'
-out() { sort "$work/bc.out" | tr '\n' ' ' | sed 's/ $//'; }
+for p in api-lifecycle registry; do
+  o=$(other_of "$p")
+  list_ok="[{\"databaseId\":776,\"displayTitle\":\"$(title_of "$p")\",\"headSha\":\"2222222222222222222222222222222222222222\"},{\"databaseId\":775,\"displayTitle\":\"kb-refresh-build $p 54-1\",\"headSha\":\"$sha\"},{\"databaseId\":778,\"displayTitle\":\"$(title_of "$o")\",\"headSha\":\"$sha\"},{\"databaseId\":777,\"displayTitle\":\"$(title_of "$p")\",\"headSha\":\"$sha\"}]"
+  run_case "$p" "$list_ok" "queued none" "in_progress none" "completed success"
+  if [ "$BC_RC" = 0 ] && grep -qxF "gh workflow run kb-refresh-build.yml --ref $branch -f pipeline=$p -f request=55-1" "$work/bc.gh" &&
+    [ "$(out)" = "run-id=777" ]; then
+    ok "$p-run: dispatches for its own pipeline, finds its run by pipeline, request and commit (not the lookalikes or the other pipeline's), waits for success"
+  else fail "$p-run: success: rc $BC_RC, outputs '$(out)': $(cat "$work/bc.gh") $(tail -5 "$work/bc.log")"; fi
 
-build_case absent "$list_ok" "$jobs_ok" queued in_progress completed
-if [ "$BC_RC" = 0 ] && grep -q "api -X POST repos/o/r/git/refs -f ref=refs/heads/$branch -f sha=$sha" "$work/bc.gh" &&
-  ! grep -q -- '-X PATCH' "$work/bc.gh" &&
-  grep -qxF "gh workflow run kb-refresh-build.yml --ref $branch -f request=55-1" "$work/bc.gh" &&
-  [ "$(out)" = "api-lifecycle-result=success registry-result=success run-id=777" ]; then
-  ok "build: creates the staging branch at the commit, dispatches on it, finds its run by name and commit (not the lookalikes), outputs success"
-else
-  fail "build: new branch, both succeed: rc $BC_RC, outputs '$(out)': $(cat "$work/bc.gh") $(tail -5 "$work/bc.log")"
-fi
+  for c in failure cancelled timed_out skipped; do
+    run_case "$p" "$list_ok" "completed $c"
+    if [ "$BC_RC" != 0 ] && grep -q '^run-id=777' "$work/bc.out" && grep -q "::error::.*concluded $c" "$work/bc.log"; then
+      ok "$p-run: fails, naming the run, when the run concluded $c"
+    else fail "$p-run: conclusion $c: rc $BC_RC, outputs '$(out)': $(tail -3 "$work/bc.log")"; fi
+  done
 
-build_case exists "$list_ok" "$jobs_mixed" completed
-if [ "$BC_RC" = 0 ] && grep -q "api -X PATCH repos/o/r/git/refs/heads/$branch -f sha=$sha -F force=true" "$work/bc.gh" &&
-  ! grep -q -- '-X POST' "$work/bc.gh" &&
-  [ "$(out)" = "api-lifecycle-result=failure registry-result=success run-id=777" ]; then
-  ok "build: moves an existing staging branch; one pipeline failing is an output, not a failed job"
-else
-  fail "build: existing branch, api failed: rc $BC_RC, outputs '$(out)': $(cat "$work/bc.gh") $(tail -5 "$work/bc.log")"
-fi
+  run_case "$p" '[]' "completed success"
+  if [ "$BC_RC" != 0 ] && ! grep -q '^run-id=' "$work/bc.out" && grep -q '::error::' "$work/bc.log"; then
+    ok "$p-run: fails, with no run id, when the dispatched run never appears"
+  else fail "$p-run: no run: rc $BC_RC, outputs '$(out)': $(tail -3 "$work/bc.log")"; fi
 
-build_case exists "$list_ok" "$jobs_skipped" completed
-if [ "$BC_RC" = 0 ] && [ "$(out)" = "api-lifecycle-result=skipped registry-result=missing run-id=777" ]; then
-  ok "build: a pipeline whose job never ran is 'missing', never 'success'"
-else
-  fail "build: skipped jobs: rc $BC_RC, outputs '$(out)'"
-fi
+  # Only the other pipeline's run exists for this request: not ours.
+  run_case "$p" "[{\"databaseId\":778,\"displayTitle\":\"$(title_of "$o")\",\"headSha\":\"$sha\"}]" "completed success"
+  if [ "$BC_RC" != 0 ] && ! grep -q '^run-id=' "$work/bc.out"; then
+    ok "$p-run: never adopts the other pipeline's run"
+  else fail "$p-run: the other pipeline's run was adopted: rc $BC_RC, outputs '$(out)'"; fi
 
-build_case exists '[]' "$jobs_ok" completed
-if [ "$BC_RC" != 0 ] && ! grep -q '^run-id=' "$work/bc.out" && grep -q '::error::' "$work/bc.log"; then
-  ok "build: fails, with no run id, when the dispatched run never appears"
-else
-  fail "build: no run: rc $BC_RC, outputs '$(out)': $(tail -3 "$work/bc.log")"
-fi
+  # Still going after the wait: the job fails (the cancel step then runs).
+  run_case "$p" "$list_ok" "in_progress none"
+  if [ "$BC_RC" != 0 ] && grep -q '^run-id=777' "$work/bc.out" && grep -q '::error::' "$work/bc.log"; then
+    ok "$p-run: fails when the run never completes, after a bounded wait"
+  else fail "$p-run: run never completes: rc $BC_RC, outputs '$(out)': $(tail -3 "$work/bc.log")"; fi
+done
 
-# The run is still going after the wait: the job fails (the cleanup step
-# then cancels it).
-build_case exists "$list_ok" "$jobs_ok" in_progress
-if [ "$BC_RC" != 0 ] && grep -q '^run-id=777' "$work/bc.out" && ! grep -q 'result=' "$work/bc.out" && grep -q '::error::' "$work/bc.log"; then
-  ok "build: fails when the run never completes, after a bounded wait"
-else
-  fail "build: run never completes: rc $BC_RC, outputs '$(out)': $(tail -3 "$work/bc.log")"
-fi
-
-# cleanup_case <status> <ID>: the cleanup step; cancels an unfinished run,
-# always deletes the branch, fails nothing.
-cleanup_case() {
+# -- cancel an unfinished run, and cleanup
+cancel_case() { # status ID
   export STUB=$work/stub
   rm -rf "$STUB" "$work"/cc.*; mkdir -p "$STUB"; echo "$1" >"$STUB/status.1"
-  : >"$work/cc.gh"
-  CC_RC=0
-  PATH="$work/bin:$PATH" GH_LOG="$work/cc.gh" SLEEP_LOG=/dev/null GH_REPO=o/r BUILD_BRANCH=$branch ID=$2 GH_TOKEN=stub \
-    bash --noprofile --norc -e "$work/cleanup.sh" >"$work/cc.log" 2>&1 || CC_RC=$?
+  : >"$work/cc.gh"; CC_RC=0
+  step 'Cancel an unfinished run' < <(job "$entry" api-lifecycle-run) | run_block >"$work/cancel.sh"
+  PATH="$work/bin:$PATH" GH_LOG="$work/cc.gh" SLEEP_LOG=/dev/null GH_REPO=o/r ID=$2 GH_TOKEN=stub \
+    bash --noprofile --norc -e "$work/cancel.sh" >"$work/cc.log" 2>&1 || CC_RC=$?
 }
-cleanup_case in_progress 777
-if [ "$CC_RC" = 0 ] && grep -q '^gh run cancel 777' "$work/cc.gh" && grep -q "api -X DELETE repos/o/r/git/refs/heads/$branch" "$work/cc.gh"; then
-  ok "cleanup: cancels a run still going and deletes the staging branch"
-else fail "cleanup: unfinished run: rc $CC_RC: $(cat "$work/cc.gh")"; fi
-cleanup_case completed 777
-if [ "$CC_RC" = 0 ] && ! grep -q 'run cancel' "$work/cc.gh" && grep -q "api -X DELETE" "$work/cc.gh"; then
-  ok "cleanup: leaves a finished run alone and deletes the staging branch"
-else fail "cleanup: finished run: rc $CC_RC: $(cat "$work/cc.gh")"; fi
-cleanup_case completed ''
-if [ "$CC_RC" = 0 ] && ! grep -q 'run cancel' "$work/cc.gh" && grep -q "api -X DELETE" "$work/cc.gh"; then
-  ok "cleanup: with no run id (the dispatch failed) it still deletes the staging branch"
-else fail "cleanup: no run id: rc $CC_RC: $(cat "$work/cc.gh")"; fi
+cancel_case in_progress 777
+if [ "$CC_RC" = 0 ] && grep -q '^gh run cancel 777' "$work/cc.gh"; then ok "cancel: cancels a run still going"; else fail "cancel: unfinished run: rc $CC_RC: $(cat "$work/cc.gh")"; fi
+cancel_case completed 777
+if [ "$CC_RC" = 0 ] && ! grep -q 'run cancel' "$work/cc.gh"; then ok "cancel: leaves a finished run alone"; else fail "cancel: finished run: rc $CC_RC: $(cat "$work/cc.gh")"; fi
+cancel_case completed ''
+if [ "$CC_RC" = 0 ] && ! grep -q 'run cancel' "$work/cc.gh"; then ok "cancel: with no run id (the dispatch failed) it does nothing"; else fail "cancel: no run id: rc $CC_RC: $(cat "$work/cc.gh")"; fi
+
+job "$entry" cleanup | grep -E '^        run: ' | sed 's/^        run: //' >"$work/cleanup.sh"
+export STUB=$work/stub; rm -rf "$STUB"; mkdir -p "$STUB"; : >"$work/cl.gh"; CL_RC=0
+PATH="$work/bin:$PATH" GH_LOG="$work/cl.gh" GH_REPO=o/r BUILD_BRANCH=$branch GH_TOKEN=stub bash --noprofile --norc -e "$work/cleanup.sh" >/dev/null 2>&1 || CL_RC=$?
+if [ "$CL_RC" = 0 ] && grep -q "api -X DELETE repos/o/r/git/refs/heads/$branch" "$work/cl.gh"; then ok "cleanup: deletes the staging branch"; else fail "cleanup: rc $CL_RC: $(cat "$work/cl.gh")"; fi
+
+# --- the build workflow's seal job, and the verify job against its output -----
+
+seal_body=$(job "$build" seal)
+step "Print the patch's digest" <<<"$seal_body" | run_block >"$work/seal.sh"
+[ -s "$work/seal.sh" ] || fail "the seal job has no 'Print the patch's digest' run block"
+# seal_case <pipeline> <dir>: the digest line the seal job prints.
+seal_case() {
+  SEAL_RC=0
+  SEALED=$2 PIPELINE=$1 bash --noprofile --norc -e "$work/seal.sh" >"$work/seal.out" 2>"$work/seal.err" || SEAL_RC=$?
+}
+patchdir=$work/patch; mkdir -p "$patchdir"
+printf 'diff --git a/x b/x\n+one\n' >"$patchdir/kb-refresh-api-lifecycle.patch"
+want_hash=$(shasum -a 256 "$patchdir/kb-refresh-api-lifecycle.patch" | cut -d' ' -f1)
+seal_case api-lifecycle "$patchdir"
+if [ "$SEAL_RC" = 0 ] && [ "$(cat "$work/seal.out")" = "kb-refresh-patch-sha256 api-lifecycle $want_hash" ]; then
+  ok "seal: prints one 'kb-refresh-patch-sha256 <pipeline> <sha256>' line for the artifact's patch"
+else fail "seal: rc $SEAL_RC: $(cat "$work/seal.out" "$work/seal.err")"; fi
+touch "$patchdir/extra"
+seal_case api-lifecycle "$patchdir"
+if [ "$SEAL_RC" != 0 ] && ! grep -q kb-refresh-patch-sha256 "$work/seal.out"; then ok "seal: refuses an artifact of more than one file"; else fail "seal: extra file: rc $SEAL_RC"; fi
+rm "$patchdir/extra"
+seal_case registry "$patchdir"
+if [ "$SEAL_RC" != 0 ] && ! grep -q kb-refresh-patch-sha256 "$work/seal.out"; then ok "seal: refuses an artifact that is not this pipeline's patch"; else fail "seal: wrong pipeline: rc $SEAL_RC"; fi
+
+# -- verify: the run check
+vstep() { step "Check the run and read the patch's digest" < <(job "$entry" "$1-verify") | run_block >"$work/verify-$1.sh"; [ -s "$work/verify-$1.sh" ] || fail "$1-verify has no check run block"; }
+# v_reset <pipeline>: a good run, as the API returns it.
+v_reset() {
+  local p=$1
+  export STUB=$work/stub
+  rm -rf "$STUB"; mkdir -p "$STUB"
+  jq -n --arg sha "$sha" --arg p "$p" '{id: 777, path: ".github/workflows/kb-refresh-build.yml", head_branch: "bot/kb-refresh-build", head_sha: $sha,
+    event: "workflow_dispatch", status: "completed", conclusion: "success", repository: {full_name: "o/r"}, head_repository: {full_name: "o/r"},
+    display_title: ("kb-refresh-build " + $p + " 55-1")}' >"$STUB/run.json"
+  jq -n --arg p "$p" --arg o "$(other_of "$p")" '{jobs: [{id: 11, name: $p, conclusion: "success"}, {id: 12, name: $o, conclusion: "skipped"}, {id: 13, name: "seal", conclusion: "success"}]}' >"$STUB/jobs.json"
+  jq -n --arg p "$p" '{artifacts: [{name: ("kb-refresh-" + $p), expired: false}]}' >"$STUB/artifacts.json"
+  {
+    echo "2026-10-12T06:20:00.1000000Z ##[group]Run set -euo pipefail"
+    echo "2026-10-12T06:20:00.1000001Z   echo \"kb-refresh-patch-sha256 \$PIPELINE \$hash\""
+    echo "2026-10-12T06:20:00.2000000Z kb-refresh-patch-sha256 $p $good_digest"
+  } >"$STUB/logs.txt"
+}
+good_digest=$(printf 'c%.0s' $(seq 64))
+# v_case <label> <pipeline> <want: pass|refuse> [<file> <jq filter>]...
+v_case() {
+  local label=$1 p=$2 want=$3 file filter
+  shift 3
+  v_reset "$p"
+  while [ $# -ge 2 ]; do
+    file=$1 filter=$2; shift 2
+    jq -c "$filter" "$STUB/$file" >"$STUB/tmp" && mv "$STUB/tmp" "$STUB/$file"
+  done
+  vstep "$p"
+  : >"$work/v.gh"; : >"$work/v.out"; V_RC=0
+  PATH="$work/bin:$PATH" GH_LOG="$work/v.gh" GITHUB_OUTPUT="$work/v.out" GH_REPO=o/r SHA=$sha PIPELINE=$p REQUEST=55-1 \
+    BUILD_BRANCH=$branch RUN_ID=777 GH_TOKEN=stub bash --noprofile --norc -e "$work/verify-$p.sh" >"$work/v.log" 2>&1 || V_RC=$?
+  case $want in
+    pass) [ "$V_RC" = 0 ] && [ "$(cat "$work/v.out")" = "sha256=$good_digest" ] ;;
+    refuse) [ "$V_RC" != 0 ] && [ ! -s "$work/v.out" ] && grep -q '::error::refusing run 777' "$work/v.log" ;;
+  esac && ok "verify($p): $label" || fail "verify($p): $label: rc $V_RC, output '$(cat "$work/v.out")': $(tail -4 "$work/v.log")"
+}
+for p in api-lifecycle registry; do
+  o=$(other_of "$p")
+  v_case "the run it dispatched is accepted, and the digest is read from the seal job's log (decoy lines ignored)" "$p" pass
+  v_case "the workflow file with an @ref suffix, as the API shows it for some events, is accepted" "$p" pass run.json '.path += "@refs/heads/bot/kb-refresh-build"'
+  v_case "a run of another workflow file is refused" "$p" refuse run.json '.path = ".github/workflows/ci.yml"'
+  v_case "a run of a workflow file with the same name elsewhere is refused" "$p" refuse run.json '.path = ".github/workflows/sub/kb-refresh-build.yml"'
+  v_case "a run on main is refused" "$p" refuse run.json '.head_branch = "main"'
+  v_case "a run on another branch is refused" "$p" refuse run.json '.head_branch = "bot/other"'
+  v_case "a run at another commit is refused" "$p" refuse run.json '.head_sha = "2222222222222222222222222222222222222222"'
+  v_case "a run of another event (push) is refused" "$p" refuse run.json '.event = "push"'
+  v_case "a pull_request run is refused" "$p" refuse run.json '.event = "pull_request"'
+  v_case "a run still in progress is refused" "$p" refuse run.json '.status = "in_progress" | .conclusion = null'
+  v_case "a failed run is refused" "$p" refuse run.json '.conclusion = "failure"'
+  v_case "a cancelled run is refused" "$p" refuse run.json '.conclusion = "cancelled"'
+  v_case "a run of another repository is refused" "$p" refuse run.json '.repository.full_name = "evil/r"'
+  v_case "a run whose head is a fork is refused" "$p" refuse run.json '.head_repository.full_name = "fork/r"'
+  v_case "a run with another id is refused" "$p" refuse run.json '.id = 778'
+  v_case "the other pipeline's run is refused" "$p" refuse run.json ".display_title = \"kb-refresh-build $o 55-1\""
+  v_case "another request's run is refused" "$p" refuse run.json '.display_title = "kb-refresh-build '"$p"' 54-1"'
+  v_case "a run whose pipeline job failed is refused" "$p" refuse jobs.json "(.jobs[] | select(.name == \"$p\") | .conclusion) = \"failure\""
+  v_case "a run with no sealed job is refused" "$p" refuse jobs.json '.jobs |= map(select(.name != "seal"))'
+  v_case "a run whose seal job failed is refused" "$p" refuse jobs.json '(.jobs[] | select(.name == "seal") | .conclusion) = "failure"'
+  v_case "a run in which the other pipeline's job also ran is refused" "$p" refuse jobs.json "(.jobs[] | select(.name == \"$o\") | .conclusion) = \"success\""
+  v_case "a run in which a job of another name ran is refused" "$p" refuse jobs.json '.jobs += [{id: 14, name: "extra", conclusion: "success"}]'
+  v_case "a run with the other pipeline's artifact is refused" "$p" refuse artifacts.json ".artifacts[0].name = \"kb-refresh-$o\""
+  v_case "a run with a second artifact is refused" "$p" refuse artifacts.json '.artifacts += [{name: "kb-refresh-extra", expired: false}]'
+  v_case "a run with no artifact is refused" "$p" refuse artifacts.json '.artifacts = []'
+  v_case "a run whose artifact expired is refused, telling the maintainer to re-run the workflow" "$p" refuse artifacts.json '.artifacts[0].expired = true'
+done
+# The log cases edit logs.txt (not JSON), so they are written out.
+l_case() { # label pipeline want <log lines...>
+  local label=$1 p=$2 want=$3
+  shift 3
+  v_reset "$p"
+  printf '%s\n' "$@" >"$STUB/logs.txt"
+  vstep "$p"
+  : >"$work/v.out"; V_RC=0
+  PATH="$work/bin:$PATH" GH_LOG="$work/v.gh" GITHUB_OUTPUT="$work/v.out" GH_REPO=o/r SHA=$sha PIPELINE=$p REQUEST=55-1 \
+    BUILD_BRANCH=$branch RUN_ID=777 GH_TOKEN=stub bash --noprofile --norc -e "$work/verify-$p.sh" >"$work/v.log" 2>&1 || V_RC=$?
+  case $want in
+    pass) [ "$V_RC" = 0 ] && [ "$(cat "$work/v.out")" = "sha256=$good_digest" ] ;;
+    refuse) [ "$V_RC" != 0 ] && [ ! -s "$work/v.out" ] ;;
+  esac && ok "verify($p): $label" || fail "verify($p): $label: rc $V_RC, output '$(cat "$work/v.out")': $(tail -4 "$work/v.log")"
+}
+ts=2026-10-12T06:20:00.2000000Z
+other_digest=$(printf 'd%.0s' $(seq 64))
+for p in api-lifecycle registry; do
+  o=$(other_of "$p")
+  l_case "a log with no digest line is refused" "$p" refuse "$ts nothing here"
+  l_case "two different digest lines are refused" "$p" refuse "$ts kb-refresh-patch-sha256 $p $good_digest" "$ts kb-refresh-patch-sha256 $p $other_digest"
+  l_case "a digest line for the other pipeline is refused" "$p" refuse "$ts kb-refresh-patch-sha256 $o $good_digest"
+  l_case "a digest of the wrong length is refused" "$p" refuse "$ts kb-refresh-patch-sha256 $p ${good_digest:1}"
+  l_case "a digest line with no timestamp (typed into a script's output by hand) is refused" "$p" refuse "kb-refresh-patch-sha256 $p $good_digest"
+  l_case "a digest line with Windows line endings is read" "$p" pass "$ts kb-refresh-patch-sha256 $p $good_digest"$'\r'
+done
+
+# -- the whole path: the seal job's output, as a log line, is what the verify
+# job reads, and the digest check passes for that patch and fails for another.
+patch_for() { printf 'diff --git a/%s b/%s\n+one\n' "$1" "$1"; }
+for p in api-lifecycle registry; do
+  d=$work/e2e-$p; mkdir -p "$d/art"
+  patch_for "$p" >"$d/art/kb-refresh-$p.patch"
+  seal_case "$p" "$d/art"
+  v_reset "$p"
+  { echo "2026-10-12T06:20:00.1Z ##[group]Run echo"; echo "2026-10-12T06:20:00.2Z $(cat "$work/seal.out")"; } >"$STUB/logs.txt"
+  vstep "$p"
+  : >"$work/v.out"; V_RC=0
+  PATH="$work/bin:$PATH" GH_LOG="$work/v.gh" GITHUB_OUTPUT="$work/v.out" GH_REPO=o/r SHA=$sha PIPELINE=$p REQUEST=55-1 \
+    BUILD_BRANCH=$branch RUN_ID=777 GH_TOKEN=stub bash --noprofile --norc -e "$work/verify-$p.sh" >"$work/v.log" 2>&1 || V_RC=$?
+  digest=$(sed -n 's/^sha256=//p' "$work/v.out")
+  step 'Check the patch against the digest' < <(job "$entry" "$p-verify") | run_block >"$work/cmp-$p.sh"
+  [ -s "$work/cmp-$p.sh" ] || fail "$p-verify has no 'Check the patch against the digest' run block"
+  cmp_case() { # label dir digest want
+    local rc=0
+    DIR=$2 DIGEST=$3 PIPELINE=$p bash --noprofile --norc -e "$work/cmp-$p.sh" >"$work/cmp.log" 2>&1 || rc=$?
+    case $4 in pass) [ "$rc" = 0 ] ;; refuse) [ "$rc" != 0 ] && grep -q '::error::' "$work/cmp.log" ;; esac &&
+      ok "digest($p): $1" || fail "digest($p): $1: rc $rc: $(cat "$work/cmp.log")"
+  }
+  if [ "$V_RC" = 0 ] && [ -n "$digest" ]; then
+    ok "e2e($p): the verify job reads the digest the seal job printed"
+    cmp_case "the patch the seal job hashed is accepted" "$d/art" "$digest" pass
+    cp -R "$d/art" "$d/tampered"; echo '+evil' >>"$d/tampered/kb-refresh-$p.patch"
+    cmp_case "a patch changed after it was sealed is refused" "$d/tampered" "$digest" refuse
+    cp -R "$d/art" "$d/other"; patch_for other >"$d/other/kb-refresh-$p.patch"
+    cmp_case "another patch is refused" "$d/other" "$digest" refuse
+    cp -R "$d/art" "$d/extra"; touch "$d/extra/second"
+    cmp_case "an artifact with a second file is refused" "$d/extra" "$digest" refuse
+    mkdir -p "$d/empty"
+    cmp_case "an artifact with no patch is refused" "$d/empty" "$digest" refuse
+    cmp_case "a patch with an empty digest is refused" "$d/art" "" refuse
+  else
+    fail "e2e($p): the verify job did not read the seal job's output: rc $V_RC: $(cat "$work/seal.out") $(tail -3 "$work/v.log")"
+  fi
+done
 
 pass=$(grep -c '^ok' "$work/results" || true)
 failed=$(grep -c '^FAIL' "$work/results" || true)

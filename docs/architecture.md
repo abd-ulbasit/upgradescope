@@ -666,7 +666,7 @@ kb.Load() ──► KB{Version: "k8s.io/api <v>; lifecycle <digest>; registry <d
 
 A weekly workflow (`kb-refresh.yml`) bumps `k8s.io/api` in `tools/gen-kb`,
 reruns both tools and opens a pull request. The datasets never change
-without review. The tools run in a separate workflow run on the branch `bot/kb-refresh-build`, not on `main`, because they execute freshly bumped, unreviewed modules; only their patches come back, by run id, to the job that opens the PR.
+without review. The tools run in separate workflow runs (one per pipeline) on the branch `bot/kb-refresh-build`, not on `main`, because they execute freshly bumped, unreviewed modules; only their patches come back, and only after a job holding a read-only token has checked the run through the API and the patch against a digest printed by a job that runs no repository code, before the job that opens the PR sees them.
 
 `kb.Load` fails loudly on an empty or corrupt dataset. A silently empty
 knowledge base would produce silently green scans.

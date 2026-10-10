@@ -255,22 +255,41 @@ be checked for a cache of its own and added to the list in
 `hack/release-caches_test.sh` (`make hack-test`), which fails on any of
 these (IR-22).
 
-**kb-refresh's unreviewed build runs off `main`.** The weekly `kb-refresh.yml`
-runs on `main` and builds nothing. Its `build` job points the branch
-`bot/kb-refresh-build` at `main`'s head, dispatches `kb-refresh-build.yml` on
-it and waits. That workflow is the only place the freshly bumped,
+**kb-refresh's unreviewed build runs off `main`, one run per pipeline, and is
+verified before it is used.** The weekly `kb-refresh.yml` runs on `main` and
+builds nothing. Its `stage` job creates the branch `bot/kb-refresh-build` at
+`main`'s head (deleting a leftover one first, never moving it), and for each
+pipeline a `-run` job dispatches `kb-refresh-build.yml` on that branch for that
+pipeline and waits. That workflow is the only place the freshly bumped,
 unreviewed modules (`go get` of the newest `k8s.io` ones, `make gen-kb`,
 `go test`, `make eol-sync`) run, and it runs only on that branch, with
 `contents: read` and no Go cache. A cache entry it writes lands in that
 branch's scope, which `main`'s CI and a tag's release run never restore
 ([GitHub's cache scoping](https://docs.github.com/en/actions/reference/workflows-and-actions/dependency-caching#restrictions-for-accessing-a-cache):
 a run restores caches from its own ref and the default branch, not from
-sibling or child branches). The two pipelines' patches are artifacts of that
-run under different names, and the `*-pr` jobs download theirs by run id, so
-neither pipeline can read or replace the other's. `hack/kb-refresh-scope_test.sh`
-checks all of this (IR-23). A manual dry run after a change to either file:
-`gh workflow run kb-refresh.yml` (it opens the real bot PRs if anything
-changed).
+sibling or child branches). Unreviewed code can also reach its own run's
+artifact store with the runner's token, so each pipeline has a run of its own:
+the other pipeline's code is not in it. A `-verify` job then checks that run
+through the API before it downloads anything (this repository's own
+`kb-refresh-build.yml` run, the id it dispatched, on the staging branch, at
+the commit the schedule ran at, by `workflow_dispatch`, named for this
+pipeline and request, completed with conclusion `success`, with only this
+pipeline's job and the `seal` job run and exactly this pipeline's artifact),
+reads the patch's sha256 from the `seal` job's log, downloads by run id with a
+read-only token (`actions: read` and `contents: read` only), recomputes the
+sha256 and refuses a mismatch, and uploads the checked patch again in its
+own run. The `*-pr` job that holds the write permissions downloads that copy,
+names no run id and no token, checks the patch touches only its PR's paths,
+and applies it. `hack/kb-refresh-scope_test.sh` checks all of this against
+the workflow files, mutants of them and a stubbed API (IR-23). The artifacts
+are kept one day: if a `*-pr` or `-verify` job is re-run later and reports the
+artifact missing or expired, re-run the whole workflow. A manual dry run after
+a change to either file: `gh workflow run kb-refresh.yml` (it opens the real
+bot PRs if anything changed; the dispatched runs show up under
+`gh run list --workflow kb-refresh-build.yml`, on the ref
+`bot/kb-refresh-build`). `kb-refresh.yml` dispatches `kb-refresh-build.yml`,
+which GitHub only finds on the default branch, so a change to either must be
+merged before the next scheduled run.
 
 **Docker Hub pulls go through a mirror.** Docker Hub rate-limits anonymous
 pulls per source IP (`429 toomanyrequests`), and a hosted runner shares its IP

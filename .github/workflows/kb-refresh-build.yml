@@ -1,9 +1,10 @@
 name: kb-refresh-build
 
 # The unreviewed half of kb-refresh (#273). Never run by hand: kb-refresh.yml
-# (scheduled on main) points the branch bot/kb-refresh-build at main's head,
-# dispatches this workflow on that branch and waits for it; its *-pr jobs then
-# download the patches from THIS run by run id.
+# (scheduled on main) points the branch bot/kb-refresh-build at main's head
+# and dispatches this workflow on it ONCE PER PIPELINE (input `pipeline`),
+# waiting for each run; its verify jobs then check each run through the API
+# and take that run's patch by run id.
 #
 # Why a run of its own, on a ref that is not main. The jobs below run code
 # nobody has reviewed: `go get` pulls the newest k8s.io modules and whatever
@@ -17,21 +18,39 @@ name: kb-refresh-build
 # plant an entry that main's CI and a tag's release run later restore (IR-22),
 # so they run only here, on bot/kb-refresh-build, where a poisoned entry is
 # visible to nothing but another run of this workflow, which restores no
-# cache (setup-go `cache: false`). Their artifacts live in this run, so the
-# other pipelines' runs cannot read or replace them, and the two patches
-# here have different names.
+# cache (setup-go `cache: false`).
 #
-# Each job holds contents: read, keeps no token in its checkout
+# Why one pipeline per run. Unreviewed code can reach its own run's artifact
+# store through the runner's token, whatever its permissions: block, to
+# upload, delete or replace any artifact in that run. Two pipelines in one
+# run would share that store, so each could upload the other's artifact name
+# first (making the other's upload fail) or replace it afterwards. So a run
+# builds exactly one pipeline: the job of the other one is skipped by its
+# `if:` on inputs.pipeline, and the run's artifact store holds one artifact.
+# The `seal` job runs after the build job has ended and runs no repository
+# code: it downloads the artifact, hashes it and prints the digest in its
+# own log, which the build job cannot write; kb-refresh.yml's verify job
+# reads that digest through the API and compares it with the patch it
+# downloads.
+#
+# Each build job holds contents: read, keeps no token in its checkout
 # (persist-credentials: false) and hands over nothing but a patch of the
 # paths its PR may change. hack/kb-refresh-scope_test.sh pins all of this.
 
-run-name: kb-refresh-build ${{ inputs.request }}
+run-name: kb-refresh-build ${{ inputs.pipeline }} ${{ inputs.request }}
 
 on:
   # The only trigger. Not schedule, push or pull_request: kb-refresh.yml
   # starts it, on the one ref it runs on.
   workflow_dispatch:
     inputs:
+      pipeline:
+        description: 'Set by kb-refresh.yml: the one pipeline this run builds'
+        required: true
+        type: choice
+        options:
+          - api-lifecycle
+          - registry
       request:
         description: 'Set by kb-refresh.yml: names this run so that run can find it'
         required: true
@@ -43,8 +62,10 @@ permissions:
 jobs:
   api-lifecycle:
     # Only on the branch kb-refresh.yml stages, never on main or a branch
-    # someone dispatched this on by hand: the cache scope is the point.
-    if: github.ref == 'refs/heads/bot/kb-refresh-build'
+    # someone dispatched this on by hand (the cache scope is the point), and
+    # only when this run was dispatched for this pipeline (the artifact
+    # store is the point).
+    if: github.ref == 'refs/heads/bot/kb-refresh-build' && inputs.pipeline == 'api-lifecycle'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -95,8 +116,10 @@ jobs:
 
   registry:
     # Only on the branch kb-refresh.yml stages, never on main or a branch
-    # someone dispatched this on by hand: the cache scope is the point.
-    if: github.ref == 'refs/heads/bot/kb-refresh-build'
+    # someone dispatched this on by hand (the cache scope is the point), and
+    # only when this run was dispatched for this pipeline (the artifact
+    # store is the point).
+    if: github.ref == 'refs/heads/bot/kb-refresh-build' && inputs.pipeline == 'registry'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -129,3 +152,32 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
+  # Runs no repository or dependency code, after the build job has ended: it
+  # hashes the artifact that job uploaded and prints the digest in its own
+  # log, a place the unreviewed job cannot write (IR-23).
+  seal:
+    needs: [api-lifecycle, registry]
+    if: >-
+      !cancelled() && github.ref == 'refs/heads/bot/kb-refresh-build' &&
+      (needs.api-lifecycle.result == 'success' || needs.registry.result == 'success')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    env:
+      PIPELINE: ${{ inputs.pipeline }}
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: kb-refresh-${{ inputs.pipeline }}
+          path: ${{ runner.temp }}/sealed
+      - name: Print the patch's digest
+        env:
+          SEALED: ${{ runner.temp }}/sealed
+        run: |
+          set -euo pipefail
+          [ "$(find "$SEALED" -type f | wc -l | tr -d ' ')" = 1 ] || { echo "::error::the artifact is not exactly one file"; exit 1; }
+          patch="$SEALED/kb-refresh-$PIPELINE.patch"
+          [ -f "$patch" ] || { echo "::error::no kb-refresh-$PIPELINE.patch in the artifact"; exit 1; }
+          hash=$(sha256sum "$patch" | cut -d' ' -f1)
+          echo "kb-refresh-patch-sha256 $PIPELINE $hash"
