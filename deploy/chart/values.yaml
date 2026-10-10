@@ -104,7 +104,7 @@ agent:
   # spaced by the interval with 10% jitter, and the sleep follows the tick);
   # below that the agent logs a warning at start and lists every pod on the
   # ticks that come late, and at or below the interval on all but a tick the
-  # jitter brings early.
+  # jitter brings early. Raise it above that, or lower podPassEvery.
   podPassMaxAge: 1h
   # -- Name of the ClusterReadiness object the agent manages: an RFC 1123
   # subdomain (dot-separated labels of lowercase letters, digits and -, each

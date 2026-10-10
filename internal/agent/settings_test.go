@@ -137,6 +137,9 @@ func TestRunWarnsWhenPodPassMaxAgeIsTooShortForPodPassEvery(t *testing.T) {
 		{"every 4 needs three long spacings", 4, 16*time.Minute + 30*time.Second, true, "16m30s", 3},
 		{"every 1 lists every tick anyway", 1, time.Minute, false, "", 0},
 		{"defaults", 0, 0, false, "", 0},
+		// The 1<<40 and 1<<50 constants in this file assume a 64-bit int (the
+		// release targets are amd64 and arm64); a 32-bit target would need them
+		// narrowed.
 		// 1<<40 spacings of 5m30s overflow a Duration (about 292 years):
 		// the floor saturates at the largest one instead of wrapping to a
 		// small or negative value that would hide the warning.

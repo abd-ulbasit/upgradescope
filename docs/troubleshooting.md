@@ -156,11 +156,15 @@ To accept a finding for now, with a reason and an expiry, use an
   so the last of the two reuses is lost on the ticks the jitter spaces
   widely. Instead of raising the maximum age, lower `--pod-pass-every`
   (`agent.podPassEvery`) until its floor, `--interval` times 1.1 times
-  (`--pod-pass-every` minus one), fits under the maximum age with room for
-  the run time: the warning's `podPassEveryThatFits` field is the largest
-  that does. At the 30-minute interval and the default hour that is 2,
-  whose floor is 33 minutes, at the price of an add-on being behind for
-  one tick (30 minutes) instead of two. Or set `--pod-pass-every=1`
+  (`--pod-pass-every` minus one), fits under the maximum age: the warning's
+  `podPassEveryThatFits` field is the largest value whose floor alone is
+  under it. That field leaves out the ticks' run time, which comes on top,
+  so on slow ticks you may need one less (the warning text says so too).
+  At the 30-minute interval and the default hour that is 2 (floor 33
+  minutes). The price is a full pass every other tick instead of every
+  third (a cycle of 2 averages 25.5 requests at the 2,001-node fill,
+  computed, against 23.7 for 3), and an add-on is then behind for at most
+  one tick (up to about 33 minutes) instead of two. Or set `--pod-pass-every=1`
   (`agent.podPassEvery=1`) if reading every pod on every tick is what you
   want, which also ends the warning.
 - **An add-on I just installed or upgraded is missing, or still shows its
