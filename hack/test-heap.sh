@@ -25,10 +25,11 @@
 # UPGRADESCOPE_HEAP=1, which this sets: a plain `go test ./...` passes
 # without them.
 #
-# Run serially the set took 1209 s on a hosted runner (run 38038631216:
-# internal/server 1050 s, internal/collect 152 s, internal/server/store 7 s),
-# the longest job of a pull request, so CI runs it as four shards in parallel
-# (--shard i/n, the test-heap job's matrix). Each discovered test is assigned to exactly one
+# The three packages' test times added up to 1209 s on a hosted runner (run
+# 38038631216: internal/server 1050 s, internal/collect 152 s,
+# internal/server/store 7 s; the job took 22 m 19 s), the longest of a pull
+# request, so CI runs it as four shards in parallel (--shard i/n, the
+# test-heap job's matrix). Each discovered test is assigned to exactly one
 # shard by hack/shard.sh, greedy longest-first from the committed duration
 # table hack/test-heap-durations.txt ("<package dir> <TestName> <seconds>",
 # a test with no entry counts 30 s): a new heap test is picked up and placed

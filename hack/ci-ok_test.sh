@@ -123,6 +123,21 @@ for job in test test-heap build cross-build examples images vuln pg-conformance;
   verdict "push to main: $job skipped fails ci-ok" fail push "$push_docs" "$job=skipped"
 done
 
+# On a push the gates do not apply: a gated job other than the docs-only skips
+# a push keeps (e2e, release) must run even if the changes outputs say
+# otherwise, so ci-ok does not lean on hack/ci-changes.sh printing go=true.
+# (Dropping `[ "$changes" = success ] &&` from the skip branch of ci-ok.sh is
+# an equivalent mutant: the results loop and, on a pull request, the changes
+# check already fail a changes job that did not succeed.)
+push_lying='{"go":"false","cross":"false","test-scope":"none","e2e":"false","release":"false","action":"false"}'
+for job in test test-heap build cross-build examples images vuln pg-conformance; do
+  verdict "push to main with changes saying not needed: $job skipped still fails ci-ok" fail push "$push_lying" "$job=skipped"
+done
+verdict "push to main: kube, envtest and release-check may skip on e2e=false and release=false" pass push "$push_lying" kube=skipped envtest=skipped release-check=skipped action=skipped
+verdict "push to main with changes failed: kube skipped fails ci-ok" fail push "$push_lying" changes=failure kube=skipped
+verdict "push to main with e2e=true: kube skipped fails ci-ok" fail push "$push_all" kube=skipped
+verdict "dispatch with outputs claiming not needed (changes ran): test-heap skipped fails ci-ok" fail workflow_dispatch "$push_lying" test-heap=skipped
+
 # Schedule: the changes job does not run; the jobs marked as skipped on a
 # schedule are skipped, the rest must run.
 verdict "schedule: the PR-only jobs skipped, the rest ran" pass schedule '{}' changes=skipped test=skipped test-heap=skipped build=skipped cross-build=skipped examples=skipped images=skipped release-check=skipped lint=skipped registry=skipped
@@ -180,7 +195,7 @@ fi
 while read -r job out notneeded onsched; do
   cond=$(job_if "$job")
   grep -qE "needs\.changes\.outputs\.$out\b" <<<"$cond" || { echo "FAIL $job's if does not read needs.changes.outputs.$out, which ci-ok judges it by" >&2; rc=1; }
-  grep -qF "needs.changes.result == 'skipped'" <<<"$cond" || { echo "FAIL $job's if does not run it when the changes job was skipped (a schedule, dispatch or release run)" >&2; rc=1; }
+  grep -qF "needs.changes.result != 'success'" <<<"$cond" || { echo "FAIL $job's if does not run it when the changes job did not succeed (skipped on a schedule, dispatch or release; failed on a push to main, which keeps its old behaviour)" >&2; rc=1; }
   grep -qF '!cancelled()' <<<"$cond" || { echo "FAIL $job's if has no !cancelled(): a skipped or failed changes job would skip it with no status check" >&2; rc=1; }
   job_block "$job" | grep -qE '^    needs:.*\bchanges\b' || { echo "FAIL $job does not need changes" >&2; rc=1; }
   if [ "$onsched" = yes ]; then

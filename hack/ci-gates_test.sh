@@ -263,6 +263,17 @@ named_docs=$(for f in $reached; do
 done | sort -u | grep -v '^docs/getting-started/ci-gate.md$' || true)
 [ -z "$named_docs" ] && ok "no gated script names a docs page but the one the e2e_doc filter covers" || bad "gated scripts name docs pages ($(echo $named_docs)): a docs-only change would skip the job that reads them"
 
+# ---- 1c. the decide step cannot hide a failure -----------------------------
+# `ci-changes.sh | tee` under the default `bash -e` has no pipefail: tee
+# succeeds when the script fails, and the changes job would report success
+# with empty outputs. The step must set shell: bash (which adds pipefail).
+decide=$(job_block changes | awk '/^      - id: decide/{d=1;next} d&&/^      - /{d=0} d')
+grep -qE '^        shell: bash$' <<<"$decide" && grep -qE '^        run: hack/ci-changes\.sh \| tee -a "\$GITHUB_OUTPUT"$' <<<"$decide" &&
+  ok "the decide step runs ci-changes.sh under shell: bash (pipefail), so a failure is not hidden by tee" ||
+  bad "the changes job's decide step does not run ci-changes.sh with shell: bash"
+# ...and the same shell really fails on the script's failure:
+if (set -e; bash -e -o pipefail -c 'false | tee /dev/null') 2>/dev/null; then bad "bash -o pipefail did not fail a failing pipeline"; else ok "a failing script piped to tee fails under pipefail"; fi
+
 # ---- 2. hack/ci-changes.sh -------------------------------------------------
 changes() { # EVENT GO DOCS CROSS E2E_CODE E2E_DOC -> "go cross scope e2e" or "fail"
   local out
@@ -312,6 +323,8 @@ for go in true false; do for docs in true false; do for cross in true false; do 
   done
 done; done; done; done; done
 for ev in schedule workflow_dispatch release; do echo "$ev skipped false false false false false" >>"$scen"; done
+# A changes job that failed (a paths-filter API error): its outputs are empty.
+for ev in pull_request push; do echo "$ev failure false false false false false" >>"$scen"; done
 
 # Evaluate with node: job runs (true/false) for each scenario.
 cat >"$work/eval.js" <<'JS'
@@ -374,6 +387,10 @@ want_runs "PR touching a compile input also runs cross-build" "build cross-build
 want_runs "PR touching only the e2e's docs page runs the kind e2e and envtest" "envtest kube" pull_request "false false false true true"
 want_runs "push to main after code runs everything" "$every_nr" push "true false true true false"
 want_runs "push to main after docs only runs all but kube and envtest" "build cross-build examples images pg-conformance test test-heap vuln" push "false true false false false"
+# A failed changes job cannot hide a test: every gated job runs (a push to main
+# keeps its test signal; on a pull request ci-ok fails on the changes job anyway).
+want_runs "a push to main whose changes job failed still runs every gated job" "$every" push ""
+want_runs "a PR whose changes job failed runs every gated job" "$every" pull_request ""
 want_runs "a schedule runs vuln, pg-conformance, kube and envtest only" "envtest kube pg-conformance vuln" schedule ""
 want_runs "a dispatch runs every gated job" "$every" workflow_dispatch ""
 want_runs "a release runs every gated job" "$every" release ""
@@ -396,6 +413,8 @@ n=0
 while read -r line; do
   ev=$(jq -r .event <<<"$line")
   chg=$(jq -r .changes <<<"$line")
+  # a failed changes job fails ci-ok by design (checked in ci-ok_test.sh)
+  [ "$chg" = failure ] && continue
   outs=$(jq -c '.outputs + {release: "false", action: "false"}' <<<"$line")
   needs=$(jq -c --argjson outs "$outs" --arg chg "$chg" '
     (.runs | to_entries | map({key, value: {result: (if .value then "success" else "skipped" end), outputs: {}}}) | from_entries)

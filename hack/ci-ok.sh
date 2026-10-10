@@ -14,7 +14,12 @@
 #     "success" and the job's output equal to its not-needed value, below.
 #     A gated job that is skipped while changes failed, was cancelled or was
 #     skipped fails, and so does one skipped while changes said it is needed.
-#     The one exception is the weekly schedule, which skips the jobs marked
+#     Off a pull request only the outputs the changes job really computes
+#     there count: a push to main runs every job but the kind e2e and envtest
+#     (e2e) and release-check (release), whose docs-only skip it keeps, so a
+#     skip of any other gated job on a push fails whatever the outputs say
+#     (hack/ci-changes.sh prints go=true there; this does not rely on it).
+#     The other exception is the weekly schedule, which skips the jobs marked
 #     "yes" on purpose (they run on pull requests, pushes and releases), and
 #     on which changes does not run.
 # Every other result than success or skipped fails, and the changes job must
@@ -44,6 +49,11 @@ kube          e2e        false no
 envtest       e2e        false no
 release-check release    false yes
 '
+
+# The changes outputs whose "not needed" a push to main may act on (see the
+# header): the pre-existing docs-only skips. Every other gated job runs on a
+# push, so its skip is never accepted there.
+PUSH_SKIPPABLE='e2e release'
 
 # The jobs that run on every pull request and push, whatever it changes: they
 # must succeed, so a stray `if` that skips one cannot pass. The first group
@@ -89,7 +99,8 @@ while read -r job out notneeded onschedule; do
   case $r in
     missing) bad+=("$job: not in ci-ok's needs") ;;
     skipped)
-      if [ "$changes" = success ] && [ "$(output "$out")" = "$notneeded" ]; then
+      if [ "$changes" = success ] && [ "$(output "$out")" = "$notneeded" ] &&
+        { [ "$EVENT" = pull_request ] || { [ "$EVENT" = push ] && [[ " $PUSH_SKIPPABLE " == *" $out "* ]]; }; }; then
         skipped_ok=$((skipped_ok + 1))
         echo "skipped $job: changes said $out=$notneeded"
       elif [ "$EVENT" = schedule ] && [ "$changes" = skipped ] && [ "$onschedule" = yes ]; then
