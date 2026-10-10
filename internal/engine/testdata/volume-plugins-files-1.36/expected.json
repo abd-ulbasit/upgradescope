@@ -81,7 +81,7 @@
         "https://github.com/kubernetes/kubernetes/blob/master/CHANGELOG/CHANGELOG-1.27.md",
         "https://github.com/kubernetes/kubernetes/pull/115838"
       ],
-      "detail": "1 object names it, in: shop (1). From 1.27 its in-tree code is gone and every operation on these volumes is redirected to the ebs.csi.aws.com CSI driver: a cluster without that driver installed cannot mount them, one with it is fine.",
+      "detail": "1 object names it, in: shop (1). From 1.27 the ebs.csi.aws.com CSI driver serves every operation on these volumes: a cluster without it installed cannot mount them, one with it is fine.",
       "key": "volume-plugin/awsElasticBlockStore",
       "namespaces": [
         "shop"

@@ -75,7 +75,7 @@ func evalVolumePlugins(inv inventory.Inventory, k kb.KB, target inventory.Versio
 			}
 		case kb.VolumeCSIMigration:
 			f.Title = fmt.Sprintf("In-tree volume plugin %s needs CSI driver %s from %s (%s)", u.Plugin, p.CSIDriver, p.Removed, count)
-			consequence = fmt.Sprintf("From %s its in-tree code is gone and every operation on these volumes is redirected to the %s CSI driver: a cluster without that driver installed cannot mount them, one with it is fine.", p.Removed, p.CSIDriver)
+			consequence = fmt.Sprintf("From %s the %s CSI driver serves every operation on these volumes: a cluster without it installed cannot mount them, one with it is fine.", p.Removed, p.CSIDriver)
 			f.Severity = SevInfo
 			if p.Removed.Compare(target) <= 0 {
 				f.Severity = SevWarning
