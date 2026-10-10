@@ -430,7 +430,7 @@ func TestRemediationNeverMovesBackToLessMatureAPI(t *testing.T) {
 			if strings.Contains(f.Remediation, "alpha") {
 				t.Errorf("%s/%s %s @%s: remediation %q names an alpha", tc.group, tc.version, tc.kind, target, f.Remediation)
 			}
-			if tc.want != "" && f.Remediation != tc.want {
+			if tc.want != "" && !strings.HasPrefix(f.Remediation, tc.want) {
 				t.Errorf("%s/%s %s @%s: remediation %q, want %q", tc.group, tc.version, tc.kind, target, f.Remediation, tc.want)
 			}
 		}

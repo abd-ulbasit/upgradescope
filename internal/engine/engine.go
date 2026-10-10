@@ -217,6 +217,10 @@ func evalAPIUsage(inv inventory.Inventory, k kb.KB, target inventory.Version, b 
 		} else if e.Replacement != nil {
 			f.Remediation = fmt.Sprintf("no replacement Kubernetes %s serves is known", target)
 		}
+		if e.Migration != nil && !unserved {
+			f.Remediation = withMigration(f.Remediation, *e.Migration)
+			f.Citations = appendNew(f.Citations, e.Migration.Citations...)
+		}
 		gv := gvString(u.Group, u.Version)
 		projectedRemoval := ""
 		if e.Removed != nil && e.Removed.Compare(k.MaxKnownK8s) > 0 {
@@ -445,6 +449,26 @@ func keyAPI(key string) string {
 	}
 	_, api, _ := strings.Cut(key, "/")
 	return api
+}
+
+// withMigration appends a KB migration note to a generated hint, or is the
+// note alone when there is no hint (#330): what a manifest needs besides a
+// new apiVersion, or where to go when the kind has no successor.
+func withMigration(hint string, m kb.Migration) string {
+	if hint == "" {
+		return m.Note
+	}
+	return hint + "; " + m.Note
+}
+
+// appendNew appends the values of add that dst does not hold, in order.
+func appendNew(dst []string, add ...string) []string {
+	for _, a := range add {
+		if !slices.Contains(dst, a) {
+			dst = append(dst, a)
+		}
+	}
+	return dst
 }
 
 // successorRemedy words the version ServedSuccessor found, with the

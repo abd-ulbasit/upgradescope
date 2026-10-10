@@ -33,6 +33,11 @@ type APILifecycleEntry struct {
 	// guide (which stops at v1.32) and the successor's changelog
 	// (ReplacementCitation).
 	ReplacementDefaulted bool `json:"replacementDefaulted,omitempty"`
+	// Migration is a hand-written note on leaving this version (what to
+	// change besides the apiVersion, or where to go when there is no
+	// successor), merged from data/migrations.json by Load. It is never in
+	// apilifecycle.json, which gen-kb writes whole.
+	Migration *Migration `json:"migration,omitempty"`
 }
 
 // BuiltinGroup is a built-in API group (one gen-kb's scheme registers),
