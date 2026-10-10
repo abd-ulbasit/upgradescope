@@ -131,6 +131,16 @@ recommendation: Optional one-line remediation hint shown with findings.
   build is the one place a matcher names its host
   (`mcr.microsoft.com/oss/kubernetes/ingress/nginx-ingress-controller`, see
   `aks-app-routing-nginx.yaml`); it still matches through a mirror.
+  An upstream entry may name a provider's rebuild of a product only when the
+  product has no release-line end dates (`coredns`, `metrics-server`,
+  `kube-state-metrics`: AKS's `mcr.microsoft.com/oss/kubernetes/*`, GKE's
+  `gcr.io/gke-release/*`), since otherwise upstream's end of life would be
+  raised for a build the provider supports (AKS's Cilium and Calico stay
+  unmatched, `TestProviderBuildsGetNoUpstreamEOL`). Before adding a path, read
+  the repository's tag list and check that a tag with the vendor's build suffix
+  (`v1.9.4-7`, `v0.8.0-gke.13`, `v1.13.2-eks-1-36-1`, `0.8.0-debian-12-r4`)
+  reads back as the upstream version; if it does not, leave the image
+  unmatched, an informational gap, rather than judge a misparsed version.
 - The version is read from anywhere in the tag: `v1.9.4`,
   `nginx-1.9.4-hardened1` and `1.9.4-debian-12-r0` all mean 1.9.4.
 - **charts** match the Helm chart name exactly. The release's `appVersion`
@@ -162,6 +172,65 @@ Everything else (matchers, citations, compat rows) stays hand-maintained.
 If endoflife.date does not track the product, leave `endoflife_product`
 out, maintain `support` by hand, and add `cycles` only when you can cite a
 per-version lifecycle source.
+
+### Compatibility ranges on synced entries
+
+`tools/eol-sync` replaces the whole `cycles:` block, `k8s_min`/`k8s_max` on
+a cycle included, with what endoflife.date publishes: a range written there
+by hand is dropped by the next weekly refresh. Where endoflife.date has no
+Kubernetes range for a synced product (it has one for Istio, KEDA and
+Kyverno only), put the range in `compat` rows. eol-sync never touches the
+`compat:` key (`TestRunKeepsCompatRows` and `TestRunKeepsEmbeddedCompatRows`
+in `tools/eol-sync`), so they survive a sync. Place `compat:` after `cycles:`,
+with a comment above it saying where the table was read and when; one row
+per release line:
+
+```yaml
+compat:
+  - {range: ">=1.20.0 <1.21.0", k8s_min: "1.32", k8s_max: "1.35", citations: ["https://cert-manager.io/docs/releases/"]}
+```
+
+A cycle's own range, when endoflife.date publishes one, is checked before the
+`compat` rows, which are then read in order, the first matching row winning.
+A release line that eol-sync adds later has no row until you add it: the
+registry then says nothing about its compatibility, never something wrong.
+Run `make eol-sync` and `make eol-check` as usual; they do not touch the rows.
+
+### Maximum, minimum or tested with
+
+Read each cell of a compatibility table and classify it before encoding it.
+The engine turns a bound into a **blocker** (`chart-incompat`), so a bound
+must be something upstream says is unsupported, not what its CI happened to
+run.
+
+- **Maximum (`k8s_max`)** — upstream says the release line does not support
+  Kubernetes above it: a "supported" range whose page says versions outside it
+  are not supported (cert-manager), a stated end ("1.8-1.21", Metrics Server
+  0.3.x), or a table of the *oldest* add-on release that runs each Kubernetes
+  minor (Karpenter), where a line's maximum is the newest minor whose oldest
+  release is no newer than the line. Say in the comment when a bound is derived
+  that way. If upstream says only "1.18 to latest", there is no maximum
+  (Velero).
+- **Minimum (`k8s_min`)** — upstream says older Kubernetes is unsupported:
+  "requires", "will not work on", "N+" in a column named supported (Calico,
+  Prometheus Operator, Metrics Server). A forward-upgrade scan cannot trip a
+  minimum, because the target is newer than the cluster; a target below it
+  can. Say so in the pull request.
+- **Tested with** — the versions the project runs end-to-end tests on, with no
+  statement that others do not work (Argo CD, Cilium 1.15 and later, Calico's
+  tested list, Velero's "Tested on" column, kube-state-metrics' client-go
+  version). It is neither a maximum nor a minimum. Do not encode the highest
+  or the lowest tested version: that would block an install that works. Put
+  the table in a comment instead, and say which cells you left out.
+- **No table** — a policy relative to Kubernetes' own support window (Flux,
+  Gatekeeper) or no Kubernetes statement at all (Traefik) is not a range;
+  leave a comment saying you checked.
+
+Read the table at the version's own page where the project versions its docs
+(`docs.cilium.io/en/v1.14/...`, `docs.tigera.io/calico/3.26/...`), cite a
+permalink for a file in a repository (`blob/<commit>/README.md#...`), and put
+the date you read it in the comment. Never copy a bound from an issue or
+another list: read the source.
 
 ### Citation rules
 
@@ -315,7 +384,7 @@ single `<id>.yaml` file or a directory of them, in the schema above.
       only as `components`, with a cited line table
 - [ ] versions, ranges and cycles are app versions, not chart versions
 - [ ] every citation URL opens in a browser (CI does not fetch them; you do)
-- [ ] compat bounds only where upstream publishes them
+- [ ] compat bounds only where upstream publishes them (a tested-with table is not a bound), as `compat` rows on a synced entry
 - [ ] `endoflife_product` set when endoflife.date tracks the product, and
       `make eol-check` passes
 - [ ] `go test ./registry/...` passes
