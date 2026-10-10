@@ -266,6 +266,7 @@ func extract(scheme *runtime.Scheme) (entries []entry, upstream map[gvkOut]bool,
 		}
 		fixReplacement(&e)
 		fixRemoval(&e)
+		fixIntroduced(&e)
 		entries = append(entries, e)
 	}
 	return entries, upstream, noLifecycle

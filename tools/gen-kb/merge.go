@@ -53,6 +53,7 @@ func carryForward(prev, gen []entry, upstream map[gvkOut]bool, removedAt version
 		if fresh[p.gvk()] || isNonPersisted(p.gvk()) {
 			continue
 		}
+		fixIntroduced(&p) // a dataset written before the correction keeps none of it
 		if !upstream[p.gvk()] {
 			if p.Removed == nil || removedAt.before(*p.Removed) {
 				at := removedAt

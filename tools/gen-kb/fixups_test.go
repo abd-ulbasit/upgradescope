@@ -461,3 +461,49 @@ storagemigration.k8s.io/v1alpha1/StorageVersionMigration`)
 		t.Errorf("the list has %d entries, want 33", len(wantList))
 	}
 }
+
+// #332: the introduced minor of a tombstone older than the history gen-kb
+// reads is only a bound (clamped to 1.17), and k8s.io/api tags
+// discovery.k8s.io/v1beta1 EndpointSlice with the release of v1alpha1.
+func TestFixIntroduced(t *testing.T) {
+	cases := []struct {
+		name string
+		in   entry
+		want version
+	}{
+		{"clamped alpha", entry{Group: "batch", Version: "v2alpha1", Kind: "CronJob", Introduced: *v(1, 17)}, *v(1, 5)},
+		{"clamped alpha PriorityClass", entry{Group: "scheduling.k8s.io", Version: "v1alpha1", Kind: "PriorityClass", Introduced: *v(1, 17)}, *v(1, 8)},
+		{"clamped alpha PodPreset", entry{Group: "settings.k8s.io", Version: "v1alpha1", Kind: "PodPreset", Introduced: *v(1, 17)}, *v(1, 6)},
+		{"EndpointSlice v1alpha1 is 1.16", entry{Group: "discovery.k8s.io", Version: "v1alpha1", Kind: "EndpointSlice", Introduced: *v(1, 17)}, *v(1, 16)},
+		{"EndpointSlice v1beta1 is 1.17", entry{Group: "discovery.k8s.io", Version: "v1beta1", Kind: "EndpointSlice", Introduced: *v(1, 16)}, *v(1, 17)},
+		{"no override untouched", entry{Group: "batch", Version: "v1beta1", Kind: "CronJob", Introduced: *v(1, 8)}, *v(1, 8)},
+	}
+	for _, c := range cases {
+		e := c.in
+		fixIntroduced(&e)
+		if e.Introduced != c.want {
+			t.Errorf("%s: Introduced = %s, want %s", c.name, e.Introduced, c.want)
+		}
+	}
+}
+
+// Each introducedFixes entry names the changelog of the release it states,
+// and the committed dataset holds that value, so regenerating keeps it.
+func TestIntroducedFixesAreCitedAndInTheDataset(t *testing.T) {
+	committed, err := readDataset("../../internal/kb/data/apilifecycle.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(introducedFixes) == 0 {
+		t.Fatal("introducedFixes is empty")
+	}
+	for k, f := range introducedFixes {
+		name := k.Group + "/" + k.Version + " " + k.Kind
+		if want := changelog(f.introduced.Minor); f.citation != want || f.introduced.Major != 1 {
+			t.Errorf("%s: citation %q for introduced %s, want %q", name, f.citation, f.introduced, want)
+		}
+		if got := entryOf(committed, k); got.Kind == "" || got.Introduced != f.introduced {
+			t.Errorf("%s: committed dataset has introduced %s (present: %v), want %s; run make gen-kb", name, got.Introduced, got.Kind != "", f.introduced)
+		}
+	}
+}

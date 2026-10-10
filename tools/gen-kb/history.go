@@ -379,6 +379,7 @@ func deletedTypes(hist []snapshot, upstream map[gvkOut]bool) []entry {
 			e = *sp.tags
 		}
 		fixReplacement(&e)
+		fixIntroduced(&e)
 		gone := version{Major: 1, Minor: hist[sp.last].k8s.Minor + 1}
 		if e.Removed == nil || gone.before(*e.Removed) {
 			e.Removed, e.RemovedInferred = &gone, true

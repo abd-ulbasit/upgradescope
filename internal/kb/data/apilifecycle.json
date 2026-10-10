@@ -489,7 +489,7 @@
       "group": "auditregistration.k8s.io",
       "version": "v1alpha1",
       "kind": "AuditSink",
-      "introduced": "1.17",
+      "introduced": "1.13",
       "removed": "1.19",
       "removedInferred": true
     },
@@ -701,7 +701,7 @@
       "group": "batch",
       "version": "v2alpha1",
       "kind": "CronJob",
-      "introduced": "1.17",
+      "introduced": "1.5",
       "removed": "1.21",
       "replacement": {
         "group": "batch",
@@ -851,7 +851,7 @@
       "group": "discovery.k8s.io",
       "version": "v1alpha1",
       "kind": "EndpointSlice",
-      "introduced": "1.17",
+      "introduced": "1.16",
       "removed": "1.21",
       "replacement": {
         "group": "discovery.k8s.io",
@@ -865,7 +865,7 @@
       "group": "discovery.k8s.io",
       "version": "v1beta1",
       "kind": "EndpointSlice",
-      "introduced": "1.16",
+      "introduced": "1.17",
       "deprecated": "1.21",
       "removed": "1.25",
       "replacement": {
@@ -1789,7 +1789,7 @@
       "group": "scheduling.k8s.io",
       "version": "v1alpha1",
       "kind": "PriorityClass",
-      "introduced": "1.17",
+      "introduced": "1.8",
       "removed": "1.23",
       "replacement": {
         "group": "scheduling.k8s.io",
@@ -1856,7 +1856,7 @@
       "group": "settings.k8s.io",
       "version": "v1alpha1",
       "kind": "PodPreset",
-      "introduced": "1.17",
+      "introduced": "1.6",
       "removed": "1.20",
       "removedInferred": true
     },
