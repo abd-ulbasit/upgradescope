@@ -62,10 +62,11 @@ func markdownFiles(t *testing.T) []string {
 }
 
 // listFiles asks git for the tracked files with the extension ext under
-// root, sorted and slash-separated. Without
-// git, or outside a work tree (a source tarball), it walks the tree and
-// skips what is never documentation: dot-directories, virtualenvs, the
-// built site, node_modules and build output.
+// root, sorted and slash-separated. Without git, outside a work tree (a
+// source tarball), or when git lists nothing (a source tree unpacked inside
+// an unrelated repository), it walks the tree and skips what is never
+// documentation: dot-directories, virtualenvs, the built site,
+// node_modules and build output.
 func listFiles(root, ext string) ([]string, error) {
 	var files []string
 	cmd := exec.Command("git", "ls-files", "-z", "--", "*"+ext)
@@ -78,7 +79,8 @@ func listFiles(root, ext string) ([]string, error) {
 				files = append(files, rel)
 			}
 		}
-	} else {
+	}
+	if len(files) == 0 {
 		err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 			if err != nil {
 				return err
@@ -149,6 +151,30 @@ func TestListMarkdownIgnoresUntracked(t *testing.T) {
 		}
 	})
 
+	t.Run("git lists nothing", func(t *testing.T) {
+		// A source tree unpacked inside an unrelated repository: git
+		// succeeds but tracks none of the files, so the walk must run.
+		if _, err := exec.LookPath("git"); err != nil {
+			t.Skip("git is not installed")
+		}
+		root := t.TempDir()
+		c := exec.Command("git", "init", "-q")
+		c.Dir = root
+		if out, err := c.CombinedOutput(); err != nil {
+			t.Fatalf("git init: %v\n%s", err, out)
+		}
+		for _, rel := range layout {
+			write(root, rel)
+		}
+		got, err := listFiles(root, ".md")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want := []string{"CHANGELOG.md", "README.md", "docs/a.md", "docs/changelog.md", "scratch.md"}; !slices.Equal(got, want) {
+			t.Errorf("git tracking nothing: %v, want the walk's %v", got, want)
+		}
+	})
+
 	t.Run("walk", func(t *testing.T) {
 		// A temp dir sits in no work tree, so git fails and the walk runs.
 		root := t.TempDir()
@@ -172,6 +198,9 @@ var (
 	// is one invocation: `cd upgradescope && upgradescope scan ...` has two.
 	invocation = regexp.MustCompile(`(?:^|[\s"'(=/])upgradescope(?:\s+|$)`)
 	flagToken  = regexp.MustCompile(`^--([a-zA-Z][a-zA-Z0-9-]*)`)
+	// redirect: a word that starts a redirection (`>`, `>>`, `<`, `2>`,
+	// `2>&1`, `1>file`, `&>file`, `0<in`).
+	redirect = regexp.MustCompile(`^(?:[0-9]*|&)[<>]`)
 )
 
 // docInvocation is one `upgradescope ...` command line a page shows.
@@ -182,8 +211,9 @@ type docInvocation struct {
 }
 
 // shellWords splits s like a shell for our purpose: quoted strings are one
-// word, and the first pipe, redirect, `;`, `&`, `&&`, `||`, `--` or comment
-// ends the command (what follows belongs to another program).
+// word, and the first pipe (also one glued to a word), redirect, `;`, `&`,
+// `&&`, `||`, `--` or comment ends the command (what follows belongs to
+// another program).
 func shellWords(s string) []string {
 	var words []string
 	var cur strings.Builder
@@ -220,12 +250,23 @@ func shellWords(s string) []string {
 	flush()
 	var out []string
 	for _, w := range words {
+		quoted := strings.HasPrefix(w, "\x00") // a quoted word is a value: never a stop
 		switch {
-		case w == "|" || w == "||" || w == "&&" || w == ";" || w == "&" || w == "--" || strings.HasPrefix(w, "#"),
-			strings.HasPrefix(w, ">") || strings.HasPrefix(w, "<") || strings.HasPrefix(w, "2>"):
+		case quoted:
+		case w == "&&" || w == "&" || w == "--" || strings.HasPrefix(w, "#"), redirect.MatchString(w):
 			return out
 		case strings.HasSuffix(w, ";"):
+			// `;` alone (an empty word, harmless) or glued to the last word.
 			return append(out, strings.TrimSuffix(w, ";"))
+		case strings.Contains(w, "|"):
+			// A pipe, alone (`|`, `||`) or glued to a word (`json|jq`,
+			// `|jq`), ends the command. The word stays whole when something
+			// precedes the pipe, so a line with an alternation
+			// (`delete|rename`) is still seen as ambiguous by resolve.
+			if !strings.HasPrefix(w, "|") {
+				out = append(out, w)
+			}
+			return out
 		}
 		out = append(out, w)
 	}
@@ -282,9 +323,11 @@ func docInvocations(page, text string) []docInvocation {
 }
 
 // resolve finds the command a documented line runs and the words after it.
-// Leading flags are skipped (`upgradescope --kubeconfig x scan --bogus` is a
-// `scan` line), but the first word that is not a flag must be a subcommand:
-// anything else is not an invocation (prose that names the program, or
+// Leading flags are skipped, and so is a flag's value ahead of the
+// subcommand (`upgradescope --kubeconfig x scan --bogus` is a `scan` line:
+// `x` is not a subcommand, but it is not the first word). Only a first word
+// that is not a flag and not a subcommand means "not an invocation" (prose
+// that names the program, or
 // `gh ... --repo abd-ulbasit/upgradescope --some-flag`). Subcommands are
 // followed down (`tokens create`). A line that stops at a command with
 // subcommands of its own and shows an alternation or placeholder in place
@@ -388,6 +431,30 @@ func TestDocsFlagScannerFindsDrift(t *testing.T) {
 		{"after &&", "```sh\nupgradescope scan --files rendered && kubectl apply --server-side\n```", nil},
 		{"after a semicolon", "`upgradescope scan --files rendered; ls --all`", nil},
 		{"after a spaced semicolon", "`upgradescope scan --files rendered ; ls --all`", nil},
+		// One case per stop: the flag after the stop belongs to another
+		// program; the control case puts the same flag before the stop.
+		{"after ||", "`upgradescope scan --files r || kubectl --bogus`", nil},
+		{"before ||", "`upgradescope scan --bogus || kubectl`", []string{"scan --bogus"}},
+		{"after &", "`upgradescope scan --files r & sleep --bogus`", nil},
+		{"before &", "`upgradescope scan --bogus & sleep`", []string{"scan --bogus"}},
+		{"after --", "`upgradescope scan --files r -- --bogus`", nil},
+		{"before --", "`upgradescope scan --bogus -- x`", []string{"scan --bogus"}},
+		{"after a comment", "```sh\nupgradescope scan --files r # --bogus\n```", nil},
+		{"before a comment", "```sh\nupgradescope scan --bogus # note\n```", []string{"scan --bogus"}},
+		{"after a < redirect", "`upgradescope scan --files r < in --bogus`", nil},
+		{"before a < redirect", "`upgradescope scan --bogus < in`", []string{"scan --bogus"}},
+		{"after a 2> redirect", "`upgradescope scan --files r 2>&1 --bogus`", nil},
+		{"before a 2> redirect", "`upgradescope scan --bogus 2>&1`", []string{"scan --bogus"}},
+		{"after a 1> redirect", "`upgradescope scan --files r 1>out --bogus`", nil},
+		{"after a &> redirect", "`upgradescope scan --files r &>out --bogus`", nil},
+		{"before a &> redirect", "`upgradescope scan --bogus &>out`", []string{"scan --bogus"}},
+		{"after a glued pipe", "`upgradescope scan --output json|jq --raw-output .score`", nil},
+		{"after a leading glued pipe", "`upgradescope scan --output json |jq --raw-output .score`", nil},
+		{"a leading pipe is not kept as a word", "`upgradescope tokens --bogus |jq .x`", []string{"tokens --bogus"}},
+		{"before a glued pipe", "`upgradescope scan --bogus json|jq`", []string{"scan --bogus"}},
+		{"a quoted pipe is a value", "`upgradescope scan --files \"a|b\" --bogus`", []string{"scan --bogus"}},
+		{"a quoted hash is a value", "`upgradescope scan --files \"#x\" --bogus`", []string{"scan --bogus"}},
+		{"a quoted redirect is a value", "`upgradescope scan --files \">x\" --bogus`", []string{"scan --bogus"}},
 		{"the second invocation on a line", "`cd upgradescope && upgradescope scan --bogus`", []string{"scan --bogus"}},
 		{"a quoted value", "`upgradescope scan --files \"a --format\"`", nil},
 		{"a path to the binary", "```\n./bin/upgradescope scan --nope\n```", []string{"scan --nope"}},
@@ -472,9 +539,17 @@ func TestContributingRepositoryMap(t *testing.T) {
 	}
 }
 
+// testHelperPackage reports whether name, a directory inside the directory
+// parent, is a test-helper package: `<pkg>test` inside the package `<pkg>`
+// it serves (junit/junittest, server/store/storetest). A package that
+// merely ends in "test" (attest, contest) is a real package.
+func testHelperPackage(parent, name string) bool {
+	return name == filepath.Base(parent)+"test"
+}
+
 // goPackageDirs lists the directories under root (slash-separated, relative
 // to the repository) that hold tracked non-test Go files, skipping testdata
-// and the test-helper packages (named *test).
+// and the test-helper packages (see testHelperPackage).
 func goPackageDirs(t *testing.T, root string) []string {
 	t.Helper()
 	files, err := listFiles(filepath.Join(repoRoot, root), ".go")
@@ -489,10 +564,12 @@ func goPackageDirs(t *testing.T, root string) []string {
 			continue
 		}
 		skip := false
+		parent := filepath.Join(repoRoot, root)
 		for _, part := range strings.Split(path.Dir(f), "/") {
-			if part == "testdata" || strings.HasSuffix(part, "test") {
+			if part == "testdata" || testHelperPackage(parent, part) {
 				skip = true
 			}
+			parent = filepath.Join(parent, part)
 		}
 		if !skip {
 			seen[dir] = true
@@ -500,6 +577,27 @@ func goPackageDirs(t *testing.T, root string) []string {
 		}
 	}
 	return dirs
+}
+
+// TestGoPackageDirsSkipsOnlyTestHelpers: the helper exclusion is exact, so a
+// real package whose name ends in "test" still needs its architecture row.
+func TestGoPackageDirsSkipsOnlyTestHelpers(t *testing.T) {
+	for _, tc := range []struct {
+		parent, name string
+		want         bool
+	}{
+		{"internal/junit", "junittest", true},
+		{"internal/server/store", "storetest", true},
+		{"internal", "attest", false},          // a real package that ends in "test"
+		{"internal", "junittest", false},       // not inside junit/
+		{"internal/junit", "sariftest", false}, // another package's helper name
+		{"internal/junit", "test", false},
+		{"internal", "junit", false},
+	} {
+		if got := testHelperPackage(tc.parent, tc.name); got != tc.want {
+			t.Errorf("testHelperPackage(%q, %q) = %v, want %v", tc.parent, tc.name, got, tc.want)
+		}
+	}
 }
 
 // TestArchitectureComponentTable: every row of the component table in
