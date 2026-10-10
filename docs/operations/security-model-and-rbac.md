@@ -77,6 +77,15 @@ image or label:
   same line, a pod whose image has no version tag, and an add-on whose
   image no matcher recognizes can still be hidden
   ([Add-on registry](../concepts/addon-registry.md#how-an-add-on-is-found)).
+- **Set the version of an image that has none.** An add-on image pinned by
+  digest, or `:latest`, takes the `app.kubernetes.io/version` label of the
+  pods that run it (#301), and anyone who can create pods in the namespace
+  controls that label. It is namespace-local, and the oldest label across
+  the pods running that image wins, so a pod labelled newer than the image
+  really is cannot hide an older labelled one in the same namespace; a
+  label on the only pod running the image can still say a version it is
+  not, in either direction. A tag that names a version is never overridden
+  by a label.
 
 The effects stay within what the tenant can write: its forged evidence is
 attributed to its own namespace (and team), it cannot change what

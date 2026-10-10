@@ -485,7 +485,9 @@ Rules for changing it:
   v0.2.0). An inventory without it comes from a v0.1.x agent or a v0.2.0
   release candidate, which the server tells apart by `agentVersion`, and
   judges a v0.1.x agent's by what its collectors then meant (see
-  [Running the server](operations.md)). A server refuses with 422 a
+  [Running the server](operations.md)); it also words an add-on's
+  `addon-no-data` detail for what such an agent did not read (a pod's
+  version label for an image without a tag, #301). A server refuses with 422 a
   generation it does not know, whose meanings it would misread.
 
 ## Evaluation rules

@@ -96,10 +96,24 @@ const (
 // CurrentCollectorSchema is the generation of field meanings this
 // package's collectors fill an Inventory with, stamped as
 // Inventory.CollectorSchema. 1 is v0.2.0's: api-usage counts the objects
-// written through a deprecated version and names them in Objects, and a
-// chart-found add-on's Version is its app version. Bump it when a field's
-// meaning changes without a schemaVersion bump.
+// written through a deprecated version and names them in Objects, a
+// chart-found add-on's Version is its app version, and an add-on image
+// that names no version (a digest, ":latest") takes the version label of
+// its pod (#301). Bump it when a field's meaning changes without a
+// schemaVersion bump.
 const CurrentCollectorSchema = 1
+
+// LabelVersionCollectorSchema is the first CollectorSchema whose
+// collectors take an image's add-on version from its pod's
+// app.kubernetes.io/version label when the image names none (#301). An
+// inventory below it (0: v0.1.x and v0.2.0's release candidates, which
+// predate the stamp) never consulted that label for such an image, so what
+// a finding says is missing from it must not say the label was unreadable.
+// It equals CurrentCollectorSchema because v0.2.0 has not been released:
+// no released agent stamps 1 without it, and the stamp and the label rule
+// ship together. Raise CurrentCollectorSchema past it for a later change;
+// do not move this one.
+const LabelVersionCollectorSchema = 1
 
 // Provider is the managed Kubernetes service a cluster's control plane is
 // bought from, inferred by the collector from signals only that service
