@@ -65,7 +65,7 @@ func TestScanFilesNoManifestsIsExitOne(t *testing.T) {
 	for name, files := range map[string]map[string]string{
 		"empty dir":         {},
 		"no manifest files": {"notes.txt": "hi", "rendered": removedAPIs},
-		"only non-manifest": {"values.yaml": "replicaCount: 1\n", "chart/templates/cm.yaml": "{{- if .Values.x }}\napiVersion: v1\n"},
+		"only non-manifest": {"values.yaml": "replicaCount: 1\n", "ci/broken.yaml": "key: [unclosed\n"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			dir := writeFiles(t, files)
@@ -81,19 +81,19 @@ func TestScanFilesNoManifestsIsExitOne(t *testing.T) {
 	}
 }
 
-// A file that does not parse (an unrendered chart template next to the
-// render) is a warning on stderr, not a failed scan; the rendered
-// manifests are still gated.
+// A file that does not parse (not a template: a broken file next to the
+// render) is a warning on stderr, file by file, not a failed scan; the
+// rendered manifests are still gated.
 func TestScanFilesWarnsOnInvalidFiles(t *testing.T) {
 	dir := writeFiles(t, map[string]string{
-		"rendered.yaml":           removedAPIs,
-		"chart/templates/cm.yaml": "{{- if .Values.x }}\napiVersion: v1\nkind: ConfigMap\n",
+		"rendered.yaml":  removedAPIs,
+		"ci/broken.yaml": "key: [unclosed\nother: value\n",
 	})
 	_, stderr, err := execScanFiles(t, "--files", dir, "--output", "json")
 	if ExitCode(err) != 2 {
 		t.Fatalf("ExitCode = %d (err %v), want 2: the removed APIs must still gate", ExitCode(err), err)
 	}
-	wantPrefix := "warning: skipped " + filepath.ToSlash(filepath.Join(dir, "chart/templates/cm.yaml")) + ":1: "
+	wantPrefix := "warning: skipped " + filepath.ToSlash(filepath.Join(dir, "ci/broken.yaml")) + ":1: "
 	if !strings.HasPrefix(stderr, wantPrefix) {
 		t.Errorf("stderr = %q, want prefix %q", stderr, wantPrefix)
 	}

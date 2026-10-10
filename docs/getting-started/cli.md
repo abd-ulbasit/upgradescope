@@ -46,6 +46,18 @@ you are judging with `--kube-version` (for example `1.36.0`) and one
 `policy/v1beta1/PodDisruptionBudget`). For what a release has actually
 installed, scan `helm get manifest <release>` output, or scan the cluster.
 
+Do not point `--files` at the chart directory itself. Its templates hold
+`{{ }}` and are not YAML, so they cannot be read. A directory with a
+`Chart.yaml` that holds such files gets one hint instead of a warning per
+file, and the scan cannot say `ready`: the report is `unknown`, and
+`NOT ASSESSED` counts the templates that were not read, because a template
+can carry any API version. Render the chart first, as above:
+
+```sh
+helm template my-release ./chart --output-dir rendered
+upgradescope scan --files rendered --target 1.37
+```
+
 ## Scan a live cluster
 
 ```sh
@@ -82,8 +94,17 @@ READY  no
   warnings break the one after it or need attention soon, info findings are
   listed but never scored. Each one has a `fix:` and a `see:` citation.
 - **`NOT ASSESSED`** lists what the scan could not see, and why.
+- **`UNRECOGNIZED IMAGES`** lists container images that no add-on in the
+  [add-on registry](../concepts/addon-registry.md) claims, such as
+  `docker.io/library/busybox`. It is information about add-on detection,
+  never a finding: it does not change the score or the verdict. It matters
+  only if one of those images is an add-on you expected the scan to judge;
+  the registry page says how to teach the scan about it.
 
 ## Pick an output
+
+`-o` is short for `--output`, as in `kubectl` and `helm`: it names the
+format, never a file.
 
 ```sh
 upgradescope scan --target 1.37 --output json      # the machine-readable report
