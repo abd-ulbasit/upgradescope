@@ -207,43 +207,83 @@ type helmRevision struct {
 // else was read (#239). Any of these failures leaves an available
 // capability Partial, naming the drivers and releases it skipped.
 func collectHelm(ctx context.Context, kube kubernetes.Interface, meta metadata.Interface, lifecycle []kb.APILifecycleEntry, inv *inventory.Inventory) error {
-	return collectHelmWith(ctx, kube, meta, lifecycle, nil, inv)
+	return collectHelmWith(ctx, kube, meta, lifecycle, nil, nil, inv)
 }
 
 // collectHelmWith is collectHelm with a cache of what earlier calls decoded
-// (nil reads every release, as a one-shot scan does).
-func collectHelmWith(ctx context.Context, kube kubernetes.Interface, meta metadata.Interface, lifecycle []kb.APILifecycleEntry, cache *HelmCache, inv *inventory.Inventory) error {
-	return collectHelmFetching(ctx, kube, meta, lifecycle, cache, helmFetchWorkers, inv)
+// (nil reads every release, as a one-shot scan does), reading Helm's
+// storage only in namespaces when that is not empty (nil reads the whole
+// cluster, as a one-shot scan does; see collectHelmFetching).
+func collectHelmWith(ctx context.Context, kube kubernetes.Interface, meta metadata.Interface, lifecycle []kb.APILifecycleEntry, cache *HelmCache, namespaces []string, inv *inventory.Inventory) error {
+	return collectHelmFetching(ctx, kube, meta, lifecycle, cache, namespaces, helmFetchWorkers, inv)
 }
+
+// helmSkippedOtherNamespaces is the helm capability's Skipped entry when
+// Helm's storage was read in some namespaces only (#344: the agent's
+// --helm-namespaces, the chart's rbac.helmSecretsNamespaces). It has no
+// slash, so the engine reads it as it reads a storage driver not read:
+// every release unassessed, since a release's finding does not say whether
+// its namespace was listed, and one in another namespace was never read.
+const helmSkippedOtherNamespaces = "releases outside the listed namespaces"
 
 // collectHelmFetching is collectHelmWith fetching the releases the cache
 // does not hold on up to workers goroutines (see startFetching); 1 fetches
 // them one at a time, as before #226. Whatever workers is, the releases are
 // decoded one at a time, in the order of their keys, on the caller's
 // goroutine, so the inventory, the reasons and the cache come out the same.
-func collectHelmFetching(ctx context.Context, kube kubernetes.Interface, meta metadata.Interface, lifecycle []kb.APILifecycleEntry, cache *HelmCache, workers int, inv *inventory.Inventory) error {
+//
+// With namespaces (#344), each driver is listed in each of them in turn,
+// sorted and each once, and never across the cluster: the agent then holds
+// a Role in each and no cluster-wide grant. A driver whose list fails in
+// any of them is a driver not read, as one whose cluster-wide list fails
+// is, and the other namespaces are still listed. Whatever was read, the
+// capability is partial, saying which namespaces were read and naming
+// helmSkippedOtherNamespaces: releases elsewhere were not assessed.
+func collectHelmFetching(ctx context.Context, kube kubernetes.Interface, meta metadata.Interface, lifecycle []kb.APILifecycleEntry, cache *HelmCache, namespaces []string, workers int, inv *inventory.Inventory) error {
 	type releaseKey struct{ namespace, name string }
 	drivers := helmDrivers(kube)
 	revisions := map[releaseKey][]helmRevision{}
 	listErrs := make([]error, len(drivers))
 	var failed []string  // "<what> not read: <err>", drivers first
 	var skipped []string // drivers, then releases ("namespace/name"), not read
+	scope := []string{metav1.NamespaceAll}
+	var scoped string // the note of a read in some namespaces only
+	if len(namespaces) > 0 {
+		scope = slices.Compact(slices.Sorted(slices.Values(namespaces)))
+		scoped = fmt.Sprintf("Helm releases read only in namespaces %s (rbac.helmSecretsNamespaces); releases in other namespaces were not assessed", strings.Join(scope, ", "))
+	}
 	for d, drv := range drivers {
-		err := listMetadata(ctx, meta, drv.gvr, metav1.ListOptions{LabelSelector: "owner=helm"}, func(m metav1.PartialObjectMetadata) {
-			name, rev, ok := helmRevisionOf(m)
-			if !ok {
-				return
+		more := 0 // namespaces after the first whose list failed too
+		for _, ns := range scope {
+			err := listMetadata(ctx, meta, drv.gvr, ns, metav1.ListOptions{LabelSelector: "owner=helm"}, func(m metav1.PartialObjectMetadata) {
+				name, rev, ok := helmRevisionOf(m)
+				if !ok {
+					return
+				}
+				k := releaseKey{m.Namespace, name}
+				revisions[k] = append(revisions[k], helmRevision{driver: d, object: m.Name, revision: rev, status: m.Labels["status"], uid: m.UID, rv: m.ResourceVersion})
+			})
+			switch {
+			case err == nil:
+			case listErrs[d] == nil:
+				listErrs[d] = err
+			default:
+				more++
 			}
-			k := releaseKey{m.Namespace, name}
-			revisions[k] = append(revisions[k], helmRevision{driver: d, object: m.Name, revision: rev, status: m.Labels["status"], uid: m.UID, rv: m.ResourceVersion})
-		})
-		if err != nil {
-			listErrs[d] = err
-			failed = append(failed, fmt.Sprintf("%s not read: %v", drv.name, err))
+		}
+		if err := listErrs[d]; err != nil {
+			msg := fmt.Sprintf("%s not read: %v", drv.name, err)
+			if more > 0 {
+				msg += fmt.Sprintf(" (and in %d more namespace(s))", more)
+			}
+			failed = append(failed, msg)
 			skipped = append(skipped, drv.name)
 		}
 	}
 	if len(failed) == len(drivers) {
+		if scoped != "" {
+			failed = append(failed, scoped)
+		}
 		return errors.New(strings.Join(failed, "; "))
 	}
 
@@ -377,6 +417,11 @@ func collectHelmFetching(ctx context.Context, kube kubernetes.Interface, meta me
 		failed = append(failed, fmt.Sprintf("%d release(s) with only failed revisions not assessed (no deployed or superseded revision to judge their chart and stored manifest by), first %s", unjudged, firstUnjudged))
 	}
 	skipped = append(skipped, skippedReleases...) // keys are sorted
+	// After the counts and failures, which decide availability above.
+	if scoped != "" {
+		failed = append(failed, scoped)
+		skipped = append(skipped, helmSkippedOtherNamespaces)
+	}
 	if len(rels) > 0 {
 		inv.HelmReleases = rels
 	}
@@ -394,13 +439,16 @@ func collectHelmFetching(ctx context.Context, kube kubernetes.Interface, meta me
 	return partialError{msg: msg, incomplete: len(failed) > 0, skipped: skipped}
 }
 
-// listMetadata lists one resource cluster-wide, metadata-only and paged,
-// calling fn for every item.
-func listMetadata(ctx context.Context, meta metadata.Interface, gvr schema.GroupVersionResource, opts metav1.ListOptions, fn func(metav1.PartialObjectMetadata)) error {
+// listMetadata lists one resource in namespace (metav1.NamespaceAll:
+// cluster-wide), metadata-only and paged, calling fn for every item.
+func listMetadata(ctx context.Context, meta metadata.Interface, gvr schema.GroupVersionResource, namespace string, opts metav1.ListOptions, fn func(metav1.PartialObjectMetadata)) error {
 	opts.Limit = listPageSize
 	for {
-		l, err := meta.Resource(gvr).Namespace(metav1.NamespaceAll).List(ctx, opts)
+		l, err := meta.Resource(gvr).Namespace(namespace).List(ctx, opts)
 		if err != nil {
+			if namespace != metav1.NamespaceAll {
+				return fmt.Errorf("list %s in namespace %s: %w", gvr.Resource, namespace, err)
+			}
 			return fmt.Errorf("list %s: %w", gvr.Resource, err)
 		}
 		for _, m := range l.Items {

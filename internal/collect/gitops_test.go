@@ -113,7 +113,7 @@ func (f gitopsFixture) clients() Clients {
 
 func (f gitopsFixture) helmStep() (inventory.Inventory, error) {
 	var inv inventory.Inventory
-	err := collectHelmStep(context.Background(), f.clients(), nil, nil, nil, &inv)
+	err := collectHelmStep(context.Background(), f.clients(), nil, nil, nil, nil, &inv)
 	return inv, err
 }
 
@@ -581,7 +581,7 @@ func TestGitOpsWithoutDynamicClientStillReportsTheGap(t *testing.T) {
 	c := f.clients()
 	c.Dynamic = nil
 	var inv inventory.Inventory
-	err := collectHelmStep(context.Background(), c, nil, nil, nil, &inv)
+	err := collectHelmStep(context.Background(), c, nil, nil, nil, nil, &inv)
 	pe := partial(t, err)
 	if !pe.incomplete || !reflect.DeepEqual(pe.skipped, []string{"argocd"}) || inv.GitOpsCharts != nil {
 		t.Errorf("partial = %+v, charts %v; want the gap and no charts", pe, inv.GitOpsCharts)
@@ -975,7 +975,7 @@ func TestGitOpsRefusedOCIRepositoryListsAreRememberedAcrossTicks(t *testing.T) {
 		}
 		f.dyn.ClearActions()
 		var inv inventory.Inventory
-		pe := partial(t, collectHelmStep(context.Background(), f.clients(), nil, nil, cache, &inv))
+		pe := partial(t, collectHelmStep(context.Background(), f.clients(), nil, nil, nil, cache, &inv))
 		if pe.incomplete || len(inv.GitOpsCharts) != 30 {
 			t.Fatalf("%s: partial %+v with %d charts, want all 30 resolved", tc.name, pe, len(inv.GitOpsCharts))
 		}

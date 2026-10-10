@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -50,6 +51,10 @@ type agentOptions struct {
 	logFormat       string
 	logLevel        string
 	registryDir     string // --registry-dir: extra add-on registry entries
+	// helmNamespaces is --helm-namespaces ($UPGRADESCOPE_HELM_NAMESPACES):
+	// the only namespaces Helm releases are read in, sorted and each once
+	// (nil = the whole cluster).
+	helmNamespaces []string
 }
 
 // newAgentLogger builds the agent's slog logger: format text (logfmt) or
@@ -126,6 +131,7 @@ var runAgent = func(ctx context.Context, opts agentOptions) error {
 		PodPassEvery:      opts.podPassEvery,
 		PodPassMaxAge:     opts.podPassMaxAge,
 		Targets:           opts.targets,
+		HelmNamespaces:    opts.helmNamespaces,
 		SkipCRDManagement: !opts.manageCRD,
 		HealthAddr:        opts.healthAddr,
 		PprofAddr:         opts.pprofAddr,
@@ -154,6 +160,37 @@ func validAgentNames(opts agentOptions) error {
 	if p := content.IsLabelKey(opts.teamLabel); len(p) > 0 {
 		return fmt.Errorf("invalid --team-label %q: not a label key (%s)", opts.teamLabel, strings.Join(p, "; "))
 	}
+	return nil
+}
+
+// helmNamespacesEnv is --helm-namespaces' environment variable, a comma
+// separated list, read when the flag is not given.
+const helmNamespacesEnv = "UPGRADESCOPE_HELM_NAMESPACES"
+
+// parseHelmNamespaces resolves --helm-namespaces, or helmNamespacesEnv when
+// the flag is not given, into opts.helmNamespaces: each entry trimmed and a
+// namespace name (an RFC 1123 label), sorted and each once (#344). An empty
+// entry of the flag is refused (the chart passes the flag only with names);
+// the variable's empty entries are dropped, and an empty variable is none.
+// None reads Helm releases across the whole cluster.
+func parseHelmNamespaces(cmd *cobra.Command, opts *agentOptions) error {
+	source, raw := "--helm-namespaces", opts.helmNamespaces
+	if !cmd.Flags().Changed("helm-namespaces") {
+		source, raw = "--helm-namespaces ($"+helmNamespacesEnv+")", splitList(os.Getenv(helmNamespacesEnv))
+	}
+	var out []string
+	for _, ns := range raw {
+		ns = strings.TrimSpace(ns)
+		if p := content.IsDNS1123Label(ns); len(p) > 0 {
+			return fmt.Errorf("invalid %s entry %.70q: not a namespace name, an RFC 1123 label (%s)", source, ns, strings.Join(p, "; "))
+		}
+		out = append(out, ns)
+	}
+	if len(out) == 0 {
+		opts.helmNamespaces = nil
+		return nil
+	}
+	opts.helmNamespaces = slices.Compact(slices.Sorted(slices.Values(out)))
 	return nil
 }
 
@@ -260,6 +297,9 @@ The Helm chart (deploy/chart) runs it in the cluster with read-only RBAC.`,
 			if err := validAgentNames(opts); err != nil {
 				return err
 			}
+			if err := parseHelmNamespaces(cmd, &opts); err != nil {
+				return err
+			}
 			if opts.serverCAFile != "" && opts.serverURL == "" {
 				return fmt.Errorf("--server-ca-file needs --server-url: it only verifies the server snapshots are pushed to")
 			}
@@ -297,6 +337,10 @@ The Helm chart (deploy/chart) runs it in the cluster with read-only RBAC.`,
 		"serve the Go profiler (/debug/pprof/) on this loopback host:port, e.g. 127.0.0.1:6060, reached in a pod with kubectl port-forward (empty = off)")
 	cmd.Flags().StringVar(&opts.logFormat, "log-format", "text", "log format: text (logfmt) or json")
 	cmd.Flags().StringVar(&opts.logLevel, "log-level", "info", "log level: debug, info, warn or error")
+	cmd.Flags().StringSliceVar(&opts.helmNamespaces, "helm-namespaces", nil,
+		"read Helm releases only in these namespaces, repeatable or comma separated (default $"+helmNamespacesEnv+"; none: the whole cluster): "+
+			"for a role that grants get/list on Secrets and ConfigMaps in them alone (the chart's rbac.helmSecretsNamespaces). "+
+			"Releases in other namespaces are not assessed, and the helm capability is reported partial saying so")
 	cmd.Flags().StringVar(&opts.registryDir, "registry-dir", "", registryDirUsage)
 	cmd.Flags().StringVar(&opts.kubeconfig, "kubeconfig", "", "path to kubeconfig (default: in-cluster config, then standard loading rules)")
 	cmd.Flags().StringVar(&opts.kubecontext, "context", "", "kubeconfig context to use")

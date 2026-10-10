@@ -46,17 +46,31 @@ rbac:
   # KB rules either way). No wildcards, no watch, no
   # subresources such as nodes/proxy or pods/log.
   create: true
-  # -- Cluster-wide get/list on Secrets and ConfigMaps, for Helm release
-  # detection (releases stored by Helm's secrets and configmaps drivers).
-  # RBAC cannot filter Secrets by label or type, so true means the agent can
-  # read EVERY Secret and ConfigMap in the cluster. false removes both
-  # rules; the Helm capability is then not assessed (the reason is the
-  # forbidden lists) and Helm chart findings are missing from the report.
-  # Releases in Helm's sql driver have no object in the cluster, and charts
-  # that Argo CD renders with helm template have no release object either;
-  # add-on detection from container images still covers them, and
-  # rbac.gitops reads the charts GitOps tools declare.
+  # -- Get/list on Secrets and ConfigMaps, for Helm release detection
+  # (releases stored by Helm's secrets and configmaps drivers). RBAC cannot
+  # filter Secrets by label or type, so true means the agent can read EVERY
+  # Secret and ConfigMap in the cluster, or with rbac.helmSecretsNamespaces
+  # every one in those namespaces. false removes both rules; the Helm
+  # capability is then not assessed (the reason is the forbidden lists) and
+  # Helm chart findings are missing from the report. Releases in Helm's sql
+  # driver have no object in the cluster, and charts that Argo CD renders
+  # with helm template have no release object either; add-on detection from
+  # container images still covers them, and rbac.gitops reads the charts
+  # GitOps tools declare.
   helmSecrets: true
+  # -- Namespaces to read Helm releases in, instead of the whole cluster.
+  # Empty (the default) keeps the cluster-wide Secrets and ConfigMaps rule.
+  # Set, with rbac.helmSecrets, the ClusterRole has no Secrets or ConfigMaps
+  # rule; each namespace gets a Role (get/list on secrets and configmaps)
+  # and a RoleBinding to the agent's ServiceAccount, and the agent is passed
+  # --helm-namespaces so it lists only there (passed whenever this is set,
+  # rbac.create=false included). The helm capability is then reported
+  # partial: releases in other namespaces are not assessed. A release lives
+  # in its own namespace (helm install -n), so list every namespace that
+  # holds an add-on release; each must exist before the install. A Role
+  # still reads EVERY Secret in its namespace, and kube-system holds many
+  # sensitive ones: the gain is partial. DNS-1123 labels, each once.
+  helmSecretsNamespaces: []
   gitops:
     # -- Get/list on Argo CD Applications (argoproj.io/applications, nothing
     # else of that group), to read the chart, repoURL and targetRevision of
@@ -509,12 +523,32 @@ server:
     # Without one, an extraVolumes entry named sqlite-tmp fails the render
     # (two volumes of one name).
     sizeLimit: 1Gi
+  startupProbe:
+    # -- Seconds between startup checks of /healthz. The server migrates its
+    # database before it opens its port; liveness starts once one passes.
+    periodSeconds: 5
+    # -- Failed checks before the kubelet restarts the server: the startup
+    # window is periodSeconds x failureThreshold (5 minutes by default).
+    # Raise it for a large database or slow storage.
+    failureThreshold: 60
   persistence:
     # -- PVC for the SQLite database (unused with database.existingSecret).
     # false = emptyDir (history lost on pod restart — demo only).
     enabled: true
+    # -- The PVC's size, a Kubernetes quantity (e.g. 1Gi, 500Mi).
     size: 1Gi
     storageClass: ""
+    # -- Mount this existing PVC instead of creating one. The chart renders
+    # no PVC then, so helm uninstall leaves the claim and its history.
+    existingClaim: ""
+    # -- Access modes of the chart's PVC. SQLite has one writer (one
+    # replica), so ReadWriteOnce or ReadWriteOncePod.
+    accessModes: [ReadWriteOnce]
+    # -- Annotations on the chart's PVC (e.g. for a backup tool).
+    annotations: {}
+    # -- Annotate the chart's PVC helm.sh/resource-policy: keep, so helm
+    # uninstall leaves it and its history (delete it yourself afterwards).
+    retain: false
   # -- Extra host names (or IPs) requests may name in their Host header,
   # passed as --allowed-host with the Service's DNS names and
   # server.ingress.host, which the chart always passes. serve checks the

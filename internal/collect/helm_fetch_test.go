@@ -295,7 +295,7 @@ func TestCollectHelmConcurrentMatchesSequential(t *testing.T) {
 			kube, meta := helmClients(t, helmFetchFixture(t, pass == 1)...)
 			helmFetchReactors(kube)
 			var o outcome
-			err := collectHelmFetching(context.Background(), kube, meta, lifecycle, cache, workers, &o.inv)
+			err := collectHelmFetching(context.Background(), kube, meta, lifecycle, cache, nil, workers, &o.inv)
 			if err != nil {
 				o.err = err.Error()
 				errors.As(err, &o.partial)
@@ -389,7 +389,7 @@ func coldHelmStep(t testing.TB, srv *httptest.Server, workers int) (inventory.In
 	lifecycle := []kb.APILifecycleEntry{{Version: "v1", Kind: "ConfigMap", Deprecated: &inventory.Version{Major: 1, Minor: 99}}}
 	var inv inventory.Inventory
 	start := time.Now()
-	err = collectHelmFetching(context.Background(), c.Kube, c.Metadata, lifecycle, nil, workers, &inv)
+	err = collectHelmFetching(context.Background(), c.Kube, c.Metadata, lifecycle, nil, nil, workers, &inv)
 	d := time.Since(start)
 	if pe := (partialError{}); !errors.As(err, &pe) || pe.incomplete {
 		t.Fatalf("%d workers: err = %v, want every release read", workers, err)

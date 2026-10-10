@@ -179,8 +179,10 @@ scheduler skew are then not checked; kubelets and kube-proxy still are).
 It reads with `get` and `list`, never `watch`, and writes only its own
 `ClusterReadiness` object, its status and (by default) that object's CRD.
 To read Helm releases it needs `get`/`list` on Secrets and ConfigMaps
-cluster-wide, which RBAC cannot narrow; `rbac.helmSecrets=false` removes that
-at the cost of Helm findings.
+cluster-wide, which RBAC cannot narrow by label. `rbac.helmSecretsNamespaces`
+narrows it to a Role in each namespace that holds releases (still every
+Secret and ConfigMap there, and releases elsewhere go unassessed);
+`rbac.helmSecrets=false` removes it at the cost of Helm findings.
 [Security model and RBAC](https://abd-ulbasit.github.io/upgradescope/operations/security-model-and-rbac/).
 
 ## Measured

@@ -43,6 +43,13 @@ type Options struct {
 	// changed instead of one per release. A long-running caller (the agent)
 	// keeps one across calls; a one-shot scan leaves it nil.
 	HelmCache *HelmCache
+	// HelmNamespaces, when set, are the only namespaces Helm's release
+	// storage is listed and read in, never across the cluster (#344): the
+	// agent's --helm-namespaces, for a role that grants Secrets and
+	// ConfigMaps there alone (the chart's rbac.helmSecretsNamespaces). The
+	// helm capability is then partial, saying releases elsewhere were not
+	// assessed. Empty reads the whole cluster; a one-shot scan leaves it so.
+	HelmNamespaces []string
 	// DiscoveryCache, when set, keeps API discovery across calls under the
 	// staleness rules DiscoveryCache states, so a steady tick does not ask
 	// for it again. The agent keeps one; a one-shot scan leaves it nil.
@@ -266,7 +273,7 @@ func steps(c Clients, k kb.KB, opts Options) []step {
 			if c.Kube == nil || c.Metadata == nil {
 				return errors.New("kubernetes/metadata client not configured")
 			}
-			return collectHelmStep(ctx, c, k.APILifecycle, opts.HelmCache, opts.GitOpsCache, inv)
+			return collectHelmStep(ctx, c, k.APILifecycle, opts.HelmCache, opts.HelmNamespaces, opts.GitOpsCache, inv)
 		}},
 		{cap: inventory.CapAddOns, run: func(ctx context.Context, inv *inventory.Inventory) error { // after helm: consumes inv.HelmReleases
 			if c.Kube == nil {

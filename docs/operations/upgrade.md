@@ -269,6 +269,14 @@ helm get values upgradescope -n upgradescope | diff values-before.yaml -
   (SQLite and Postgres alike). Back it up first
   ([Retention and backup](retention-and-backup.md)); an older server
   cannot read a newer schema.
+- **The startup window.** The server runs its migrations before it opens
+  its port, so a long one must finish inside the server's startupProbe:
+  `/healthz` every `server.startupProbe.periodSeconds` (5), up to
+  `server.startupProbe.failureThreshold` (60) failures, 5 minutes by
+  default, before the kubelet restarts the pod; liveness and readiness
+  start once it passes. For a large database or slow storage, raise
+  `server.startupProbe.failureThreshold` for the upgrade (120 is 10
+  minutes) so a migration is not restarted part-way.
 - **Migration 0010 builds an index on `evaluations`.** Retention finds old
   evaluations from `idx_evaluations_created_at`
   ([Retention and backup](retention-and-backup.md)), and the first start

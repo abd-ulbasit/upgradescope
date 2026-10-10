@@ -66,6 +66,12 @@
       "properties": {
         "create": { "type": "boolean" },
         "helmSecrets": { "type": "boolean" },
+        "helmSecretsNamespaces": {
+          "description": "Namespaces the agent reads Helm releases in, each a namespace name (an RFC 1123 label, as the agent's --helm-namespaces requires) and listed once: two Roles of one name in a namespace would fail the install.",
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$", "maxLength": 63 }
+        },
         "gitops": {
           "type": "object",
           "additionalProperties": false,
@@ -280,8 +286,34 @@
           "additionalProperties": false,
           "properties": {
             "enabled": { "type": "boolean" },
-            "size": { "type": "string", "minLength": 1 },
-            "storageClass": { "type": "string" }
+            "size": {
+              "description": "A Kubernetes quantity, such as 1Gi or 500Mi.",
+              "type": "string",
+              "pattern": "^([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(Ki|Mi|Gi|Ti|Pi|Ei|k|M|G|T|P|E|[eE][+-]?[0-9]+)?$"
+            },
+            "storageClass": { "type": "string" },
+            "existingClaim": {
+              "description": "An existing PVC to mount instead of the chart's (empty: the chart creates one).",
+              "type": "string",
+              "maxLength": 253,
+              "pattern": "^$|^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$"
+            },
+            "accessModes": {
+              "type": "array",
+              "minItems": 1,
+              "uniqueItems": true,
+              "items": { "enum": ["ReadWriteOnce", "ReadOnlyMany", "ReadWriteMany", "ReadWriteOncePod"] }
+            },
+            "annotations": { "type": "object", "additionalProperties": { "type": "string" } },
+            "retain": { "type": "boolean" }
+          }
+        },
+        "startupProbe": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "periodSeconds": { "type": "integer", "minimum": 1 },
+            "failureThreshold": { "type": "integer", "minimum": 1 }
           }
         },
         "extraArgs": { "type": "array", "items": { "type": "string" } },

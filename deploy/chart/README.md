@@ -174,10 +174,29 @@ watches.
 | `get`/`list` namespaces, nodes, pods | Cluster ID (kube-system UID), team labels, kubelet versions, control-plane pods, add-on images |
 | `get` `/version`, `/metrics` | Server version; `apiserver_requested_deprecated_apis` (whether any client still calls deprecated APIs, not which) |
 | `get`/`list` on each group/resource the KB flags as deprecated or removed | Counting objects still stored at deprecated APIs. Generated into `files/kb-rbac-rules.yaml`; `rbac_test.go` fails when it drifts from the embedded KB |
-| `get`/`list` Secrets and ConfigMaps (only with `rbac.helmSecrets=true`, the default) | Helm release detection lists the objects labelled `owner=helm` (Helm's secrets and configmaps storage drivers) metadata-only, then reads one per release. RBAC cannot filter by label or type, so **this lets the agent read every Secret and ConfigMap in the cluster** |
+| `get`/`list` Secrets and ConfigMaps (only with `rbac.helmSecrets=true`, the default, and an empty `rbac.helmSecretsNamespaces`, the default) | Helm release detection lists the objects labelled `owner=helm` (Helm's secrets and configmaps storage drivers) metadata-only, then reads one per release. RBAC cannot filter by label or type, so **this lets the agent read every Secret and ConfigMap in the cluster** |
 | `get`/`list` Argo CD Applications, Flux HelmReleases and Flux OCIRepositories (only with `rbac.gitops.argocd` and `rbac.gitops.flux`, both off by default) | The charts GitOps tools deploy: chart, version and repository from each Application source and HelmRelease, for add-on detection. Only those resources: no AppProjects, ApplicationSets or the Secrets that hold repository credentials |
 | `get`/`update`/`patch` on the CRD `clusterreadinesses.upgradescope.basit.engineer` only (only with `agent.manageCRD=true`, the default) | Keeping the CRD schema in step with the agent binary by server-side apply |
 | `get`/`list`/`create` clusterreadinesses; `update`/`patch` and status `get`/`update`/`patch` on the one named `agent.crName` | The agent's own results object |
+
+`rbac.helmSecretsNamespaces` narrows that read to the namespaces it lists:
+the ClusterRole then has no Secret or ConfigMap rule, each listed namespace
+gets a Role (`get`/`list` on `secrets` and `configmaps`) and a RoleBinding
+to the agent's ServiceAccount, and the agent is passed `--helm-namespaces`
+so it lists only there:
+
+    helm upgrade --install upgradescope deploy/chart -n upgradescope \
+      --set 'rbac.helmSecretsNamespaces={kube-system,ingress-nginx,cert-manager}'
+
+A release lives in the namespace it was installed into (`helm install -n`),
+so list every namespace that holds an add-on release, and only namespaces
+that exist (a Role cannot be created in one that does not). Releases in
+other namespaces are not assessed: the helm capability is reported partial,
+naming the namespaces read. The gain is partial too: a Role still reads
+**every** Secret and ConfigMap of its namespace, and `kube-system` holds many
+sensitive ones. The
+[security page](https://abd-ulbasit.github.io/upgradescope/operations/security-model-and-rbac/#namespaced-helm-reads-rbachelmsecretsnamespaces)
+has the details and the hardened settings.
 
 `rbac.helmSecrets=false` removes the Secret and ConfigMap rules. The Helm
 capability is then not assessed, with the forbidden lists as the reason,
@@ -486,7 +505,8 @@ Generated from the comments in `values.yaml` (`make helm-docs`).
 | `rbac.create` | bool | `true` | Create the agent ClusterRole/ClusterRoleBinding. Every rule is listed and explained in templates/rbac.yaml and the chart README: get/list on namespaces, nodes, pods and the API group/resources the embedded KB flags as deprecated; get on /version and /metrics; writes only to the ClusterReadiness CR named agent.crName (and, with agent.manageCRD, to the clusterreadinesses.upgradescope.basit.engineer CRD; get/list on CRDs comes from the KB rules either way). No wildcards, no watch, no subresources such as nodes/proxy or pods/log. |
 | `rbac.gitops.argocd` | bool | `false` | Get/list on Argo CD Applications (argoproj.io/applications, nothing else of that group), to read the chart, repoURL and targetRevision of each chart source: add-ons Argo CD deploys (ingress-nginx, say) are then found by their chart, with no Helm release. Off, with Argo CD installed: the Helm capability is reported partial, naming the forbidden list. Chart kubeVersion and stored-manifest checks stay unavailable for Argo CD either way (helm template leaves no release). |
 | `rbac.gitops.flux` | bool | `false` | Get/list on Flux HelmReleases (helm.toolkit.fluxcd.io/helmreleases) and OCIRepositories (source.toolkit.fluxcd.io/ocirepositories, for a HelmRelease chartRef), to read the chart each HelmRelease deploys. Off, with Flux installed: the Helm capability is reported partial, naming the forbidden list. |
-| `rbac.helmSecrets` | bool | `true` | Cluster-wide get/list on Secrets and ConfigMaps, for Helm release detection (releases stored by Helm's secrets and configmaps drivers). RBAC cannot filter Secrets by label or type, so true means the agent can read EVERY Secret and ConfigMap in the cluster. false removes both rules; the Helm capability is then not assessed (the reason is the forbidden lists) and Helm chart findings are missing from the report. Releases in Helm's sql driver have no object in the cluster, and charts that Argo CD renders with helm template have no release object either; add-on detection from container images still covers them, and rbac.gitops reads the charts GitOps tools declare. |
+| `rbac.helmSecrets` | bool | `true` | Get/list on Secrets and ConfigMaps, for Helm release detection (releases stored by Helm's secrets and configmaps drivers). RBAC cannot filter Secrets by label or type, so true means the agent can read EVERY Secret and ConfigMap in the cluster, or with rbac.helmSecretsNamespaces every one in those namespaces. false removes both rules; the Helm capability is then not assessed (the reason is the forbidden lists) and Helm chart findings are missing from the report. Releases in Helm's sql driver have no object in the cluster, and charts that Argo CD renders with helm template have no release object either; add-on detection from container images still covers them, and rbac.gitops reads the charts GitOps tools declare. |
+| `rbac.helmSecretsNamespaces` | list | `[]` | helm-namespaces so it lists only there (passed whenever this is set, rbac.create=false included). The helm capability is then reported partial: releases in other namespaces are not assessed. A release lives in its own namespace (helm install -n), so list every namespace that holds an add-on release; each must exist before the install. A Role still reads EVERY Secret in its namespace, and kube-system holds many sensitive ones: the gain is partial. DNS-1123 labels, each once. |
 | `server.adminToken` | string | `""` | Bearer token for cluster administration: deleting and renaming clusters (DELETE/PATCH /api/v1/clusters/{id}, `upgradescope clusters delete` and `rename`, with --server). Empty = both are refused. It must differ from the read and ingest tokens. Stored in the chart Secret; ignored when existingSecret is set (use adminTokenFromSecret). |
 | `server.adminTokenFromSecret` | bool | `false` | With existingSecret: enable cluster administration with its adminToken key. |
 | `server.affinity` | object | `{}` | — |
@@ -513,8 +533,12 @@ Generated from the comments in `values.yaml` (`make helm-docs`).
 | `server.ingress.tls.enabled` | bool | `true` | TLS for host, from a kubernetes.io/tls Secret (e.g. one cert-manager issues via annotations). Default name: &lt;fullname&gt;-server-tls. |
 | `server.ingress.tls.secretName` | string | `""` | — |
 | `server.nodeSelector` | object | `{}` | — |
+| `server.persistence.accessModes` | list | `["ReadWriteOnce"]` | Access modes of the chart's PVC. SQLite has one writer (one replica), so ReadWriteOnce or ReadWriteOncePod. |
+| `server.persistence.annotations` | object | `{}` | Annotations on the chart's PVC (e.g. for a backup tool). |
 | `server.persistence.enabled` | bool | `true` | PVC for the SQLite database (unused with database.existingSecret). false = emptyDir (history lost on pod restart — demo only). |
-| `server.persistence.size` | string | `"1Gi"` | — |
+| `server.persistence.existingClaim` | string | `""` | Mount this existing PVC instead of creating one. The chart renders no PVC then, so helm uninstall leaves the claim and its history. |
+| `server.persistence.retain` | bool | `false` | Annotate the chart's PVC helm.sh/resource-policy: keep, so helm uninstall leaves it and its history (delete it yourself afterwards). |
+| `server.persistence.size` | string | `"1Gi"` | The PVC's size, a Kubernetes quantity (e.g. 1Gi, 500Mi). |
 | `server.persistence.storageClass` | string | `""` | — |
 | `server.podAnnotations` | object | `{}` | — |
 | `server.podDisruptionBudget.enabled` | bool | `true` | Render a PodDisruptionBudget for the server when replicas is above 1 (with one replica minAvailable 1 would block every node drain). |
@@ -538,6 +562,8 @@ Generated from the comments in `values.yaml` (`make helm-docs`).
 | `server.sharedIngestToken` | bool | `true` | Serve the shared ingest token at all. It may push as ANY cluster; false leaves only per-cluster tokens (`upgradescope tokens create &lt;cluster&gt;`, each bound to one cluster name): the chart Secret holds no ingestToken, serve gets none, and the in-chart agent needs its own token (agent.existingSecret or agent.serverToken). A Secret written by chart v0.2.0-rc.2 or earlier keeps its ingestToken key after you switch this off (those versions wrote it as stringData, which the API server turns into data and never removes); the server no longer accepts that token, but remove the key once with `kubectl -n &lt;namespace&gt; patch secret &lt;fullname&gt;-server-tokens --type=json -p '[{"op":"remove","path":"/data/ingestToken"}]'`. Later versions remove it on upgrade; check with `kubectl get secret ... -o jsonpath='{.data}'`. |
 | `server.slackWebhook` | string | `""` | Optional Slack incoming-webhook URL for finding-delta notifications. Stored in the chart Secret and mounted as a file (--slack-webhook-file); it never appears in the Deployment. Ignored when existingSecret is set. |
 | `server.staleAfter` | string | `""` | A cluster whose agent has not pushed for this long is marked stale in the API, the dashboard data and /metrics. Empty = the larger of 2h and three times agent.interval (2h for any interval up to 40m): an unchanged cluster pushes at its next tick after the hourly force-sync, so the gap between pushes is about max(interval, 1h) plus a tick. A value you set must be above agent.interval or the render fails, and the install notes warn when it is below max(interval, 1h) plus a tick; it also covers clusters in other regions that push to this server, whose own intervals the chart cannot see, so keep it above the longest of them. The UpgradescopeClusterStale alert follows it (metrics.prometheusRule). |
+| `server.startupProbe.failureThreshold` | int | `60` | Failed checks before the kubelet restarts the server: the startup window is periodSeconds x failureThreshold (5 minutes by default). Raise it for a large database or slow storage. |
+| `server.startupProbe.periodSeconds` | int | `5` | Seconds between startup checks of /healthz. The server migrates its database before it opens its port; liveness starts once one passes. |
 | `server.targets` | list | `[]` | Extra targets evaluated on every accepted snapshot, e.g. ["1.37","1.38"]: at most 4 entries (serve --targets takes 4 distinct minors; the chart counts entries, so list each minor once). Each adds about one report of up to the snapshot cap to every push and to the re-evaluation pass, and server.resources is sized for 4. |
 | `server.teamMap` | list | `[]` | Namespace→team overrides applied before every evaluation, rendered into a ConfigMap and passed as --team-map; the first matching glob wins, e.g. [{pattern: "payments-*", team: payments}]. |
 | `server.tls.caKey` | string | `"ca.crt"` | The key of the CA certificate in that Secret, which the ServiceMonitor and the in-chart agent trust (cert-manager CA and self-signed issuers write ca.crt). Empty for a publicly trusted certificate whose Secret has no CA: they then use their system roots. |

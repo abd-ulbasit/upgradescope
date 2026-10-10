@@ -243,6 +243,19 @@ spec:
           ports:
             - name: http
               containerPort: {{ int .Values.server.containerPort }}
+          # The server migrates its database before it opens the port: the
+          # startupProbe holds liveness off for up to periodSeconds x
+          # failureThreshold (server.startupProbe; 5 minutes by default), so
+          # a long migration is not restarted part-way.
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: http
+              {{- if $tls }}
+              scheme: HTTPS
+              {{- end }}
+            periodSeconds: {{ int .Values.server.startupProbe.periodSeconds }}
+            failureThreshold: {{ int .Values.server.startupProbe.failureThreshold }}
           livenessProbe:
             httpGet:
               path: /healthz
@@ -336,7 +349,7 @@ spec:
         - name: data
           {{- if .Values.server.persistence.enabled }}
           persistentVolumeClaim:
-            claimName: {{ include "upgradescope.derived" (dict "root" . "suffix" "-server-data") }}
+            claimName: {{ .Values.server.persistence.existingClaim | default (include "upgradescope.derived" (dict "root" . "suffix" "-server-data")) }}
           {{- else }}
           emptyDir: {}
           {{- end }}
