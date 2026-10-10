@@ -33,6 +33,12 @@ type fakeStore struct {
 	listReadTokensCalls int    // ListReadTokens calls, failed ones too
 	onListReadTokens    func() // when set, runs at the start of every ListReadTokens, outside the lock
 
+	// beforeCommit, when set, runs at the start of every CommitEvaluations,
+	// under the lock, with the batch about to be committed: a writer that
+	// lands just ahead of it (register the cluster out of band with
+	// upsertClusterLocked, say). A non-nil error is the commit's.
+	beforeCommit func(b store.EvaluationBatch) error
+
 	pruneCalls []time.Time       // cutoffs Prune was called with
 	prunePart  store.PruneResult // what a failing Prune reports it had deleted
 }
@@ -462,6 +468,11 @@ func (f *fakeStore) CommitEvaluations(ctx context.Context, b store.EvaluationBat
 	}
 	if err := f.errs["CommitEvaluations"]; err != nil {
 		return 0, false, err
+	}
+	if f.beforeCommit != nil {
+		if err := f.beforeCommit(b); err != nil {
+			return 0, false, err
+		}
 	}
 	if b.Cluster != nil {
 		// Check the UID rule before any write; the upsert itself happens
