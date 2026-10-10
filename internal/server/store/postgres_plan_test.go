@@ -154,3 +154,53 @@ func TestMigration0009BackfillsPostgres(t *testing.T) {
 		t.Errorf("rows left NULL = (%d, %v), want 0", nulls, err)
 	}
 }
+
+// TestPostgresPruneEvaluationDrainUsesCreatedAtIndex is
+// TestPruneEvaluationDrainUsesCreatedAtIndex on Postgres (#297): the inner
+// SELECT of retention's evaluation DELETE ordered by (created_at, id)
+// walks idx_evaluations_created_at (migration 0010) bounded by the cutoff
+// and needs no sort of the old rows, so a run with nothing to delete reads
+// the oldest index entries and no report. Sequential scans are switched
+// off so the empty tables cannot make one cheaper than the index. The
+// statement's other subqueries may plan as they like.
+func TestPostgresPruneEvaluationDrainUsesCreatedAtIndex(t *testing.T) {
+	ctx := context.Background()
+	p, err := OpenPostgres(pgTestSchema(t, "drainplan"))
+	if err != nil {
+		t.Fatalf("OpenPostgres: %v", err)
+	}
+	defer p.Close()
+	conn, err := p.db.Conn(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if _, err := conn.ExecContext(ctx, `SET enable_seqscan = off`); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := conn.QueryContext(ctx, `EXPLAIN `+pgDialect.evaluationDrain(), tBase.UTC(), pruneBatchRows)
+	if err != nil {
+		t.Fatalf("EXPLAIN: %v", err)
+	}
+	defer rows.Close()
+	var lines []string
+	for rows.Next() {
+		var line string
+		if err := rows.Scan(&line); err != nil {
+			t.Fatal(err)
+		}
+		lines = append(lines, strings.TrimSpace(line))
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	plan := strings.Join(lines, "; ")
+	if !strings.Contains(plan, "Index Scan using idx_evaluations_created_at") && !strings.Contains(plan, "Index Only Scan using idx_evaluations_created_at") {
+		t.Errorf("plan = %q, want an index scan on idx_evaluations_created_at", plan)
+	}
+	for _, line := range lines {
+		if strings.HasPrefix(line, "Sort Key:") && strings.Contains(line, "created_at") {
+			t.Errorf("plan = %q: sorts by created_at, want the index's order", plan)
+		}
+	}
+}

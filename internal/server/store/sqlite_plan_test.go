@@ -227,3 +227,31 @@ func TestEvaluationWrittenWithoutCarriesHoldMayCarryOne(t *testing.T) {
 		t.Errorf("CarriesHold = (%v, %v), want true for a NULL column", e.CarriesHold, err)
 	}
 }
+
+// TestPruneEvaluationDrainUsesCreatedAtIndex pins the plan of retention's
+// evaluation DELETE (#297): its inner SELECT finds the old rows through
+// idx_evaluations_created_at (migration 0010) and does not scan the table.
+// created_at is stored after the report BLOB, so a scan reads every
+// report's overflow chain, under the write lock, on every run, even with
+// nothing to delete. The index alone is not enough: with ORDER BY id
+// SQLite still scans (measured in #297), so the statement orders by
+// (created_at, id) as the index does.
+func TestPruneEvaluationDrainUsesCreatedAtIndex(t *testing.T) {
+	s := newTestStore(t)
+	plan := queryPlan(t, s.db, sqliteDialect.evaluationDrain(), formatTime(tBase), pruneBatchRows)
+	if !strings.Contains(plan, "idx_evaluations_created_at") || !strings.Contains(plan, "created_at<?") {
+		t.Errorf("plan = %q, want a search of idx_evaluations_created_at bounded by created_at<?", plan)
+	}
+	// The outer DELETE looks the ids up by primary key, and the subquery of
+	// each cluster's newest decided evaluation reads a covering index
+	// (idx_evaluations_decided, no report); a bare "SCAN evaluations" is
+	// the table, reports and all.
+	for _, step := range strings.Split(plan, "; ") {
+		if step == "SCAN evaluations" {
+			t.Errorf("plan step %q scans every evaluation (plan = %q)", step, plan)
+		}
+	}
+	if strings.Contains(plan, "TEMP B-TREE") {
+		t.Errorf("plan = %q, want no sort: the index delivers the order", plan)
+	}
+}
