@@ -78,9 +78,18 @@ provenance verifies: the release workflow built it at that tag
         id: gate
         with: {path: rendered, target: "1.37", version: v0.2.0}
       - uses: github/codeql-action/upload-sarif@v4
-        if: ${{ !cancelled() && steps.gate.outputs.sarif-file != '' }}
+        # also when the gate failed; not on a fork PR, whose token is read-only
+        if: ${{ !cancelled() && steps.gate.outputs.sarif-file != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
         with: {sarif_file: "${{ steps.gate.outputs.sarif-file }}"}
 ```
+
+On a pull request from a fork the `if:` skips the upload, since a fork's
+token cannot write code-scanning alerts: the gate still runs and fails the
+job only when it fails, and the job summary and annotations are the report.
+Never switch the trigger to `pull_request_target` to get the upload back: it
+runs with a write token on files the pull request controls. If the gate runs
+on Dependabot's pull requests, whose token is read-only too, add
+`&& github.actor != 'dependabot[bot]'` to the condition.
 
 Code scanning places an alert on a pull request's diff only when its file is
 committed. Alerts for a render like `rendered/` above appear in the Security

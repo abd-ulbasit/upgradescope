@@ -2,8 +2,9 @@
 # The SARIF upload step in the CI-gate workflow examples must skip a pull
 # request from a fork (its token is read-only, so upload-sarif would turn
 # the job red for a reason that is not the gate, #357). The example is
-# copied into docs/getting-started/ci-gate.md and action/README.md; nothing
-# else read it, so a copy could lose the guard unnoticed. This extracts the
+# copied into docs/getting-started/ci-gate.md, action/README.md and the
+# README (one flow-style line there); nothing else read it, so a copy could
+# lose the guard unnoticed. This extracts the
 # upload step's if: from each page and evaluates it with node (it uses only
 # !, !=, ==, &&, || and property access, which JavaScript evaluates the same
 # way) for a push, a same-repository pull request, a fork pull request and
@@ -19,7 +20,7 @@ trap 'rm -f "$results"' EXIT
 ok() { echo "ok   $1" | tee -a "$results"; }
 fail() { echo "FAIL $1" >&2; echo "FAIL $1" >>"$results"; }
 
-pages="docs/getting-started/ci-gate.md action/README.md"
+pages="docs/getting-started/ci-gate.md action/README.md README.md"
 
 # cond <file>: the if: of the first upload-sarif step, a folded (>-) block
 # or one line, as one line of text.
