@@ -158,3 +158,36 @@ func TestCollectFilesAddOnNamespaceUnset(t *testing.T) {
 		t.Errorf("addons = %#v, want %#v", inv.AddOns, want)
 	}
 }
+
+// #301 end to end: a rendered Deployment whose image is pinned by digest
+// (or ":latest") names its version in its pod labels, which the scan reads,
+// so cert-manager 1.12, end of life, is a blocker rather than an
+// "addon-no-data" info with a passing verdict.
+func TestCollectFilesImageWithoutVersionTakesLabelVersion(t *testing.T) {
+	k, err := kb.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	const digest = "quay.io/jetstack/cert-manager-controller@sha256:3b1ab0b56f1c2f1f9ba0c6a4b9b4b1b4f0b9d2b2b6c9e2e1d0c1b2a3f4e5d6c7"
+	for name, image := range map[string]string{"digest": digest, "latest": "quay.io/jetstack/cert-manager-controller:latest"} {
+		t.Run(name, func(t *testing.T) {
+			dir := writeTree(t, map[string]string{"cm.yaml": "apiVersion: apps/v1\nkind: Deployment\nmetadata: {name: cm, namespace: cert-manager}\nspec:\n  selector: {matchLabels: {app: cm}}\n  template:\n    metadata: {labels: {app: cm, app.kubernetes.io/name: cert-manager, app.kubernetes.io/version: v1.12.3, helm.sh/chart: cert-manager-v1.12.3}}\n    spec:\n      containers:\n      - {name: c, image: \"" + image + "\"}\n"})
+			inv, _, err := CollectFiles(dir, k)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := []inventory.AddOnInstance{{ID: "cert-manager", Version: "1.12.3", Namespaces: []string{"cert-manager"}, Source: "image"}}
+			if !reflect.DeepEqual(inv.AddOns, want) {
+				t.Fatalf("addons = %+v, want %+v", inv.AddOns, want)
+			}
+			rep := engine.Evaluate(inv, k, inventory.Version{Major: 1, Minor: 33}, time.Date(2026, 10, 10, 0, 0, 0, 0, time.UTC))
+			i := slices.IndexFunc(rep.Findings, func(f engine.Finding) bool { return f.Key == "eol-addon/cert-manager/1.12" })
+			if i < 0 || rep.Findings[i].Severity != engine.SevBlocker || rep.Verdict != engine.VerdictBlocked {
+				t.Errorf("verdict %s, findings %+v; want the cert-manager 1.12 end-of-life blocker", rep.Verdict, rep.Findings)
+			}
+			if slices.ContainsFunc(rep.Findings, func(f engine.Finding) bool { return f.Category == engine.CatAddOnNoData }) {
+				t.Errorf("findings %+v, want no addon-no-data", rep.Findings)
+			}
+		})
+	}
+}

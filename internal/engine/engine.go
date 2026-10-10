@@ -955,6 +955,42 @@ type addOnSubject struct {
 	node bool
 }
 
+// noVersionReason is the sentence that ends an addon-no-data detail for
+// installs whose version is unknown: what the evidence each was found by
+// lacked, as the detector read it (#301), and not the sources it never
+// consulted. An install found from an image has no version tag, and no
+// app.kubernetes.io/version label of a pod running it gives one (collect
+// takes that label's version for an image without a tag); one found from
+// labels alone has no version label it can trust; one found from a Helm
+// release records no appVersion, and no pod image tag or label gave one.
+func noVersionReason(ins []addOnInstall) string {
+	var parts []string
+	add := func(s string) {
+		if !slices.Contains(parts, s) {
+			parts = append(parts, s)
+		}
+	}
+	for _, in := range ins {
+		via, _, _ := strings.Cut(in.via, ",")
+		via, _, _ = strings.Cut(via, " ")
+		switch via {
+		case "image":
+			add("The image has no version tag, and no app.kubernetes.io/version label of a pod running it gives a version for this add-on.")
+		case "labels":
+			add("The pod labels name it, but no app.kubernetes.io/version label gives a version that applies to it.")
+		case "chart":
+			add("The Helm release records no appVersion, and no pod image tag or app.kubernetes.io/version label gives a version.")
+		case "gitops":
+			add("The GitOps chart reference gives no app version, and no running pod's image tag or app.kubernetes.io/version label does.")
+		case "ingressclass":
+			add("An IngressClass names it but carries no version.")
+		default:
+			add("No version could be read from the node's container runtime version.")
+		}
+	}
+	return " " + strings.Join(parts, " ") + " Its end of life and Kubernetes compatibility were not assessed."
+}
+
 // evalAddOn judges the installs of one detected add-on, all of them for
 // the product and each release-line group (see groupInstalls) on its own:
 //
@@ -1071,7 +1107,7 @@ func evalAddOn(a registry.AddOn, all addOnSubject, groups []addOnSubject, target
 		if !productDated && !inCycle && !below {
 			ver, reason := s.version, " The registry has no release-line data for this version, so its end of life was not assessed."
 			if ver == "" {
-				ver, reason = "(version unknown)", " No version could be read from an image tag, chart appVersion or app.kubernetes.io/version label, so its end of life and Kubernetes compatibility were not assessed."
+				ver, reason = "(version unknown)", noVersionReason(s.installs)
 			}
 			f := finding(s, CatAddOnNoData, SevInfo, string(CatAddOnNoData)+"/"+a.ID,
 				fmt.Sprintf("no lifecycle data for %s %s", a.DisplayName, ver), s.located+reason, a.Support.Citations)

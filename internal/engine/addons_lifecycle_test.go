@@ -159,9 +159,24 @@ func TestEvalAddOnsCycleCompatDetail(t *testing.T) {
 
 func TestEvalAddOnsNoDataDetail(t *testing.T) {
 	fs := evalAddOns(addOnAt("istio", ""), lifecycleKB(), inventory.Version{Major: 1, Minor: 34}, day("2026-10-02"))
-	want := "Detected Istio version (unknown) via image in namespace(s): istio-system. No version could be read from an image tag, chart appVersion or app.kubernetes.io/version label, so its end of life and Kubernetes compatibility were not assessed."
+	want := "Detected Istio version (unknown) via image in namespace(s): istio-system. The image has no version tag, and no app.kubernetes.io/version label of a pod running it gives a version for this add-on. Its end of life and Kubernetes compatibility were not assessed."
 	if len(fs) != 1 || fs[0].Detail != want || fs[0].Severity != SevInfo {
 		t.Fatalf("got %+v, want one info with detail %q", fs, want)
+	}
+	// What is missing follows what the add-on was found by (#301): the
+	// detail never claims a source the detector did not consult.
+	for _, tc := range []struct{ source, chart, want string }{
+		{"labels", "", "The pod labels name it, but no app.kubernetes.io/version label gives a version that applies to it."},
+		{"chart", "1.14.5", "The Helm release records no appVersion, and no pod image tag or app.kubernetes.io/version label gives a version."},
+		{"gitops", "", "The GitOps chart reference gives no app version, and no running pod's image tag or app.kubernetes.io/version label does."},
+		{"ingressclass", "", "An IngressClass names it but carries no version."},
+	} {
+		inv := inventory.Inventory{AddOns: []inventory.AddOnInstance{{ID: "istio", Namespaces: []string{"istio-system"}, Source: tc.source, ChartVersion: tc.chart}}}
+		fs = evalAddOns(inv, lifecycleKB(), inventory.Version{Major: 1, Minor: 34}, day("2026-10-02"))
+		if len(fs) != 1 || !strings.Contains(fs[0].Detail, " "+tc.want+" Its end of life and Kubernetes compatibility were not assessed.") ||
+			strings.Contains(fs[0].Detail, "No version could be read") {
+			t.Errorf("source %s: got %+v, want a detail with %q", tc.source, fs, tc.want)
+		}
 	}
 	fs = evalAddOns(addOnAt("istio", "1.10.0"), lifecycleKB(), inventory.Version{Major: 1, Minor: 34}, day("2026-10-02"))
 	want = "Detected Istio version 1.10.0 via image in namespace(s): istio-system. The registry has no release-line data for this version, so its end of life was not assessed."

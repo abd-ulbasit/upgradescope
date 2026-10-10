@@ -381,6 +381,10 @@ func olderVersion(cur, v string) string {
 // the image gives.
 type imageClaim struct {
 	id, version string
+	// byTag: the claim is the tag's own version, not a component image's
+	// product line, so a claim without one may take its pod's label
+	// version (matchAddOns).
+	byTag bool
 }
 
 // imageClaims returns the add-ons whose image matchers claim ref, in
@@ -403,12 +407,12 @@ func imageClaims(ref imageRef, addons []registry.AddOn) []imageClaim {
 		}
 		switch {
 		case byTag:
-			tagged = append(tagged, imageClaim{a.ID, tagVersion})
+			tagged = append(tagged, imageClaim{a.ID, tagVersion, true})
 		case byPath:
-			plain = append(plain, imageClaim{a.ID, tagVersion})
+			plain = append(plain, imageClaim{a.ID, tagVersion, true})
 		default:
 			if i := slices.IndexFunc(a.Matchers.Components, func(c registry.ComponentImage) bool { return imageMatches(ref, c.Image) }); i >= 0 {
-				plain = append(plain, imageClaim{a.ID, a.Matchers.Components[i].ProductLine(tagVersion)})
+				plain = append(plain, imageClaim{a.ID, a.Matchers.Components[i].ProductLine(tagVersion), false})
 			}
 		}
 	}
@@ -531,7 +535,11 @@ var ingressClassAddOns = map[string][]string{
 //     component image the product line its tag's line ships in. An image
 //     without a tag goes to the entry its pod's labels, or a Helm release
 //     in its namespace, name when that entry has a tag-qualified matcher
-//     of its repository (untaggedClaim).
+//     of its repository (untaggedClaim). An image whose tag names no
+//     version (a digest, ":latest") takes the version label of its pod
+//     when the pod's labels name the same add-on (labelAddOn), the oldest
+//     where pods differ; a tag is never overridden, and a component
+//     image's line is not guessed.
 //   - "labels": the pod's labels name the add-on (see labelAddOn), for a
 //     pod none of whose images that add-on's matchers claim but one of
 //     which no matcher claims at all: the container the labels are about
@@ -585,7 +593,7 @@ func matchAddOns(ev addOnEvidence, addons []registry.AddOn) ([]inventory.AddOnIn
 		if id, version := labelAddOn(p.Labels, addons); id != "" {
 			for _, img := range p.Images {
 				k := nsImage{p.Namespace, img}
-				labelNamed[k] = append(labelNamed[k], imageClaim{id, version})
+				labelNamed[k] = append(labelNamed[k], imageClaim{id, version, true})
 			}
 		}
 	}
@@ -593,7 +601,7 @@ func matchAddOns(ev addOnEvidence, addons []registry.AddOn) ([]inventory.AddOnIn
 	for _, rel := range ev.releases {
 		for _, a := range addons {
 			if slices.Contains(a.Matchers.Charts, rel.ChartName) {
-				releaseNamed[rel.Namespace] = append(releaseNamed[rel.Namespace], imageClaim{a.ID, ""})
+				releaseNamed[rel.Namespace] = append(releaseNamed[rel.Namespace], imageClaim{a.ID, "", true})
 			}
 		}
 	}
@@ -605,6 +613,17 @@ func matchAddOns(ev addOnEvidence, addons []registry.AddOn) ([]inventory.AddOnIn
 			claims = []imageClaim{c}
 		}
 		for _, c := range claims {
+			// An image that names no version (a digest, ":latest") is the
+			// version its pod's labels give the same add-on (#301), the
+			// oldest where pods sharing the image differ. A tag always
+			// decides; a component image's line is never guessed.
+			if c.version == "" && c.byTag {
+				for _, n := range labelNamed[img] {
+					if n.id == c.id {
+						c.version = olderVersion(c.version, n.version)
+					}
+				}
+			}
 			in := install{c.id, img.Namespace}
 			byInstall[in] = append(byInstall[in], evidence{source: "image", version: c.version})
 		}

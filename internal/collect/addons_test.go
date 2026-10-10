@@ -520,8 +520,10 @@ func TestMatchAddOnsUntaggedImageNamedByLabelsOrRelease(t *testing.T) {
 			[]inventory.AddOnInstance{{ID: "rke2-ingress-nginx", Version: "1.12.4", ChartVersion: "4.12.401", Namespaces: []string{"kube-system"}, Source: "chart"}}},
 		{"digest-only, no labels or release: the path-only entry", pod(nil, digest),
 			[]inventory.AddOnInstance{{ID: "ingress-nginx", Namespaces: []string{"kube-system"}, Source: "image"}}},
-		{"digest-only, upstream's labels: the path-only entry", pod(nginxLabels, digest),
-			[]inventory.AddOnInstance{{ID: "ingress-nginx", Namespaces: []string{"kube-system"}, Source: "image"}}},
+		// Upstream's labels name ingress-nginx, whose version label the
+		// digest-only image takes (#301).
+		{"digest-only, upstream's labels: the path-only entry at the label's version", pod(nginxLabels, digest),
+			[]inventory.AddOnInstance{{ID: "ingress-nginx", Version: "1.11.2", Namespaces: []string{"kube-system"}, Source: "image"}}},
 		{"the release is in another namespace", withReleases(pod(nil, digest), []inventory.HelmRelease{{Name: "x", Namespace: "edge", ChartName: "rke2-ingress-nginx", AppVersion: "1.12.4", Status: "deployed"}}),
 			[]inventory.AddOnInstance{
 				{ID: "ingress-nginx", Namespaces: []string{"kube-system"}, Source: "image"},
@@ -730,5 +732,90 @@ func TestCollectAddOnsFollowsListPagination(t *testing.T) {
 	}
 	if !reflect.DeepEqual(inv.AddOns, want) {
 		t.Errorf("addons = %#v\nwant   %#v (images from every page must count)", inv.AddOns, want)
+	}
+}
+
+// An image an entry claims but that names no version (pinned by digest, or
+// ":latest") takes the version label of its own pod when the labels name
+// the same add-on under the label trust rule (#301): a manifest rendered by
+// helm template keeps app.kubernetes.io/version, though its image carries
+// no tag. A parsed tag is never overridden by a label; a label naming
+// another add-on, or one the trust rule does not vouch for, gives nothing;
+// and a component image, whose version is its product line, is not
+// guessed from a label.
+func TestMatchAddOnsImageWithoutVersionTakesLabelVersion(t *testing.T) {
+	addons, err := registry.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	const (
+		digest   = "quay.io/jetstack/cert-manager-controller@sha256:3b1ab0b56f1c2f1f9ba0c6a4b9b4b1b4f0b9d2b2b6c9e2e1d0c1b2a3f4e5d6c7"
+		latest   = "quay.io/jetstack/cert-manager-controller:latest"
+		tagged   = "quay.io/jetstack/cert-manager-controller:v1.14.2"
+		digested = "quay.io/jetstack/cert-manager-controller:v1.14.2@sha256:3b1ab0b56f1c2f1f9ba0c6a4b9b4b1b4f0b9d2b2b6c9e2e1d0c1b2a3f4e5d6c7"
+	)
+	cm := func(version string) map[string]string {
+		return map[string]string{"app.kubernetes.io/name": "cert-manager", "app.kubernetes.io/version": version}
+	}
+	pods := func(images ...string) func(map[string]string) addOnEvidence {
+		return func(labels map[string]string) addOnEvidence {
+			var ev addOnEvidence
+			for _, img := range images {
+				ev.addPod("cert-manager", labels, []string{img})
+			}
+			return ev
+		}
+	}
+	inst := func(version string) []inventory.AddOnInstance {
+		return []inventory.AddOnInstance{{ID: "cert-manager", Version: version, Namespaces: []string{"cert-manager"}, Source: "image"}}
+	}
+	for _, tc := range []struct {
+		name string
+		ev   addOnEvidence
+		want []inventory.AddOnInstance
+	}{
+		{"digest-only, name label with version", pods(digest)(cm("v1.12.3")), inst("1.12.3")},
+		{"latest, name label with version", pods(latest)(cm("v1.12.3")), inst("1.12.3")},
+		{"digest-only, chart label without a name label",
+			pods(digest)(map[string]string{"helm.sh/chart": "cert-manager-v1.12.3", "app.kubernetes.io/version": "v1.12.3"}), inst("1.12.3")},
+		{"digest-only, no version label", pods(digest)(map[string]string{"app.kubernetes.io/name": "cert-manager"}), inst("")},
+		{"digest-only, no labels at all", pods(digest)(nil), inst("")},
+		{"digest-only, a label naming another add-on",
+			pods(digest)(map[string]string{"app.kubernetes.io/name": "cilium", "app.kubernetes.io/version": "1.15.0"}), inst("")},
+		{"digest-only, part-of names it but the version is not vouched for",
+			pods(digest)(map[string]string{"app.kubernetes.io/part-of": "cert-manager", "app.kubernetes.io/version": "v1.12.3"}), inst("")},
+		{"digest-only, a name label for another app overrides the chart label",
+			pods(digest)(map[string]string{"app.kubernetes.io/name": "webhook", "helm.sh/chart": "cert-manager-v1.12.3", "app.kubernetes.io/version": "v1.12.3"}), inst("")},
+		{"digest-only, an unparseable version label", pods(digest)(cm("stable")), inst("")},
+		{"a tag wins over a different label", pods(tagged)(cm("v1.12.3")), inst("1.14.2")},
+		{"a tag with a digest wins over a different label", pods(digested)(cm("v1.12.3")), inst("1.14.2")},
+		// The conservative-oldest rule holds across instances in a namespace.
+		{"digest-only and tagged pods: the oldest", pods(digest, tagged)(cm("v1.12.3")), inst("1.12.3")},
+		{"latest and a tagged pod, label newer: the tag is older", pods(latest, tagged)(cm("v1.16.0")), inst("1.14.2")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, unrec := matchAddOns(tc.ev, addons)
+			if !reflect.DeepEqual(got, tc.want) || len(unrec) != 0 {
+				t.Errorf("got %+v unrecognized %v, want %+v and none", got, unrec, tc.want)
+			}
+		})
+	}
+
+	// Two pods on one digest with different version labels: the older.
+	var ev addOnEvidence
+	ev.addPod("cert-manager", cm("v1.16.0"), []string{digest})
+	ev.addPod("cert-manager", cm("v1.12.3"), []string{digest})
+	if got, _ := matchAddOns(ev, addons); !reflect.DeepEqual(got, inst("1.12.3")) {
+		t.Errorf("one digest, two version labels: got %+v, want the older 1.12.3", got)
+	}
+
+	// A component image maps its tag's line to a product line; an unmapped
+	// line stays "no version" however the pod is labelled (never a guess).
+	var flux addOnEvidence
+	flux.addPod("flux-system", map[string]string{"app.kubernetes.io/name": "flux", "app.kubernetes.io/version": "v2.7.0"},
+		[]string{"ghcr.io/fluxcd/source-controller@sha256:3b1ab0b56f1c2f1f9ba0c6a4b9b4b1b4f0b9d2b2b6c9e2e1d0c1b2a3f4e5d6c7"})
+	want := []inventory.AddOnInstance{{ID: "flux", Namespaces: []string{"flux-system"}, Source: "image"}}
+	if got, _ := matchAddOns(flux, addons); !reflect.DeepEqual(got, want) {
+		t.Errorf("component image without a tag: got %+v, want %+v", got, want)
 	}
 }
