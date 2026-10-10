@@ -120,24 +120,34 @@ func fleetOutputSchema() map[string]any {
 	}
 }
 
-// reportResolved is ReportOutputSchema compiled by the validator the MCP
-// SDK applies to a tool's output, so a report that passes checkReport is one
-// the SDK sends.
-var reportResolved = sync.OnceValue(func() *jsonschema.Resolved {
-	raw, err := json.Marshal(ReportOutputSchema())
+// resolveSchema compiles a tool's output schema by the validator the MCP
+// SDK applies to a tool's output, so a document that passes it is one the SDK
+// sends.
+func resolveSchema(schema map[string]any) *jsonschema.Resolved {
+	raw, err := json.Marshal(schema)
 	if err != nil {
-		panic(fmt.Sprintf("mcp: report schema: %v", err))
+		panic(fmt.Sprintf("mcp: output schema: %v", err))
 	}
 	var s jsonschema.Schema
 	if err := json.Unmarshal(raw, &s); err != nil {
-		panic(fmt.Sprintf("mcp: report schema: %v", err))
+		panic(fmt.Sprintf("mcp: output schema: %v", err))
 	}
 	r, err := s.Resolve(nil)
 	if err != nil {
-		panic(fmt.Sprintf("mcp: report schema does not resolve: %v", err))
+		panic(fmt.Sprintf("mcp: output schema does not resolve: %v", err))
 	}
 	return r
-})
+}
+
+// The output schemas of the tools, compiled once. markedResult checks the
+// document it has cut against its tool's.
+var (
+	reportResolved   = sync.OnceValue(func() *jsonschema.Resolved { return resolveSchema(ReportOutputSchema()) })
+	findingsResolved = sync.OnceValue(func() *jsonschema.Resolved { return resolveSchema(FindingsOutputSchema()) })
+	scanResolved     = sync.OnceValue(func() *jsonschema.Resolved { return resolveSchema(ScanOutputSchema()) })
+	registryResolved = sync.OnceValue(func() *jsonschema.Resolved { return resolveSchema(registryOutputSchema()) })
+	fleetResolved    = sync.OnceValue(func() *jsonschema.Resolved { return resolveSchema(fleetOutputSchema()) })
+)
 
 // errNotJSON is the whole reason given for a document that is not JSON:
 // encoding/json's error quotes the offending character, and the document
@@ -156,6 +166,13 @@ func checkReport(doc json.RawMessage) error {
 	}
 	if err := reportResolved().Validate(&v); err != nil {
 		return fmt.Errorf("it does not follow api/report.schema.json (%s)", schemaReason(err))
+	}
+	// The schema leaves a report's objects open, and decoders differ in
+	// what they make of a repeated or case-folded member name, so the
+	// document the schema check judged must be the one every reader reads;
+	// and marking the text may not cut a value the schema gives a form.
+	if err := checkMembers(doc); err != nil {
+		return err
 	}
 	return nil
 }

@@ -13,6 +13,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/google/jsonschema-go/jsonschema"
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/abd-ulbasit/upgradescope/internal/engine"
@@ -444,11 +445,25 @@ func (c clusterText) meta() map[string]any {
 // markedResult is the result of a tool: the notice, then the document (each
 // outside string cut to MaxClusterTextBytes) as text, as the SDK would send
 // it, and the marker in _meta. It is refused, saying what to ask for
-// instead, when it is too large for a client to receive.
-func markedResult(doc json.RawMessage, instead string) (*mcpsdk.CallToolResult, json.RawMessage, error) {
+// instead, when it is too large for a client to receive. schema is the
+// tool's output schema: when anything was cut, the marked document is
+// checked against it, so a cut that breaks the form a schema gives a value
+// (a pattern) is the tool's error, which says where and which rule, and
+// never the SDK's own output check, which fails the call as a JSON-RPC
+// protocol error.
+func markedResult(doc json.RawMessage, instead string, schema *jsonschema.Resolved) (*mcpsdk.CallToolResult, json.RawMessage, error) {
 	marked, found, err := markClusterText(doc)
 	if err != nil {
 		return nil, nil, err
+	}
+	if found.Cut > 0 {
+		var v any
+		if err := json.Unmarshal(marked, &v); err != nil {
+			return nil, nil, fmt.Errorf("marking the outside text: %w", errNotJSON)
+		}
+		if err := schema.Validate(&v); err != nil {
+			return nil, nil, fmt.Errorf("the result, once its outside text is cut to %d bytes, does not follow its output schema (%s)", MaxClusterTextBytes, schemaReason(err))
+		}
 	}
 	note := found.notice()
 	if err := fits(marked, note, instead); err != nil {
