@@ -32,6 +32,13 @@
 #                    (0 is the vanilla cluster; 1 is 2000 nodes, 10000 pods,
 #                    6000 ConfigMaps, 4000 Deployments, 1000 Helm releases)
 #   BENCH_TICKS      ticks measured per level, default 5
+#   BENCH_POD_PASS_EVERY  the agent's --pod-pass-every for the measured ticks
+#                    (default: the agent's own, 3; 1 lists every pod every tick,
+#                    as before #228). With more than 1, the report tells the
+#                    ticks that listed every pod from those that reused the
+#                    last pass: run enough ticks for both after the first
+#                    (BENCH_TICKS=8 gives two of the one and five of the other
+#                    at 3).
 #   BENCH_GITOPS     1 adds the GitOps fill above; unset (or anything else is
 #                    refused) leaves it out
 #   BENCH_GITOPS_APPS, BENCH_GITOPS_HELMRELEASES  Argo CD Applications and Flux
@@ -92,6 +99,7 @@ for v in BENCH_SETTLE_SECONDS BENCH_GITOPS_APPS BENCH_GITOPS_HELMRELEASES; do
 done
 # The benchmark itself refuses anything but 1, but only after a build and a
 # fill of the lab; refuse here, before either.
+case "${BENCH_POD_PASS_EVERY:-}" in "" | [1-9] | [1-9][0-9]*) ;; *) die "BENCH_POD_PASS_EVERY=$BENCH_POD_PASS_EVERY: set it to a whole number of at least 1, or leave it unset" ;; esac
 case "${BENCH_NO_HELM_CACHE:-}" in "" | 1) ;; *) die "BENCH_NO_HELM_CACHE=$BENCH_NO_HELM_CACHE: set it to 1 or leave it unset" ;; esac
 mkdir -p "$BENCH_BIN"
 BENCH_BIN=$(cd "$BENCH_BIN" && pwd -P)
@@ -194,6 +202,7 @@ measure() {
   local vars=(UPGRADESCOPE_BENCH_TICKS="$BENCH_TICKS" UPGRADESCOPE_BENCH_LABEL="$1"
     UPGRADESCOPE_BENCH_EXPECT_NODES="$2" UPGRADESCOPE_BENCH_EXPECT_HELM="$3")
   [ -z "${BENCH_GITOPS:-}" ] || vars+=(UPGRADESCOPE_BENCH_GITOPS=1 UPGRADESCOPE_BENCH_EXPECT_GITOPS="$4")
+  [ -z "${BENCH_POD_PASS_EVERY:-}" ] || vars+=(UPGRADESCOPE_BENCH_POD_PASS_EVERY="$BENCH_POD_PASS_EVERY")
   [ -z "${BENCH_NO_HELM_CACHE:-}" ] || vars+=(UPGRADESCOPE_BENCH_NO_HELM_CACHE="$BENCH_NO_HELM_CACHE")
   if [ "$BENCH_RUN_ON" = local ]; then
     env "${vars[@]}" UPGRADESCOPE_BENCH_KUBECONFIG="$KUBECONFIG" UPGRADESCOPE_BENCH_OUT="$results" \

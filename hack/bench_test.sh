@@ -193,6 +193,47 @@ else
 fi
 BENCH_REPORT_FORMAT=json "hack/bench/agent-report.sh" "$work/gitops.jsonl" 2>&1 | jq -e ".[0].gitops.charts == 0 and .[1].gitops.charts == 200 and .[1].gitops.requests == 48" >/dev/null && ok "agent-report.sh: json carries the GitOps summary" || fail "agent-report.sh json gitops" "$work/gitops-report"
 
+# The pod pass reuse (#228): ticks that carry addOnEvidenceAgeSeconds reused
+# the last full pass. Eight ticks at full size, the default cadence of 3:
+# 1 the cold pass, 2 and 3 reused, 4 and 7 passes, 5, 6 and 8 reused. The
+# first table is the medians of the passes after the first (31 and 33
+# requests: 32, 16 and 18 pod pages: 17), the second of the reused (20, 22,
+# 18, 24 and 26 requests: 22; pod pages 0; ages up to 3600).
+ptick() { # ptick <n> <requests> <pod pages> <age seconds, 0 = a pass>
+  jq -nc --argjson tick "$1" --argjson req "$2" --argjson pages "$3" --argjson age "$4" '{
+    label: "fill=1 nodes=2000", tick: $tick, wallMs: 4000, collectMs: 3900, cpuMs: 3000, requests: $req,
+    byVerbResource: [{verb: "LIST", resource: "pods", count: $pages, bytes: ($pages * 1048576)}],
+    bodyBytes: ($req * 1048576), wireDownBytes: 2097152, wireUpBytes: 1048576, connections: 1,
+    peakHeapBytes: 52428800, peakRuntimeBytes: 83886080, maxRssBytes: 104857600,
+    nodes: 2001, namespaces: 3, helmReleases: 1000, addOns: 0, apiUsage: 0, targets: 1, capabilities: {}}
+    | if $age > 0 then . + {addOnEvidenceAgeSeconds: $age} else . end'
+}
+{
+  ptick 1 1037 16 0
+  ptick 2 20 0 600
+  ptick 3 22 0 1200
+  ptick 4 31 16 0
+  ptick 5 18 0 600
+  ptick 6 24 0 1200
+  ptick 7 33 18 0
+  ptick 8 26 0 3600
+} >"$work/podpass.jsonl"
+"hack/bench/agent-report.sh" "$work/podpass.jsonl" >"$work/podpass-report" 2>&1 || true
+if grep -qF "| 1 | 2001 | 1000 | 32 | 17 |" "$work/podpass-report" &&
+  grep -qF "Per tick that reused the last pod pass" "$work/podpass-report" &&
+  grep -qF "| 1 | 5 | 22 | 0 |" "$work/podpass-report" &&
+  grep -qE '\| 3600 \|$' "$work/podpass-report" &&
+  grep -qF "| LIST | pods | 0 | 0 | - |" "$work/podpass-report" &&
+  grep -qF "| LIST | pods | 16 | 16 | - |" "$work/podpass-report"; then
+  ok "agent-report.sh: ticks that listed every pod and ticks that reused the pass are reported apart"
+else
+  fail "agent-report.sh pod pass tables" "$work/podpass-report"
+fi
+BENCH_REPORT_FORMAT=json "hack/bench/agent-report.sh" "$work/podpass.jsonl" 2>&1 | jq -e '.[0].requests == 32 and .[0].steadyTicks == 2 and .[0].reusedPods.ticks == 5 and .[0].reusedPods.requests == 22 and .[0].reusedPods.maxAgeS == 3600' >/dev/null && ok "agent-report.sh: json carries the reused ticks' summary" || fail "agent-report.sh json pod pass" "$work/podpass-report"
+# A run with no reuse has no second table and a null summary.
+if grep -qF "reused the last pod pass" "$work/report"; then fail "agent-report.sh: a run that reused no pass printed the reuse table" "$work/report"; else ok "agent-report.sh: no reuse table without reused ticks"; fi
+[ "$(jq '[.[] | .reusedPods] | unique' "$work/report.json" 2>/dev/null | tr -d ' \n')" = "[null]" ] && ok "agent-report.sh: json reusedPods is null without reuse" || fail "agent-report.sh json reusedPods without reuse" "$work/report.json"
+
 # --- serve.sh and serve-report.sh --------------------------------------------
 expect "serve.sh: an unknown backend is refused" 1 "unknown backend mysql" -- env BENCH_BACKENDS=mysql BENCH_BIN="$work/bin" GO_STUB_RC=0 hack/bench/serve.sh
 # Every backend name is checked before anything is built or run: a typo in the
