@@ -40,7 +40,16 @@ quote them.
   10 October 2026, 02:56 to 03:12 UTC, on lab A: the 5 ticks that reused the
   pass made 20 requests, read 27.8 MiB (1.5 MiB on the wire) in 2.4 s and 1.8
   CPU-seconds (medians); the 2 that listed every pod made 31, read 50.4 MiB
-  (3.3 on the wire) in 4.4 s and 3.4 CPU-seconds, as before. The mean over a
+  (3.3 on the wire) in 4.4 s and 3.4 CPU-seconds. The requests are those
+  of the earlier run at `9810fb6` (below); its time and CPU are not
+  comparable, because this run was made with the ThinkPad's load average
+  at 8.5 to 11.9 (4 threads), and that run took 3.7 s, 3.0 CPU-seconds and
+  3.1 MiB on the wire. The numbers were measured before `8ca7e786` (a
+  change in the Helm releases or GitOps charts that name an add-on forces a
+  pass) and still hold at its head: the fill's charts (`chart-rel-NNNN`)
+  name no registry add-on, so the signature that trigger compares is empty
+  on every tick and the requests are unchanged. That was checked from the
+  seed (`hack/bench/seed/helm.go`) and the registry, not re-measured. The mean over a
   cycle of 3 is 23.7 requests, 35.3 MiB and 2.3 CPU-seconds (computed from
   those medians, not measured). The price is staleness: an add-on installed
   or upgraded right after a full pass, other than through Helm or a GitOps
@@ -482,6 +491,12 @@ one, so a viewer can see evidence up to about the maximum age plus one
 interval old. An add-on removed or one whose last pod went away is
 likewise reported until the next full pass.
 
+A `--pod-pass-max-age` at or below `--interval` defeats the setting: the
+pass is about one interval old at the next tick, so every tick lists every
+pod but one the jitter brings early, and the agent logs a warning at start.
+To allow `--pod-pass-every` minus 1 reuses, the maximum age must exceed
+the interval times that many.
+
 Which add-ons can be behind. Those in `kube-system` cannot: their pods are
 read on every tick. A change made through Helm (a new release, or a new
 revision of one, which an upgrade, a rollback and a values change all make)
@@ -494,7 +509,8 @@ manifest); and an upgrade made by a GitOps tool through a version
 constraint (`4.*`), which leaves the resource untouched.
 The age of what a tick reused is `addOnEvidenceAgeSeconds` in the
 inventory and the report (absent when every pod was read), the same on the
-ClusterReadiness status, in the tick's log line and in
+ClusterReadiness status, in the tick's log line, on the dashboard's Cluster view
+(as "Pod evidence N min old") and in
 `upgradescope_addon_evidence_age_seconds`. It is not part of the snapshot
 hash, on the agent or on the server, so a reusing tick pushes nothing new
 (`TestSnapshotHashIgnoresAddOnEvidenceAge`,
@@ -552,11 +568,12 @@ the same with the setting off; the numbers of the table above are run 1's.
 Deployments, DaemonSets and StatefulSets with their resourceVersions
 (or generations), compared with the last pass, could force a pass when a
 workload changed. At this fill it is not cheap, computed from the object
-counts and not measured: 4,000 Deployments are 4 pages of 1,000 (or 2 of
-2,000), and DaemonSets and StatefulSets 1 each, 4 to 6 requests more on a
-tick that makes 20 or 31 (the list is made on every tick), which puts a
-reusing tick at 24 to 26 and the mean of a cycle of 3 at 27.7 to 29.7, over
-the issue's 25; resourceVersions of a Deployment change with every
+counts and not measured, at the collector's metadata page size of 500
+(`listPageSize`, PF-07: ceil(N / 500) requests): 4,000 Deployments are 8
+pages, and the DaemonSets and the StatefulSets (fewer than 500 of each) 1
+each, 10 requests more on a tick that makes 20 or 31 (the list is made on
+every tick), which puts a reusing tick at 30, a tick that lists every pod
+at 41 and the mean of a cycle of 3 at 33.7, over the issue's 25 by 8.7; resourceVersions of a Deployment change with every
 status update, so a busy cluster would force a pass almost every tick; and
 it does not see a pod that no such workload owns (a Job, a CronJob, a bare
 pod or an operator's pod), so the staleness bound would still be the

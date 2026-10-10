@@ -128,6 +128,20 @@ To accept a finding for now, with a reason and an expiry, use an
   #228), and `--pod-pass-max-age` a positive duration; 0 does not mean the
   default (3 and 1h). The chart's `agent.podPassEvery` and
   `agent.podPassMaxAge` are refused at `helm install` for the same values.
+- **The agent logs `pod-pass-max-age is at or below the interval`, and
+  every tick lists every pod.** A `--pod-pass-max-age` at or below
+  `--interval` (with `--pod-pass-every` above 1) is not refused, but it
+  cannot work as set: the last full pass is about one interval old by the
+  next tick, so that tick finds it too old and lists every pod, and only
+  a tick that the jitter (up to 10% either way) brings early can still
+  reuse it. The request savings of [the pod pass
+  setting](operations/scale.md#the-pod-pass-every-nth-tick-228) are then
+  not there, and `--pod-pass-every` has no effect. Raise
+  `--pod-pass-max-age` above the interval times `--pod-pass-every` minus
+  one (at a 30-minute interval the default hour allows one reuse, and at
+  an hour or more none), or set `--pod-pass-every=1` (`agent.podPassEvery=1`)
+  if reading every pod on every tick is what you want, which also ends the
+  warning.
 - **An add-on I just installed or upgraded is missing, or still shows its
   old version.** The agent lists the pods outside `kube-system` only every
   `--pod-pass-every` ticks (3 by default, so about every 30 minutes at the
