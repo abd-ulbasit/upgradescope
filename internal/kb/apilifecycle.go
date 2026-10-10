@@ -33,6 +33,11 @@ type APILifecycleEntry struct {
 	// guide (which stops at v1.32) and the successor's changelog
 	// (ReplacementCitation).
 	ReplacementDefaulted bool `json:"replacementDefaulted,omitempty"`
+	// Migration is a hand-written note on leaving this version (what to
+	// change besides the apiVersion, or where to go when there is no
+	// successor), merged from data/migrations.json by Load. It is never in
+	// apilifecycle.json, which gen-kb writes whole.
+	Migration *Migration `json:"migration,omitempty"`
 }
 
 // BuiltinGroup is a built-in API group (one gen-kb's scheme registers),
@@ -136,6 +141,10 @@ func servedAt(e APILifecycleEntry, target inventory.Version) bool {
 	return e.Introduced.Compare(target) <= 0 && (e.Removed == nil || e.Removed.Compare(target) > 0)
 }
 
+// Serves reports whether target serves e: introduced at or before it, and
+// not removed by it.
+func (e APILifecycleEntry) Serves(target inventory.Version) bool { return servedAt(e, target) }
+
 // ResolveReplacement returns the API to migrate e to for an upgrade to
 // target, only ever one the KB knows target serves: introduced at or
 // before it, and not removed by it. It follows the replacement chain
@@ -147,6 +156,9 @@ func servedAt(e APILifecycleEntry, target inventory.Version) bool {
 // v1beta1), and none when there is no such version. A hop the KB has no
 // entry for carries no lifecycle evidence and is returned as is (the
 // dataset tests require every shipped replacement to be a known GVK). It
+// never names a version less mature than e's (alpha < beta < GA, from the
+// version name, #332): a source whose GA replacement is not served yet is
+// not sent back to an alpha or beta (LaterReplacement names the GA one). It
 // reports false when no served replacement is known: e has no
 // replacement, the chain dead-ends at a removed API, loops, or reaches a
 // hop not served yet with no served alternative (LaterReplacement then
@@ -157,12 +169,15 @@ func (i Index) ResolveReplacement(e APILifecycleEntry, target inventory.Version)
 	case !ok:
 		return GVK{}, false
 	case !known || servedAt(r, target):
+		if stability(g.Version) < stability(e.Version) {
+			return GVK{}, false // never back to a less mature API
+		}
 		return g, true
 	}
 	// r is not introduced yet at target.
 	var best *APILifecycleEntry
 	for _, c := range i.byKind[GVK{Group: g.Group, Kind: g.Kind}] {
-		if c.Version == e.Version && c.Group == e.Group || !servedAt(c, target) || c.Introduced.Compare(e.Introduced) <= 0 {
+		if c.Version == e.Version && c.Group == e.Group || !servedAt(c, target) || c.Introduced.Compare(e.Introduced) <= 0 || stability(c.Version) < stability(e.Version) {
 			continue
 		}
 		if best == nil || c.Introduced.Compare(best.Introduced) > 0 {
@@ -181,12 +196,15 @@ func (i Index) ResolveReplacement(e APILifecycleEntry, target inventory.Version)
 // yet (resource.k8s.io/v1 DeviceClass at 1.33 is v1beta2, v1 is served from
 // 1.34). Newest is the latest Introduced; the same release is broken by
 // stability (GA, then beta, then alpha) and then by the version name, so
-// the answer does not depend on entry order. It reports false when the KB
-// knows no such version.
+// the answer does not depend on entry order. Like every remediation it is
+// never less mature than e (#332): a v1 manifest is not sent back to a
+// v1alpha1 the target happens to serve. When only a less mature version is
+// served, it reports false and the caller names the release that serves e.
+// It reports false when the KB knows no such version.
 func (i Index) ServedAlternative(e APILifecycleEntry, target inventory.Version) (GVK, bool) {
 	var best *APILifecycleEntry
 	for _, c := range i.byKind[GVK{Group: e.Group, Kind: e.Kind}] {
-		if c.Version == e.Version || !servedAt(c, target) {
+		if c.Version == e.Version || !servedAt(c, target) || stability(c.Version) < stability(e.Version) {
 			continue
 		}
 		if best == nil {
@@ -209,13 +227,13 @@ func (i Index) ServedAlternative(e APILifecycleEntry, target inventory.Version) 
 // target serves (scheduling.k8s.io/v1alpha2 Workload, removed in 1.37,
 // moves to v1beta1, served from 1.37; coordination.k8s.io/v1alpha1
 // LeaseCandidate, removed in 1.32, to v1alpha2, as v1beta1 is served only
-// from 1.33). The successor may be pre-GA (PreGA), and may itself be
+// from 1.33). It is never less mature than e (#332). The successor may be pre-GA (PreGA), and may itself be
 // removed later (its Removed says). Newest, and ties, as ServedAlternative.
 // It reports false when the KB knows no such version.
 func (i Index) ServedSuccessor(e APILifecycleEntry, target inventory.Version) (APILifecycleEntry, bool) {
 	var best *APILifecycleEntry
 	for _, c := range i.byKind[GVK{Group: e.Group, Kind: e.Kind}] {
-		if c.Version == e.Version || !servedAt(c, target) || c.Introduced.Compare(e.Introduced) <= 0 {
+		if c.Version == e.Version || !servedAt(c, target) || c.Introduced.Compare(e.Introduced) <= 0 || stability(c.Version) < stability(e.Version) {
 			continue
 		}
 		if best == nil {

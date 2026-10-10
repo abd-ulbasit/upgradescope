@@ -54,7 +54,7 @@ UNRECOGNIZED IMAGES (12)
   - corp.example/app-09
   …and 2 more (--output json lists up to 200)
 `
-	if got := buf.String(); !strings.HasSuffix(got, want) {
+	if got := buf.String(); !strings.HasSuffix(got, want+tableScope) {
 		t.Errorf("table output mismatch\n--- got ---\n%s\n--- want suffix ---\n%s", got, want)
 	}
 
@@ -64,7 +64,7 @@ UNRECOGNIZED IMAGES (12)
 	if err := WriteTable(&buf, r); err != nil {
 		t.Fatal(err)
 	}
-	if want := "UNRECOGNIZED IMAGES (1)\n  No add-on image matcher claims these repositories, so an add-on running one is found only through its labels or Helm release:\n  - corp.example/app-00\n"; !strings.HasSuffix(buf.String(), want) {
+	if want := "UNRECOGNIZED IMAGES (1)\n  No add-on image matcher claims these repositories, so an add-on running one is found only through its labels or Helm release:\n  - corp.example/app-00\n"; !strings.HasSuffix(buf.String(), want+tableScope) {
 		t.Errorf("table lacks %q:\n%s", want, buf.String())
 	}
 
@@ -95,7 +95,7 @@ func TestWriteMarkdownUnrecognizedImages(t *testing.T) {
 		"- …and 2 more (`--output json` lists up to 200)\n" +
 		"\n" +
 		"</details>\n"
-	if got := buf.String(); !strings.HasSuffix(got, want) {
+	if got := buf.String(); !strings.HasSuffix(got, want+mdScope) {
 		t.Errorf("markdown output mismatch\n--- got ---\n%s\n--- want suffix ---\n%s", got, want)
 	}
 

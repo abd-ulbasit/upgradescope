@@ -102,17 +102,27 @@ func namespaceBreakdown(counts map[string]int, emptyLabel string) (detail string
 	return detail, names
 }
 
-// teamsFor maps namespace names to teams via the inventory's namespace team
-// labels; result is deduped and sorted.
-func teamsFor(namespaces []string, nsInfo []inventory.NamespaceInfo) []string {
-	byName := make(map[string]string, len(nsInfo))
+// teamLookup maps namespace names to the team their label names, built
+// once per evaluation pass from the inventory's namespaces: a lookup that
+// rebuilt it per finding, Helm release or CRD cost their product with the
+// namespaces (#333).
+type teamLookup map[string]string
+
+func newTeamLookup(nsInfo []inventory.NamespaceInfo) teamLookup {
+	byName := make(teamLookup, len(nsInfo))
 	for _, n := range nsInfo {
 		byName[n.Name] = n.Team
 	}
+	return byName
+}
+
+// teamsFor maps namespace names to teams via the inventory's namespace team
+// labels; result is deduped and sorted.
+func (l teamLookup) teamsFor(namespaces []string) []string {
 	seen := map[string]bool{}
 	var teams []string
 	for _, ns := range namespaces {
-		if t := byName[ns]; t != "" && !seen[t] {
+		if t := l[ns]; t != "" && !seen[t] {
 			seen[t] = true
 			teams = append(teams, t)
 		}
@@ -148,6 +158,7 @@ func teamsFor(namespaces []string, nsInfo []inventory.NamespaceInfo) []string {
 //     ready. Other groups (CRDs, aggregated APIs) are never in the KB and
 //     produce nothing.
 func evalAPIUsage(inv inventory.Inventory, k kb.KB, target inventory.Version, b *budget) []Finding {
+	teams := newTeamLookup(inv.Namespaces)
 	idx := kb.NewIndex(k.APILifecycle)
 	builtin := map[string]bool{}
 	for _, e := range k.APILifecycle {
@@ -165,7 +176,7 @@ func evalAPIUsage(inv inventory.Inventory, k kb.KB, target inventory.Version, b 
 		listed := listedObjects(inv.Source, u)
 		nsDetail, nsNames := namespaceBreakdown(u.Namespaces, listed.emptyNamespace())
 		f := Finding{
-			Teams:          teamsFor(nsNames, inv.Namespaces),
+			Teams:          teams.teamsFor(nsNames),
 			Namespaces:     nsNames,
 			Citations:      []string{deprecationGuideURL},
 			Objects:        sortedObjects(u.Objects),
@@ -183,7 +194,7 @@ func evalAPIUsage(inv inventory.Inventory, k kb.KB, target inventory.Version, b 
 				}
 				f.Remediation = fmt.Sprintf("write it as %s %s, the newest version Kubernetes %s can serve%s, or upgrade the cluster to Kubernetes %s before applying it", gvString(alt.Group, alt.Version), alt.Kind, target, enable, e.Introduced)
 			} else {
-				f.Remediation = fmt.Sprintf("Kubernetes %s serves no version of %s the knowledge base knows: upgrade the cluster to Kubernetes %s before applying it", target, u.Kind, e.Introduced)
+				f.Remediation = fmt.Sprintf("Kubernetes %s serves no version of %s as mature as %s that the knowledge base knows: upgrade the cluster to Kubernetes %s before applying it", target, u.Kind, u.Version, e.Introduced)
 			}
 			f.Citations = append(f.Citations, apiVersioningURL)
 		} else if r, ok := idx.ResolveReplacement(e, target); ok {
@@ -196,10 +207,19 @@ func evalAPIUsage(inv inventory.Inventory, k kb.KB, target inventory.Version, b 
 			}
 		} else if later, from, ok := idx.LaterReplacement(e, target); ok {
 			f.Remediation = fmt.Sprintf("no replacement Kubernetes %s serves is known; %s %s is served from %s", target, gvString(later.Group, later.Version), later.Kind, from)
+			if e.Serves(target) {
+				// Nothing as mature as the version in use is served yet (#332):
+				// it is the right one for this target, not an older API.
+				f.Remediation += fmt.Sprintf("; %s is the right version for Kubernetes %s until then", gvString(u.Group, u.Version), target)
+			}
 		} else if succ, ok := idx.ServedSuccessor(e, target); ok {
 			f.Remediation = "migrate to " + successorRemedy(succ, k.MaxKnownK8s, false)
 		} else if e.Replacement != nil {
 			f.Remediation = fmt.Sprintf("no replacement Kubernetes %s serves is known", target)
+		}
+		if e.Migration != nil && !unserved {
+			f.Remediation = withMigration(f.Remediation, *e.Migration)
+			f.Citations = appendNew(f.Citations, e.Migration.Citations...)
 		}
 		gv := gvString(u.Group, u.Version)
 		projectedRemoval := ""
@@ -315,9 +335,9 @@ func listedObjects(src inventory.Source, u inventory.APIUsage) objectsListed {
 func (l objectsListed) emptyNamespace() string {
 	switch l {
 	case manifestObjects:
-		return "namespace unset"
+		return "no namespace set"
 	case mixedObjects:
-		return "cluster-scoped or namespace unset"
+		return "cluster-scoped or no namespace set"
 	}
 	return "cluster-scoped"
 }
@@ -336,6 +356,7 @@ const authorshipUnknownKey = "authorship-unknown"
 // verdict nor score. An API the KB does not flag is skipped, whatever an
 // inventory says.
 func evalAuthorshipUnknown(inv inventory.Inventory, k kb.KB, b *budget) []Finding {
+	teams := newTeamLookup(inv.Namespaces)
 	idx := kb.NewIndex(k.APILifecycle)
 	var out []Finding
 	for _, u := range inv.APIAuthorshipUnknown {
@@ -349,7 +370,7 @@ func evalAuthorshipUnknown(inv inventory.Inventory, k kb.KB, b *budget) []Findin
 			Severity:       SevInfo,
 			Key:            string(CatDeprecatedAPI) + "/" + apiKey(u.Group, u.Version, u.Kind) + "/" + authorshipUnknownKey,
 			Title:          fmt.Sprintf("%s %s: authorship unknown (%s)", gv, u.Kind, pluralObjects(u.Count)),
-			Teams:          teamsFor(nsNames, inv.Namespaces),
+			Teams:          teams.teamsFor(nsNames),
 			Namespaces:     nsNames,
 			Citations:      []string{deprecationGuideURL},
 			Objects:        sortedObjects(u.Objects),
@@ -428,6 +449,26 @@ func keyAPI(key string) string {
 	}
 	_, api, _ := strings.Cut(key, "/")
 	return api
+}
+
+// withMigration appends a KB migration note to a generated hint, or is the
+// note alone when there is no hint (#330): what a manifest needs besides a
+// new apiVersion, or where to go when the kind has no successor.
+func withMigration(hint string, m kb.Migration) string {
+	if hint == "" {
+		return m.Note
+	}
+	return hint + "; " + m.Note
+}
+
+// appendNew appends the values of add that dst does not hold, in order.
+func appendNew(dst []string, add ...string) []string {
+	for _, a := range add {
+		if !slices.Contains(dst, a) {
+			dst = append(dst, a)
+		}
+	}
+	return dst
 }
 
 // successorRemedy words the version ServedSuccessor found, with the
@@ -734,6 +775,7 @@ type addOnInstall struct {
 // the installs it is about; an ID absent from the registry produces
 // nothing.
 func evalAddOns(inv inventory.Inventory, k kb.KB, target inventory.Version, now time.Time) []Finding {
+	teams := newTeamLookup(inv.Namespaces)
 	byID := make(map[string]registry.AddOn, len(k.AddOns))
 	for _, a := range k.AddOns {
 		byID[a.ID] = a
@@ -757,7 +799,7 @@ func evalAddOns(inv inventory.Inventory, k kb.KB, target inventory.Version, now 
 		}
 		ns := slices.Sorted(slices.Values(inst.Namespaces))
 		installs[inst.ID] = append(installs[inst.ID], addOnInstall{
-			version: inst.Version, via: via, where: ns, teams: teamsFor(ns, inv.Namespaces),
+			version: inst.Version, via: via, where: ns, teams: teams.teamsFor(ns),
 		})
 	}
 	// An inventory from a collector that predates the stamp never took the
@@ -903,7 +945,7 @@ func unnamespaced(in addOnInstall) bool {
 // nsLabel names a namespace in an evidence sentence; "" is a manifest
 // object's unset metadata.namespace (files mode).
 func nsLabel(ns string) string {
-	return cmp.Or(ns, "namespace unset")
+	return cmp.Or(ns, "no namespace set")
 }
 
 // namedNamespaces drops the unset namespace "" from a finding's sorted
@@ -2064,6 +2106,7 @@ func helmReleaseRef(rel inventory.HelmRelease) string {
 //     the manifest's warning stays, so more evidence never lowers the
 //     severity.
 func evalHelmReleases(inv inventory.Inventory, k kb.KB, target inventory.Version, b *budget) []Finding {
+	teams := newTeamLookup(inv.Namespaces)
 	idx := kb.NewIndex(k.APILifecycle)
 	live := map[string][]inventory.ObjectRef{} // apiKey → live objects
 	for _, u := range inv.APIUsage {
@@ -2076,15 +2119,15 @@ func evalHelmReleases(inv inventory.Inventory, k kb.KB, target inventory.Version
 			continue
 		}
 		ns := []string{rel.Namespace}
-		teams := teamsFor(ns, inv.Namespaces)
+		relTeams := teams.teamsFor(ns)
 		if f, ok := evalChartKubeVersion(rel, target); ok {
-			f.Namespaces, f.Teams = ns, teams
+			f.Namespaces, f.Teams = ns, relTeams
 			if !b.add(&out, f) {
 				return out
 			}
 		}
 		for _, f := range evalHelmManifest(rel, idx, live, target, k.MaxKnownK8s) {
-			f.Namespaces, f.Teams = ns, teams
+			f.Namespaces, f.Teams = ns, relTeams
 			if !b.add(&out, f) {
 				return out
 			}

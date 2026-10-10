@@ -116,7 +116,8 @@ func TestReadSnapshotMatchesScheme(t *testing.T) {
 		fixReplacement(&e)
 		want, tagged := tags[k]
 		if tagged {
-			fixRemoval(&e) // extract corrects a tagged removal that kube-apiserver outlived (taggedRemovalFixes)
+			fixRemoval(&e)    // extract corrects a tagged removal that kube-apiserver outlived (taggedRemovalFixes)
+			fixIntroduced(&e) // and a tagged introduction that is wrong (introducedFixes)
 		}
 		// A lifecycle from untaggedLifecycles is no upstream tag: the
 		// source still reads as untagged.

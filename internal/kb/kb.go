@@ -53,7 +53,7 @@ type UpgradeStep struct {
 // Load builds the KB from the embedded API lifecycle dataset, the embedded
 // add-on registry, and the default skew policy. It fails loudly on a
 // corrupt or empty dataset — a silent empty KB would mean silent green scans.
-func Load() (KB, error) { return load(apilifecycleJSON) }
+func Load() (KB, error) { return loadWith(apilifecycleJSON, migrationsJSON, "") }
 
 // LoadWithRegistry is Load with operator-supplied registry entries applied
 // to the embedded ones (registry.LoadExtra: a file or a directory of
@@ -61,19 +61,24 @@ func Load() (KB, error) { return load(apilifecycleJSON) }
 // id replaces it). extra "" is Load. A bad extra entry fails the load,
 // naming the path and the file. The extra entries are part of the version
 // label, so a report says which registry judged it.
-func LoadWithRegistry(extra string) (KB, error) { return loadWith(apilifecycleJSON, extra) }
+func LoadWithRegistry(extra string) (KB, error) {
+	return loadWith(apilifecycleJSON, migrationsJSON, extra)
+}
 
-// load builds the KB from the given lifecycle dataset; Load passes the
-// embedded one. Beyond parsing, it refuses a dataset too small or with too
+// load builds the KB from the given lifecycle dataset, with no migration
+// notes; Load passes the embedded ones. Beyond parsing, it refuses a dataset too small or with too
 // few removals to be the generated one (checkLifecycleFloors).
-func load(lifecycle []byte) (KB, error) { return loadWith(lifecycle, "") }
+func load(lifecycle []byte) (KB, error) { return loadWith(lifecycle, nil, "") }
 
-func loadWith(lifecycle []byte, extra string) (KB, error) {
+func loadWith(lifecycle, migrations []byte, extra string) (KB, error) {
 	f, err := parseLifecycle(lifecycle)
 	if err != nil {
 		return KB{}, err
 	}
 	if err := checkLifecycleFloors(f); err != nil {
+		return KB{}, err
+	}
+	if err := applyMigrations(f.Entries, migrations); err != nil {
 		return KB{}, err
 	}
 	maxKnown, err := inventory.ParseVersion(f.MaxKnownK8s)

@@ -309,16 +309,15 @@ func TestServedAlternative(t *testing.T) {
 		target               int
 		want                 string // group/version, "" = none
 	}{
-		// resource.k8s.io v1 is served from 1.34; v1beta2 (1.33) is the newest before it.
-		{"resource.k8s.io", "v1", "DeviceClass", 33, "resource.k8s.io/v1beta2"},
-		{"resource.k8s.io", "v1", "DeviceClass", 32, "resource.k8s.io/v1beta1"},
-		// Workload v1beta1 is served from 1.37; at 1.36 only v1alpha2 is.
-		{"scheduling.k8s.io", "v1beta1", "Workload", 36, "scheduling.k8s.io/v1alpha2"},
-		{"scheduling.k8s.io", "v1beta1", "Workload", 35, "scheduling.k8s.io/v1alpha1"},
-		// Nothing of the kind is served before 1.35.
+		// A beta manifest is offered an equally mature version: v1beta1
+		// DeviceClass is served from 1.32, v1beta2 from 1.33.
+		{"resource.k8s.io", "v1beta1", "DeviceClass", 33, "resource.k8s.io/v1beta2"},
+		// A GA manifest is never sent back to a beta or an alpha (#332): none.
+		{"resource.k8s.io", "v1", "DeviceClass", 33, ""},
+		{"storage.k8s.io", "v1", "VolumeAttributesClass", 33, ""},
+		// Nor a beta manifest to an alpha: Workload v1beta1 at 1.36 has only v1alpha2.
+		{"scheduling.k8s.io", "v1beta1", "Workload", 36, ""},
 		{"scheduling.k8s.io", "v1beta1", "Workload", 34, ""},
-		// v1 VolumeAttributesClass is served from 1.34, v1beta1 from 1.31.
-		{"storage.k8s.io", "v1", "VolumeAttributesClass", 33, "storage.k8s.io/v1beta1"},
 	}
 	for _, c := range cases {
 		e, ok := idx.Lookup(c.group, c.version, c.kind)
@@ -514,9 +513,9 @@ func TestServedAlternativeIsNeverTheEntryItself(t *testing.T) {
 	}
 	beta, ga := entry("v1beta1", 30), entry("v1", 34)
 	idx := NewIndex([]APILifecycleEntry{beta, ga})
-	// ga is served at 1.36 and is the newest: the alternative is the older beta.
-	if g, ok := idx.ServedAlternative(ga, v(36)); !ok || g.Version != "v1beta1" {
-		t.Errorf("ServedAlternative(v1 served at 1.36) = %v, %v; want example.k8s.io v1beta1", g, ok)
+	// ga is served at 1.36 and is the newest, and the beta is less mature: none.
+	if g, ok := idx.ServedAlternative(ga, v(36)); ok {
+		t.Errorf("ServedAlternative(v1 served at 1.36) = %v, want none (the older beta is less mature)", g)
 	}
 	// And the other way round: beta is served too, and the newer v1 is the alternative.
 	if g, ok := idx.ServedAlternative(beta, v(36)); !ok || g.Version != "v1" {

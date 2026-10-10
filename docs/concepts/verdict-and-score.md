@@ -73,6 +73,20 @@ the manifests without being required (an image injected at admission is
 not in them); `versions`, `deprecated-calls` and `helm` are reported with
 the reason `files mode`.
 
+## What a verdict does not cover
+
+`ready` means that no blocker was found among what the engine judges, and
+that every required check ran. The engine judges the `apiVersion` and `kind`
+of each object against the API lifecycle data. It does **not** assess
+field-level removals or in-tree volume-plugin removals inside an API that is
+still served: a pod spec that uses `glusterfs`, `awsElasticBlockStore`,
+`cephfs` or `rbd` volumes, or the deprecated `gitRepo` volume, scans as
+`ready` with a score of 100. The table and Markdown reports end with a line
+saying so ("Not checked by this version: field-level removals and in-tree
+volume-plugin removals inside served APIs."). This is a disclosure, not a
+check: it changes no score, verdict or exit code, and the JSON report does
+not carry it.
+
 ## Severity, by category
 
 Severity depends on the category. Only some categories depend on the

@@ -6,7 +6,7 @@
       "citations": [
         "https://kubernetes.io/docs/reference/using-api/deprecation-guide/"
       ],
-      "detail": "1 manifest object(s) use this API: namespace unset (1).",
+      "detail": "1 manifest object(s) use this API: no namespace set (1).",
       "key": "removed-api/resource.k8s.io/v1alpha3/DeviceClass",
       "objects": [
         {

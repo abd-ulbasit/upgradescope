@@ -347,7 +347,7 @@ func TestRemediationNamesOnlyServedReplacement(t *testing.T) {
 	}{
 		{"storage.k8s.io", "v1alpha1", "VolumeAttributesClass", 33, "migrate to storage.k8s.io/v1beta1 VolumeAttributesClass"},
 		{"storage.k8s.io", "v1alpha1", "VolumeAttributesClass", 34, "migrate to storage.k8s.io/v1 VolumeAttributesClass"},
-		{"certificates.k8s.io", "v1beta1", "ClusterTrustBundle", 36, "no replacement Kubernetes 1.36 serves is known; certificates.k8s.io/v1 ClusterTrustBundle is served from 1.37"},
+		{"certificates.k8s.io", "v1beta1", "ClusterTrustBundle", 36, "no replacement Kubernetes 1.36 serves is known; certificates.k8s.io/v1 ClusterTrustBundle is served from 1.37; certificates.k8s.io/v1beta1 is the right version for Kubernetes 1.36 until then"},
 	}
 	for _, tc := range cases {
 		inv := inventory.Inventory{APIUsage: []inventory.APIUsage{{Group: tc.group, Version: tc.version, Kind: tc.kind, Count: 1, Namespaces: map[string]int{"": 1}}}}
@@ -405,5 +405,42 @@ func TestHelmManifestRemediationNamesOnlyServedReplacement(t *testing.T) {
 		"example.io/v1alpha1 Widget (example.io/v1 Widget is served from 1.31)"
 	if len(fs) != 1 || fs[0].Severity != SevWarning || fs[0].Remediation != warn {
 		t.Errorf("findings at 1.29 = %+v\nwant one warning with remediation %q", fs, warn)
+	}
+}
+
+// #332: a beta or GA source is never told to move back to an alpha. When
+// the GA replacement is not served yet, the finding says the version in use
+// is the right one for the target and names the GA version with the minor
+// that first serves it; and a 1.16 target does not report the kinds gen-kb
+// used to clamp to 1.17 as "not served until 1.17".
+func TestRemediationNeverMovesBackToLessMatureAPI(t *testing.T) {
+	k := shippedKB(t)
+	for _, tc := range []struct {
+		group, version, kind string
+		target               int
+		want                 string
+	}{
+		{"batch", "v1beta1", "CronJob", 18, "no replacement Kubernetes 1.18 serves is known; batch/v1 CronJob is served from 1.21; batch/v1beta1 is the right version for Kubernetes 1.18 until then"},
+		{"discovery.k8s.io", "v1beta1", "EndpointSlice", 18, "no replacement Kubernetes 1.18 serves is known; discovery.k8s.io/v1 EndpointSlice is served from 1.21; discovery.k8s.io/v1beta1 is the right version for Kubernetes 1.18 until then"},
+		{"", "v1", "Endpoints", 18, ""},
+	} {
+		inv := inventory.Inventory{APIUsage: []inventory.APIUsage{{Group: tc.group, Version: tc.version, Kind: tc.kind, Count: 1, Namespaces: map[string]int{"a": 1}}}}
+		target := inventory.Version{Major: 1, Minor: tc.target}
+		for _, f := range evalAPIUsage(inv, k, target, nil) {
+			if strings.Contains(f.Remediation, "alpha") {
+				t.Errorf("%s/%s %s @%s: remediation %q names an alpha", tc.group, tc.version, tc.kind, target, f.Remediation)
+			}
+			if tc.want != "" && !strings.HasPrefix(f.Remediation, tc.want) {
+				t.Errorf("%s/%s %s @%s: remediation %q, want %q", tc.group, tc.version, tc.kind, target, f.Remediation, tc.want)
+			}
+		}
+	}
+	for _, gvk := range [][3]string{{"batch", "v2alpha1", "CronJob"}, {"scheduling.k8s.io", "v1alpha1", "PriorityClass"}, {"settings.k8s.io", "v1alpha1", "PodPreset"}} {
+		inv := inventory.Inventory{Source: inventory.SourceFiles, APIUsage: []inventory.APIUsage{{Group: gvk[0], Version: gvk[1], Kind: gvk[2], Count: 1, Namespaces: map[string]int{"a": 1}, Objects: []inventory.ObjectRef{{Name: "x", Line: 1}}}}}
+		for _, f := range evalAPIUsage(inv, k, inventory.Version{Major: 1, Minor: 16}, nil) {
+			if strings.Contains(f.Title, "not served until") {
+				t.Errorf("%s/%s %s @1.16: %q", gvk[0], gvk[1], gvk[2], f.Title)
+			}
+		}
 	}
 }
