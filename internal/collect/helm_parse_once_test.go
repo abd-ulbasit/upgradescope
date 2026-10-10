@@ -12,6 +12,7 @@ import (
 	"reflect"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -25,13 +26,60 @@ import (
 // (see reparsing), which runs kubectl's decoder on the text of every
 // document. Whatever the findings are, they must not change.
 
+// reparseGuard is held while reparsing has reparseDocuments flipped.
+var reparseGuard sync.Mutex
+
 // reparsing runs f with reparseDocuments set to reparse, then restores it.
-// Nothing in this package's tests runs in parallel, so the variable is safe.
+// reparseDocuments is a package global, so two tests that flip it at once
+// would race and read each other's setting: a second reparsing that finds
+// one running panics instead (see TestParseOnce_NothingRunsInParallel,
+// which fails on any parallel test of the package, one that only reads the
+// variable through the code under test included).
 func reparsing[T any](reparse bool, f func() T) T {
+	if !reparseGuard.TryLock() {
+		panic("reparsing called while another is running: reparseDocuments is a package global, so tests that flip it cannot run in parallel")
+	}
+	defer reparseGuard.Unlock()
 	old := reparseDocuments
 	reparseDocuments = reparse
 	defer func() { reparseDocuments = old }()
 	return f()
+}
+
+// A test of this package that runs in parallel would read reparseDocuments
+// while another flips it. The package has none: this fails if one is added,
+// in any of its test files, before it can flake.
+func TestParseOnce_NothingRunsInParallel(t *testing.T) {
+	files, err := filepath.Glob("*_test.go")
+	if err != nil || len(files) == 0 {
+		t.Fatalf("no test files found (%v)", err)
+	}
+	needle := "t.Para" + "llel()" // spelled so that this file does not hold it
+	for _, f := range files {
+		b, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(b), needle) {
+			t.Errorf("%s runs a test in parallel; reparseDocuments (see reparsing) is shared by this package's tests", f)
+		}
+	}
+}
+
+// reparsing cannot be entered twice at once.
+func TestParseOnce_ReparsingRefusesToNest(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Error("a nested reparsing did not panic")
+		}
+		if reparseDocuments {
+			t.Error("reparseDocuments was left set")
+		}
+	}()
+	reparsing(true, func() struct{} {
+		reparsing(false, func() struct{} { return struct{}{} })
+		return struct{}{}
+	})
 }
 
 // manifestAPIsOf is manifestAPIs, parsed once or (reparse) twice.
@@ -281,11 +329,14 @@ func TestParseOnce_RandomManifestsMatchTwoParses(t *testing.T) {
 	pad := "apiVersion: v1\nkind: ConfigMap\nmetadata: {name: pad}\ndata:\n  blob: |\n" + strings.Repeat("    "+strings.Repeat("x", 76)+"\n", 6000) // about 0.5 MiB
 	rng := rand.New(rand.NewPCG(285, 2))
 	rounds := 300
-	if testing.Short() || raceEnabled {
-		// The race detector makes the 300 rounds take minutes (186 s on a
-		// loaded Mac) against the package's 10-minute test timeout; the
-		// rounds without it hold the equivalence, and these run the same
-		// code for races.
+	switch {
+	case raceEnabled:
+		// The race detector makes the rounds slow (60 of them took 257 s,
+		// the slowest test of the package, against CI's 25-minute limit
+		// for `go test -race`); the 300 rounds without it hold the
+		// equivalence, and these run the same code for races.
+		rounds = 10
+	case testing.Short():
 		rounds = 60
 	}
 	for i := range rounds {
@@ -493,8 +544,15 @@ func numberDenseStream(size int) []byte {
 // A stream dense in distinct number-like scalars costs less parsed once than
 // twice, and none of it is left to kubectl's decoder. CPU time is noisy on a
 // loaded machine, so the bar is generous: the saving measured is about half.
+// A CPU ratio can flake beside the other packages' tests, so it runs with
+// the timing and heap proofs in hack/test-heap.sh (UPGRADESCOPE_HEAP=1, no
+// -race: it reads raceEnabled, which is how the script finds it), not in a
+// plain `go test ./...`.
 func TestParseOnce_NumberDenseStreamIsNotSlower(t *testing.T) {
-	if testing.Short() || raceEnabled || processCPU() == 0 {
+	if testing.Short() || !heapRun {
+		t.Skip("a CPU ratio, run by hack/test-heap.sh (UPGRADESCOPE_HEAP=1), not beside every other package's tests")
+	}
+	if raceEnabled || processCPU() == 0 {
 		t.Skip("a CPU timing test (the race detector's overhead is not the code's)")
 	}
 	data := numberDenseStream(256 << 10)

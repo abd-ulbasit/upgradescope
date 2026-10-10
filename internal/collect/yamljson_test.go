@@ -184,6 +184,10 @@ spec:
 		{"tag after a paragraph separator", false, "k:\u2029  ! 12\n"},
 		{"hex tag after a line separator", false, "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name:\u2028    ! 0x1F\n"},
 		{"line separator in a value", false, "k: a\u2028b\n"},
+		// The one pass over the lead bytes C2 and E2 declines only the three
+		// separators, not the characters beside them.
+		{"em dash and no-break space", true, "k: a \u2014 b\u00a0c\n"},
+		{"characters beside the separators", true, "k: \u00c2\u00a1\u2027\u202a\u2014\u20ac\n"},
 		{"a block scalar", true, "k: |\n  a\n"},
 		{"anchors", false, "a: &x {k: v}\nb: *x\n"},
 		{"anchor without alias", false, "a: &x {k: v}\n"},
