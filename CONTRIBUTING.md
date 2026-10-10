@@ -164,8 +164,9 @@ EOL ingress-nginx chart into it, so the scan has a real blocker to find
 (`KIND_NODE_IMAGE=$(hack/kind-images.sh image 1.31) make demo-up` pins the
 Kubernetes version). `make e2e` creates the same cluster on a pinned node
 image and leaves it running; `make demo-down` deletes it. CI runs the kind
-e2e on every pull request and push to `main` that changes anything other than
-docs.
+e2e on every pull request that changes code (a pull request that changes only
+documentation, or a release script, skips it) and on every push to `main` that
+changes anything other than docs.
 
 ### Knowledge-base tooling
 
@@ -246,7 +247,10 @@ docs-only skip of `kube` and `envtest`).
 `ci-ok` accepts a gated job's skip only when the `changes` job **ran and
 succeeded** and said the job is not needed. A `changes` job that failed, was
 cancelled or was skipped on a pull request fails `ci-ok`, and so does a gated
-job skipped while `changes` said it is needed. `hack/ci-gates_test.sh` (`make
+job skipped while `changes` said it is needed. On a push to `main` it
+accepts only the docs-only skips a push always had (`kube`, `envtest` and
+`release-check`) and fails any other skipped gated job whatever `changes` said;
+on a dispatch or release every gated job must run. `hack/ci-gates_test.sh` (`make
 hack-test`) holds the filters to the tree: every tracked file is matched by
 `go` or `docs`, or is on its short list of files no gated job reads, and every
 `hack/` script a gated job reaches is matched; it evaluates each gated job's

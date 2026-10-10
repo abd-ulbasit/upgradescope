@@ -345,7 +345,7 @@ examples-test:
 	./hack/examples-test.sh
 
 # Every test, e2e gate, CI job, make target and file docs/claims.md names
-# exists, so a public claim cannot lose its proof silently (CI's test job).
+# exists, so a public claim cannot lose its proof silently (CI's repo-checks job).
 .PHONY: claims-check
 claims-check:
 	./hack/claims-check.sh

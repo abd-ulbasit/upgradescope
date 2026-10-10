@@ -100,8 +100,8 @@ ready, and the changelog says why the usual notice was not possible.
 
 Only the latest minor release gets fixes, as patch releases
 ([SECURITY.md](https://github.com/abd-ulbasit/upgradescope/blob/main/SECURITY.md)).
-Kubernetes versions: the kind end-to-end suite runs every pull request on
-the oldest and newest tested minors and weekly on every minor from 1.29 to
+Kubernetes versions: the kind end-to-end suite runs on the oldest and newest
+tested minors for every pull request that changes code (IR-24) and weekly on every minor from 1.29 to
 the newest ([claims ledger](claims.md), IR-04).
 
 ### Tested Kubernetes range
@@ -110,7 +110,7 @@ Clusters from **1.24** to the newest minor are tested, in two ways:
 
 | Minors | Tested against | What is exercised |
 |---|---|---|
-| 1.29 to the newest | a kind cluster ([`hack/kind-node-images.txt`](https://github.com/abd-ulbasit/upgradescope/blob/main/hack/kind-node-images.txt)): every pull request on the oldest and newest, weekly on all | the whole product: scan, agent, chart, CRD, server and the apiserver audit log |
+| 1.29 to the newest | a kind cluster ([`hack/kind-node-images.txt`](https://github.com/abd-ulbasit/upgradescope/blob/main/hack/kind-node-images.txt)): every pull request that changes code on the oldest and newest, weekly on all | the whole product: scan, agent, chart, CRD, server and the apiserver audit log |
 | 1.24 to 1.28 | a real kube-apiserver and etcd started by [envtest](https://book.kubebuilder.io/reference/envtest) ([`hack/envtest-versions.txt`](https://github.com/abd-ulbasit/upgradescope/blob/main/hack/envtest-versions.txt)): 1.24 and 1.28 on every pull request that changes code, every minor (1.24 to 1.28) weekly | the live collector and engine only. A cluster holding GA objects has no removed-API finding or blocker; a second scan of an unchanged cluster is identical; an object written through a beta API that minor still serves is a blocker at its removal minor (the warning one minor before is asserted only on 1.27, where FlowSchema v1beta2 is removed in 1.29, so it runs in the weekly set and not on a pull request; on the other minors the removal is at the next minor); and any capability that comes back unavailable or partial is listed as not assessed, never as clean (on envtest that is `deprecated-calls`, partial because the scanner lists some deprecated endpoints itself) |
 
 kind publishes no reliable node images for the older minors, which is why

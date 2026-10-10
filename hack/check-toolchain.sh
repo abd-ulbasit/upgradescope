@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Asserts that what the repository builds with its own Go toolchain can be
-# built with it (make check-toolchain; the test job runs it):
+# built with it (make check-toolchain; the repo-checks job runs it):
 #
 # 1. Every Dockerfile's golang base image matches go.mod's `go` directive. The
 #    official golang images set GOTOOLCHAIN=local, so they will not fetch a
