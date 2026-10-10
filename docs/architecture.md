@@ -1,3 +1,5 @@
+| `volumes` | nothing of its own: the in-tree volume plugins named by the pods the `versions` step (kube-system) and the `addons` step (the other namespaces) list anyway, or, between full pod passes, by the held pass | Optional: an inventory without it (an older collector's) is a gap, never clean. Counts pods per plugin and namespace, naming no pod. In files mode, pod template, Pod and PersistentVolume manifests, located by file and line. Live PersistentVolumes are not read (that needs RBAC on `persistentvolumes`). See [in-tree volume plugins](concepts/volume-plugins.md). |
+| `volume-plugin` | blocker / warning / info | An in-tree volume plugin a pod, pod template or PersistentVolume names, from the knowledge base's cited dataset: removed with no migration path at or before the target (blocker) or in the minor after it (warning); served only through a named CSI driver at the target (warning, never a blocker); deprecated only, or removed later (info). See [in-tree volume plugins](concepts/volume-plugins.md). |
 # Architecture
 
 This guide is for contributors. It explains how upgradescope is put together,

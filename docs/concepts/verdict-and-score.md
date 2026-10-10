@@ -1,3 +1,4 @@
+| `volume-plugin` | A pod, pod template or PersistentVolume names an in-tree volume plugin removed with no migration path at or before the target (`glusterfs`, `cephfs`, `rbd`; `gitRepo`, disabled from 1.33): pods naming it do not start. | Such a plugin removed in the minor after the target; a plugin served only through CSI migration at the target (`awsElasticBlockStore`, `gcePersistentDisk`, ...), naming the CSI driver that must be installed. Never a blocker, since a cluster with the driver is fine. | A plugin deprecated only (`flexVolume`), or whose removal or CSI-only minor is later. See [in-tree volume plugins](volume-plugins.md). |
 # Verdict and score
 
 Every report, from `scan`, the agent or the server, carries two answers:
