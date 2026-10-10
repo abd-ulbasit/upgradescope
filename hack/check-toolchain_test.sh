@@ -34,6 +34,14 @@ jobs:
           version: v2.17.1 # GORELEASER_VERSION in the Makefile; make check-toolchain compares them
           args: release --clean
 EOF
+  cat >"$d/.github/workflows/ci.yml" <<'YAML'
+jobs:
+  test:
+    steps:
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+YAML
 }
 
 : >"$work/results"
@@ -56,6 +64,17 @@ expect() {
 # for the Dockerfile* glob to pick up.
 case_dir() { local d="$work/$1"; fixture "$d"; echo "$d"; }
 edit() { sed -i.bak "$1" "$2" && rm -f "$2.bak"; }
+
+d=$(case_dir setup-go-literal)
+edit 's#go-version-file: go.mod#go-version: '"'"'1.26.x'"'"'#' "$d/.github/workflows/ci.yml"
+expect "a literal setup-go version fails" 1 "pins Go literally instead of reading go.mod" "$d"
+
+d=$(case_dir setup-go-missing)
+edit '/go-version-file: go.mod/d' "$d/.github/workflows/ci.yml"
+expect "a setup-go step without go-version-file fails" 1 "has 1 setup-go steps but 0 read 'go-version-file: go.mod'" "$d"
+
+d=$(case_dir setup-go-ok)
+expect "setup-go reading go.mod passes" 0 "ok: .github/workflows/ci.yml: 1 setup-go step(s) read go.mod" "$d"
 
 d=$(case_dir pass)
 expect "consistent tree passes" 0 "ok: Dockerfile golang:1.26.8 == go.mod go 1.26.8" "$d"
