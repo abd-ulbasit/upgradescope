@@ -1,12 +1,23 @@
-{{- if and .Values.server.enabled .Values.server.persistence.enabled (not (include "upgradescope.postgres" .)) }}
+{{- if and .Values.server.enabled .Values.server.persistence.enabled (not .Values.server.persistence.existingClaim) (not (include "upgradescope.postgres" .)) }}
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: {{ include "upgradescope.derived" (dict "root" . "suffix" "-server-data") }}
   namespace: {{ .Release.Namespace }}
   labels: {{- include "upgradescope.labels" . | nindent 4 }}
+  {{- if or .Values.server.persistence.retain .Values.server.persistence.annotations }}
+  annotations:
+    {{- with .Values.server.persistence.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+    {{- if .Values.server.persistence.retain }}
+    # server.persistence.retain: helm uninstall leaves this PVC, and the
+    # history in it; delete it yourself when it is no longer wanted.
+    helm.sh/resource-policy: keep
+    {{- end }}
+  {{- end }}
 spec:
-  accessModes: ["ReadWriteOnce"]
+  accessModes: {{- toYaml .Values.server.persistence.accessModes | nindent 4 }}
   resources:
     requests:
       storage: {{ .Values.server.persistence.size }}

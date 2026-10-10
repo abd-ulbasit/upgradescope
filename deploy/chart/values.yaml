@@ -523,12 +523,32 @@ server:
     # Without one, an extraVolumes entry named sqlite-tmp fails the render
     # (two volumes of one name).
     sizeLimit: 1Gi
+  startupProbe:
+    # -- Seconds between startup checks of /healthz. The server migrates its
+    # database before it opens its port; liveness starts once one passes.
+    periodSeconds: 5
+    # -- Failed checks before the kubelet restarts the server: the startup
+    # window is periodSeconds x failureThreshold (5 minutes by default).
+    # Raise it for a large database or slow storage.
+    failureThreshold: 60
   persistence:
     # -- PVC for the SQLite database (unused with database.existingSecret).
     # false = emptyDir (history lost on pod restart — demo only).
     enabled: true
+    # -- The PVC's size, a Kubernetes quantity (e.g. 1Gi, 500Mi).
     size: 1Gi
     storageClass: ""
+    # -- Mount this existing PVC instead of creating one. The chart renders
+    # no PVC then, so helm uninstall leaves the claim and its history.
+    existingClaim: ""
+    # -- Access modes of the chart's PVC. SQLite has one writer (one
+    # replica), so ReadWriteOnce or ReadWriteOncePod.
+    accessModes: [ReadWriteOnce]
+    # -- Annotations on the chart's PVC (e.g. for a backup tool).
+    annotations: {}
+    # -- Annotate the chart's PVC helm.sh/resource-policy: keep, so helm
+    # uninstall leaves it and its history (delete it yourself afterwards).
+    retain: false
   # -- Extra host names (or IPs) requests may name in their Host header,
   # passed as --allowed-host with the Service's DNS names and
   # server.ingress.host, which the chart always passes. serve checks the
