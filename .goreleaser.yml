@@ -204,8 +204,10 @@ dockers_v2:
     # image tag. :latest moves only for the highest stable release
     # (UPGRADESCOPE_NEWEST, which release.yml sets from
     # hack/release-newest.sh; unset, as in a snapshot, it is false), never
-    # for a pre-release or a re-run of an older release (#244). Empty tags
-    # are skipped.
+    # for a pre-release or a re-run of an older release (#244). Unlike
+    # GitHub's Latest (make_latest, below), no install is gated on the
+    # image's attestation, so GoReleaser keeps setting it. Empty tags are
+    # skipped.
     tags:
       - '{{ .Version }}'
       - '{{ .Tag }}'
@@ -306,11 +308,18 @@ release:
   draft: false
   prerelease: auto
   # GitHub's Latest is what releases/latest, and so the Action's
-  # `version: latest` and @v0, install. Always an explicit "true" or
-  # "false": left unset, GitHub marks every newly published release Latest,
-  # so the slower of two racing releases, whichever tag it is, would take
-  # it (#244). true only for the highest stable release (release.yml).
-  make_latest: '{{ if eq (envOrDefault "UPGRADESCOPE_NEWEST" "false") "true" }}true{{ else }}false{{ end }}'
+  # `version: latest` and @v0, install, and the Action refuses a release
+  # whose build-provenance attestation does not exist. GoReleaser therefore
+  # never sets it: an explicit "false" (left unset, GitHub marks every newly
+  # published release Latest, so the slower of two racing releases would take
+  # it, #244), hard-coded rather than read from UPGRADESCOPE_NEWEST because
+  # GoReleaser publishes before actions/attest-build-provenance runs, and a
+  # Latest set here is a release with no attestation for as long as the
+  # attestation takes, or for good if it fails, and again on every re-run of
+  # the job (#304). release.yml's last step moves Latest, to the run's own
+  # release when that is the highest stable one, only after its attestation
+  # exists.
+  make_latest: "false"
   # Re-running a release that failed half-way (same tag, same commit)
   # overwrites the assets it already uploaded instead of failing on them.
   # checksums.txt and its signature are replaced in the same run, so they

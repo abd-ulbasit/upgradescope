@@ -14,7 +14,14 @@
 #   - the wiring: major-tag runs only on preflight's major-newest, under one
 #     repository-wide concurrency group; GoReleaser gets the re-check as
 #     UPGRADESCOPE_NEWEST;
-#   - .goreleaser.yml's make_latest and :latest templates, rendered with Go's
+#   - GitHub's Latest is set only after the build-provenance attestation
+#     exists (#304): .goreleaser.yml's make_latest is the literal "false", the
+#     closing step is the only one that can set Latest and runs after
+#     actions/attest-build-provenance with no status function in its if:, so
+#     a run whose attestation fails leaves Latest on the previous release;
+#     and a run moves Latest only to its own release, never to a higher one
+#     that is published but not yet attested by its own run;
+#   - .goreleaser.yml's :latest image template, rendered with Go's
 #     text/template and an envOrDefault like GoReleaser's.
 # Offline; needs jq, node (for the if: expressions) and Go.
 set -euo pipefail
@@ -279,21 +286,43 @@ want_rec() {
   fi
 }
 want_rec "v0.2.1 published last and already Latest: nothing to move" v0.2.1 v0.2.1 sha256:bbb "" v0.2.0 v0.2.1
-want_rec "a racing v0.2.0 published last and took both: both move back to v0.2.1" v0.2.0 v0.2.0 sha256:aaa \
+want_rec "a racing v0.2.0 published last and took :latest: :latest moves back to v0.2.1, Latest is v0.2.1's run's to move" v0.2.0 v0.2.0 sha256:aaa \
+  "oras tag ghcr.io/o/r@sha256:bbb latest;" v0.2.0 v0.2.1
+want_rec "v0.2.1 is the highest and this run's own: Latest moves to it, :latest too" v0.2.1 v0.2.0 sha256:aaa \
   "gh api -X PATCH repos/o/r/releases/id-v0.2.1 -f make_latest=true;oras tag ghcr.io/o/r@sha256:bbb latest;" v0.2.0 v0.2.1
 want_rec "a re-run of v0.2.0 with v0.2.1 in place: nothing moves" v0.2.0 v0.2.1 sha256:bbb "" v0.2.0 v0.2.1
 want_rec "the first release with no :latest yet: :latest is created" v0.2.0 v0.2.0 - \
   "oras tag ghcr.io/o/r@sha256:aaa latest;" v0.2.0
+want_rec "the first stable release, with v0.1.1 as Latest: v0.2.0 is made Latest" v0.2.0 v0.1.1 sha256:aaa \
+  "gh api -X PATCH repos/o/r/releases/id-v0.2.0 -f make_latest=true;" v0.1.1 v0.2.0 v0.2.0-rc.2:pre
 want_rec "no Latest release yet: v0.2.0 is made Latest" v0.2.0 "" sha256:aaa \
   "gh api -X PATCH repos/o/r/releases/id-v0.2.0 -f make_latest=true;" v0.2.0 v0.2.0-rc.2:pre
-# A higher release racing this one: published, its image not pushed yet.
-# Its own run points :latest at it when it ends; this one leaves :latest.
+# Whether this run's release is the highest is decided by the version
+# comparison every other step uses, not by comparing tag strings: a tag
+# spelled v0.02.0 is the version of the published v0.2.0, so it is the
+# highest and its run moves Latest (a string comparison read it as another
+# run's release and left Latest alone).
+want_rec "a tag spelled v0.02.0 is the version of the published v0.2.0: it is the highest, Latest moves" v0.02.0 v0.1.1 sha256:aaa \
+  "gh api -X PATCH repos/o/r/releases/id-v0.2.0 -f make_latest=true;" v0.1.1 v0.2.0
+# A higher release racing this one: published, its attestation and image not
+# there yet. Its own run attests it and then moves Latest and :latest; this
+# run must move neither (#304: a Latest set here could name a release whose
+# attestation then fails, so every `version: latest` install would fail).
 releases v0.2.0 v0.3.0
 run_block "$work/reconcile.sh" v0.2.0 STUB_LATEST=v0.2.0
-[ "$code" = 0 ] && [ "$(writes | tr '\n' ';')" = "gh api -X PATCH repos/o/r/releases/id-v0.3.0 -f make_latest=true;" ] &&
+[ "$code" = 0 ] && [ -z "$(writes)" ] &&
   grep -q '^::notice::ghcr.io/o/r:v0.3.0 is not pushed yet' "$work/out" &&
-  ok "reconcile: a higher release still publishing its image: Latest moves to it, :latest is left to its run" ||
-  fail "reconcile: a higher release without its image yet did not leave :latest to its run" "$work/out"
+  ok "reconcile: a higher release still publishing: neither Latest nor :latest moves (left to its run)" ||
+  fail "reconcile: a run on a lower release moved something while a higher one was still publishing" "$work/out"
+# The same race when the higher run's attestation then fails: the lower run
+# ended first and Latest was never moved, so it stays on the previous release.
+for latest in v0.1.1 v0.2.0 ""; do
+  releases v0.1.1 v0.2.0 v0.3.0
+  run_block "$work/reconcile.sh" v0.2.0 STUB_LATEST="$latest"
+  [ "$code" = 0 ] && ! grep -q 'make_latest' "$work/calls" &&
+    ok "reconcile: v0.3.0 published but unattested, Latest ${latest:-none}: the v0.2.0 run leaves Latest alone" ||
+    fail "reconcile: the v0.2.0 run moved Latest to or from an unattested v0.3.0 (Latest ${latest:-none})" "$work/calls"
+done
 # This run's own image missing: a broken publish, not a race.
 releases v0.2.0 v0.3.0
 run_block "$work/reconcile.sh" v0.3.0 STUB_LATEST=v0.3.0
@@ -367,12 +396,66 @@ run_block "$work/major.sh" v0.2.0 STUB_MAJOR_EXISTS=1 STUB_GH_FAIL=1
   ok "major-tag: a failed release listing fails the job and moves no tag (under bash -e)" ||
   fail "major-tag: a failed release listing did not fail the job, or moved the tag" "$work/out"
 
+# --- GitHub's Latest is set only after the attestation (#304) -----------------
+
+# make_latest in .goreleaser.yml: the literal "false" and nothing else, not a
+# template reading UPGRADESCOPE_NEWEST, so GoReleaser cannot make a release
+# Latest before its attestation exists, nor flip it on a re-run of the job.
+nonc() { grep -vE '^ *#' "$1"; }
+ml=$(nonc "$gr" | grep -E '^ *make_latest:' || true)
+if [ "$ml" = '  make_latest: "false"' ]; then ok "GoReleaser's make_latest is the literal \"false\""; else
+  fail "GoReleaser's make_latest is not exactly '  make_latest: \"false\"' (got: ${ml:-none})"
+fi
+# The step list of the goreleaser job, one line per step, comments dropped:
+# "<n>|<first line>|<sets make_latest=true>|<status function in if:>|<continue-on-error>".
+gsteps() {
+  job goreleaser | awk '
+    function flush() { if (n) printf "%d|%s|%d|%d|%d\n", n, first, lat, st, coe }
+    /^      - / { flush(); n++; first = $0; sub(/^ *- /, "", first); lat = 0; st = 0; coe = 0 }
+    /^ *#/ { next }
+    n && /make_latest *[=:] *true/ { lat = 1 }
+    n && /^ *if:.*(always|failure|cancelled)\(/ { st = 1 }
+    n && /^ *continue-on-error:/ { coe = 1 }
+    END { flush() }'
+}
+gsteps >"$work/gsteps"
+attest_n=$(awk -F'|' '$2 ~ /^uses: actions\/attest-build-provenance@/ { print $1 }' "$work/gsteps")
+setters=$(awk -F'|' '$3 == 1 { print $1 }' "$work/gsteps")
+if [ -n "$attest_n" ] && [ "$(wc -l <<<"$attest_n" | tr -d ' ')" = 1 ]; then ok "the goreleaser job has one attest-build-provenance step"; else
+  fail "the goreleaser job does not have exactly one actions/attest-build-provenance step (steps: $(cut -d'|' -f1,2 "$work/gsteps" | tr '\n' ' '))"
+fi
+if [ -n "$setters" ] && [ "$(wc -l <<<"$setters" | tr -d ' ')" = 1 ] && [ -n "$attest_n" ] && [ "$setters" -gt "${attest_n:-0}" ]; then
+  ok "the only step that sets make_latest=true runs after actions/attest-build-provenance in the same job"
+else
+  fail "the goreleaser job's steps that set make_latest=true ($(tr '\n' ' ' <<<"$setters")) are not exactly one, after the attest step ($attest_n)"
+fi
+if [ "$setters" = "$(awk -F'|' -v want="name: $name" '$2 == want { print $1 }' "$work/gsteps")" ]; then
+  ok "that step is '$name'"
+else
+  fail "the step that sets make_latest=true is not '$name'"
+fi
+# Nowhere else in the workflow moves Latest.
+nonc "$wf" | grep -nE 'make_latest *[=:]' >"$work/mlat" || true
+if [ "$(wc -l <"$work/mlat" | tr -d ' ')" = 1 ]; then ok "release.yml sets make_latest in exactly one place"; else
+  echo "(want exactly one non-comment line mentioning make_latest; got $(wc -l <"$work/mlat" | tr -d ' '))" >>"$work/mlat"
+  fail "release.yml mentions make_latest other than once, in the closing step" "$work/mlat"
+fi
+# A failed attest step: every later step without a status function (if:
+# always(), failure(), cancelled()) is skipped, and so is a step whose job
+# carries on after a failure (continue-on-error).
+if [ "$(awk -F'|' -v a="$attest_n" '$1 == a { print $5 }' "$work/gsteps")" = 0 ] &&
+  [ "$(job goreleaser | grep -cE '^    continue-on-error:')" = 0 ] &&
+  ! awk -F'|' -v a="$attest_n" '$1 > a && $3 == 1 && $4 == 1 { bad = 1 } END { exit !bad }' "$work/gsteps"; then
+  ok "an attestation that fails skips the step that sets Latest (no continue-on-error, no always()/failure()/cancelled() in its if:)"
+else
+  fail "a failed attest-build-provenance step would not skip the step that sets Latest"
+fi
+
 # --- .goreleaser.yml templates -------------------------------------------------
 
 tpl_latest=$(sed -n "s/^      - '\(.*latest{{ end }}\)'$/\1/p" "$gr")
-tpl_make=$(sed -n "s/^  make_latest: '\(.*\)'$/\1/p" "$gr")
-if [ -z "$tpl_latest" ] || [ -z "$tpl_make" ]; then
-  fail "cannot find the :latest image tag or release.make_latest template in $gr"
+if [ -z "$tpl_latest" ]; then
+  fail "cannot find the :latest image tag template in $gr"
 else
   mkdir -p "$work/tpl"
   cat >"$work/tpl/main.go" <<'EOF'
@@ -413,10 +496,6 @@ EOF
   render "no :latest image tag for an older release's run" "$tpl_latest" false false ""
   render "no :latest image tag when UPGRADESCOPE_NEWEST is unset (a snapshot)" "$tpl_latest" false unset ""
   render "no :latest image tag for a pre-release" "$tpl_latest" true true ""
-  render "make_latest is true for the highest stable release" "$tpl_make" false true true
-  render "make_latest is an explicit false for an older release" "$tpl_make" false false false
-  render "make_latest is an explicit false when UPGRADESCOPE_NEWEST is unset" "$tpl_make" false unset false
-  render "make_latest is false for anything but exactly true" "$tpl_make" false yes false
 fi
 
 pass=$(grep -c '^ok' "$work/results" || true)

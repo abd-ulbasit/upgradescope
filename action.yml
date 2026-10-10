@@ -41,10 +41,11 @@ inputs:
       (the newest stable release; GitHub's latest skips prereleases), or
       "preinstalled" (the one already on PATH). Left unset, it is the
       release of the action ref: at a release tag (@vX.Y.Z or
-      @vX.Y.Z-rc.N), that release; at a full commit SHA, the release tag
-      that points at the commit (git ls-remote), or latest with a warning
-      when no release tag does or the lookup fails; at any other ref (a
-      branch, @v0), or used from another action, latest.
+      @vX.Y.Z-rc.N), that release; at a full commit SHA, the newest release
+      tag at the commit (git ls-remote) whose release is published, a step
+      failure when it has release tags but none is published yet, or latest
+      with a warning when no release tag points at it or the lookup fails;
+      at any other ref (a branch, @v0), or used from another action, latest.
       For a reproducible gate, pin the action ref (@vX.Y.Z or a commit SHA)
       and a tag here: @v0 and "latest" move with each release.
       The archive is verified against the release's checksums.txt and, with
@@ -59,8 +60,9 @@ inputs:
       "true" (the default) also verifies that the downloaded archive was
       built by this repository's release workflow at the release's tag:
       `gh attestation verify` of the archive's build-provenance attestation
-      (gh is preinstalled on GitHub-hosted runners), or, without gh 2.49+,
-      `cosign verify-blob` of checksums.txt's signature. A failed check, or
+      (gh is preinstalled on GitHub-hosted runners), or, without gh 2.68+
+      (older gh has no `--source-ref`), `cosign verify-blob` of
+      checksums.txt's signature. A failed check, or
       no gh or cosign to run it, fails the step before anything is
       installed, and so does an archive that cannot be downloaded: there
       is no fallback to an unverified source build. v0.1.0 and v0.1.1, the
@@ -149,7 +151,9 @@ runs:
         ACTION_REF: ${{ github.action_ref }}
         ACTION_REPOSITORY: ${{ github.action_repository }}
         # gh attestation verify reads this repository's public
-        # attestations through the GitHub API with it; no permission
+        # attestations through the GitHub API with it, and, on github.com
+        # only, the commit-SHA release lookup (releases/tags) is
+        # authenticated with it to raise the rate limit; no permission
         # beyond the default read of public data is needed.
         GH_TOKEN: ${{ github.token }}
       run: bash "$GITHUB_ACTION_PATH/action/run.sh" install
