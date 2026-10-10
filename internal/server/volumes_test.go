@@ -1,6 +1,8 @@
 package server
 
 import (
+	"context"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -68,6 +70,51 @@ func TestIngestRefusesInvalidVolumePlugins(t *testing.T) {
 	code, out := h.pushAs("bad", "v0.2.0", inv)
 	if code != http.StatusUnprocessableEntity || !strings.Contains(out["error"].(string), "volumePlugins[0].namespaces") {
 		t.Errorf("push = %d %v, want 422 naming volumePlugins[0].namespaces", code, out)
+	}
+}
+
+// A hostile volume plugin entry (one a collector would not produce: a
+// plugin with control characters or of 1000 bytes, a negative count,
+// objects over the cap) is refused at ingest (422) naming the field, and
+// nothing is stored for the cluster.
+func TestIngestRefusesHostileVolumePlugins(t *testing.T) {
+	h := newHarness(t, Config{KB: volumesKB()}, aug1)
+	over := inventory.VolumePluginUse{Plugin: "glusterfs", Count: inventory.MaxObjectRefs + 1}
+	for i := range inventory.MaxObjectRefs + 1 {
+		over.Objects = append(over.Objects, inventory.ObjectRef{Namespace: "shop", Name: fmt.Sprintf("w%d", i)})
+	}
+	for _, tc := range []struct {
+		name  string
+		entry inventory.VolumePluginUse
+		field string
+	}{
+		{"control characters", inventory.VolumePluginUse{Plugin: "glus\x1b[31mterfs\n", Count: 1}, "volumePlugins[0].plugin"},
+		{"long plugin", inventory.VolumePluginUse{Plugin: strings.Repeat("g", 1000), Count: -1, Namespaces: map[string]int{"shop": -1}}, "volumePlugins[0].plugin"},
+		{"negative count", inventory.VolumePluginUse{Plugin: "glusterfs", Count: -1}, "volumePlugins[0]"},
+		{"objects over the cap", over, "volumePlugins[0].objects"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cluster := "hostile-" + strings.ReplaceAll(tc.name, " ", "-")
+			inv := testInventory()
+			inv.VolumePlugins = []inventory.VolumePluginUse{tc.entry}
+			code, out := h.pushAs(cluster, "v0.2.0", inv)
+			msg, _ := out["error"].(string)
+			if code != http.StatusUnprocessableEntity || !strings.Contains(msg, tc.field) {
+				t.Fatalf("push = %d %v, want 422 naming %s", code, out, tc.field)
+			}
+			if strings.ContainsAny(msg, "\x1b\n") || len(msg) > 1000 {
+				t.Errorf("error quotes raw control characters or the whole value: %q", msg)
+			}
+			cs, err := h.st.ListClusters(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, c := range cs {
+				if c.Name == cluster {
+					t.Errorf("cluster %s stored after a refused push", cluster)
+				}
+			}
+		})
 	}
 }
 
