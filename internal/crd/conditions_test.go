@@ -135,10 +135,10 @@ func TestWriteStatusReadyConditionTransitions(t *testing.T) {
 		t.Fatal(err)
 	}
 	st = readStatus(t, dyn, DefaultName)
-	if len(st.Conditions) != 1 {
-		t.Fatalf("conditions = %+v, want exactly one (Ready)", st.Conditions)
+	if len(st.Conditions) != 2 {
+		t.Fatalf("conditions = %+v, want Ready and AllTargetsReady", st.Conditions)
 	}
-	c = &st.Conditions[0]
+	c = meta.FindStatusCondition(st.Conditions, ConditionReady)
 	if c.Status != metav1.ConditionTrue || !c.LastTransitionTime.Time.Equal(t3) {
 		t.Errorf("Ready condition = %+v, want True since %v", c, t3)
 	}

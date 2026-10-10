@@ -29,8 +29,12 @@ spec:
           jsonPath: .status.targets[0].score
         - name: Ready
           type: string
-          description: Verdict for the first target — ready, blocked, or unknown (required checks not assessed).
+          description: Verdict for the first target — ready, blocked, or unknown (required checks not assessed). With several targets, the AllTargetsReady condition covers all of them.
           jsonPath: .status.targets[0].verdict
+        - name: Blockers
+          type: integer
+          description: Blocker count of the first target only. With several targets, the AllTargetsReady condition names any target that is blocked.
+          jsonPath: .status.targets[0].blockers
         - name: LastEvaluated
           type: date
           description: When the agent last wrote this status. Older than about two intervals means the agent is not ticking.
@@ -139,7 +143,7 @@ spec:
                   format: int64
                   minimum: 0
                 conditions:
-                  description: 'Standard conditions. Ready summarizes the first target''s verdict: True (ready), False (reason Blocked), or Unknown (reason NotAssessed: a required check was not assessed, or no target was evaluated).'
+                  description: 'Standard conditions. Ready summarizes the first target''s verdict: True (ready), False (reason Blocked), or Unknown (reason NotAssessed: a required check was not assessed, or no target was evaluated). AllTargetsReady covers every target: False (reason Blocked) when any target is blocked, Unknown (reason NotAssessed) when none is blocked but any is not assessed or no target was evaluated, True only when all are ready.'
                   type: array
                   x-kubernetes-list-type: map
                   x-kubernetes-list-map-keys: [type]
