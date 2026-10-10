@@ -525,7 +525,7 @@ not valid, rename the cluster (its history and per-cluster tokens move
 with it), then set the agent's name to match:
 
 ```sh
-upgradescope clusters rename Prod_EU prod-eu --server https://upgradescope.example.com
+upgradescope clusters rename Prod_EU prod-eu --server-url https://upgradescope.example.com
 helm upgrade upgradescope oci://ghcr.io/abd-ulbasit/charts/upgradescope -n upgradescope \
   --reset-then-reuse-values --set agent.clusterName=prod-eu
 ```

@@ -62,7 +62,7 @@ record, history and ingest tokens:
 
 ```sh
 UPGRADESCOPE_ADMIN_TOKEN=... upgradescope clusters delete prod-eu-1 \
-  --server https://upgradescope.example.com
+  --server-url https://upgradescope.example.com
 ```
 
 An agent that keeps pushing under the name registers it again.

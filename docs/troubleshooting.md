@@ -241,7 +241,7 @@ To accept a finding for now, with a reason and an expiry, use an
 - **A push gets 409: `cluster name ... is registered to clusterId ...`.**
   Another cluster already uses this `--cluster-name`, or the cluster was
   rebuilt. Give the agent a distinct name, or delete the old record with
-  `upgradescope clusters delete <name> --server ...` (admin token); the
+  `upgradescope clusters delete <name> --server-url ...` (admin token); the
   message spells out both.
 - **A push gets 401 or 403.** 401: the token is missing or unknown. 403: a
   per-cluster token pushing as another cluster name.

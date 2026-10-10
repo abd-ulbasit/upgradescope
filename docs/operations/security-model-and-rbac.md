@@ -256,7 +256,7 @@ cannot read is reported as not assessed.
   `last_error`, with the URL's scheme and host only
   (`https://hooks.slack.com/…`).
 - **Admin commands never follow redirects.** `clusters delete|rename
-  --server` treat any 3xx as an error naming its status and Location:
+  --server-url` treat any 3xx as an error naming its status and Location:
   Go would follow a 301 or 302 with a GET, which the admin token reads,
   and report a delete that never happened.
 - **Rotating a secret needs no restart, and takes up to about two minutes.**

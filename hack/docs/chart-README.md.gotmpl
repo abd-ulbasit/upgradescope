@@ -121,7 +121,7 @@ sha256 hash and first 8 characters), then install each agent with it:
 cluster (its history and tokens go too) with the admin token:
 
     UPGRADESCOPE_ADMIN_TOKEN=... upgradescope clusters delete prod-eu-1 \
-      --server https://upgradescope.example.com
+      --server-url https://upgradescope.example.com
 
 The server prunes history older than `server.retention` (90 days) and
 marks clusters that stopped pushing stale after `server.staleAfter` (by

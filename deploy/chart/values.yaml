@@ -333,7 +333,7 @@ server:
   allowAnonymousRead: false
   # -- Bearer token for cluster administration: deleting and renaming clusters
   # (DELETE/PATCH /api/v1/clusters/{id}, `upgradescope clusters delete`
-  # and `rename`, with --server). Empty = both are refused. It must differ
+  # and `rename`, with --server-url). Empty = both are refused. It must differ
   # from the read and ingest tokens. Stored in the chart Secret; ignored
   # when existingSecret is set (use adminTokenFromSecret).
   adminToken: ""
