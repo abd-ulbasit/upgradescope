@@ -8,7 +8,7 @@
         "https://github.com/kubernetes/kubernetes/pull/124544",
         "https://github.com/kubernetes/kubernetes/pull/118143"
       ],
-      "detail": "1 object names it, in: namespace unset (1). From 1.31 a pod that names it does not start.",
+      "detail": "1 object names it, in: no namespace set (1). From 1.31 a pod that names it does not start.",
       "key": "volume-plugin/cephfs",
       "objects": [
         {
@@ -29,7 +29,7 @@
         "https://github.com/kubernetes/kubernetes/pull/136400",
         "https://github.com/kubernetes/kubernetes/pull/63445"
       ],
-      "detail": "2 objects name it, in: namespace unset (1), shop (1). From 1.33 a pod that names it does not start. Upstream: disabled by default in 1.33, where the GitRepoVolumeDriver feature gate can still turn it back on, and locked off in 1.36.",
+      "detail": "2 objects name it, in: no namespace set (1), shop (1). From 1.33 a pod that names it does not start. Upstream: disabled by default in 1.33, where the GitRepoVolumeDriver feature gate can still turn it back on, and locked off in 1.36.",
       "key": "volume-plugin/gitRepo",
       "namespaces": [
         "shop"
@@ -104,7 +104,7 @@
         "https://github.com/kubernetes/kubernetes/blob/master/CHANGELOG/CHANGELOG-1.23.md",
         "https://kubernetes.io/docs/concepts/storage/volumes/#flexvolume"
       ],
-      "detail": "1 object names it, in: namespace unset (1). It still works; upstream has not scheduled its removal.",
+      "detail": "1 object names it, in: no namespace set (1). It still works; upstream has not scheduled its removal.",
       "key": "volume-plugin/flexVolume",
       "objects": [
         {
