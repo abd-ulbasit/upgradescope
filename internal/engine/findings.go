@@ -299,7 +299,7 @@ func HiddenBy(gaps []CapabilityGap, c Category, key string) []inventory.Capabili
 func (g CapabilityGap) skips(key string) bool {
 	switch g.Capability {
 	case inventory.CapAPIUsage, inventory.CapDeprecatedCalls:
-		_, tail, _ := strings.Cut(key, "/") // category/group/version/name
+		tail := keyAPI(key) // category/group/version/name[/unserved]
 		if slices.Contains(g.Skipped, inventory.SkippedNewerKB) {
 			return true // any API the server flags may have gone unlisted
 		}
@@ -326,14 +326,14 @@ func (g CapabilityGap) skips(key string) bool {
 // has usage's key alone, so call's is a finding of its own in a report
 // whose api-usage did not see that API, without anything having changed.
 func FoldsInto(call, usage string) bool {
-	cat, tail, _ := strings.Cut(usage, "/")
+	cat, _, _ := strings.Cut(usage, "/")
 	switch Category(cat) {
 	case CatRemovedAPI, CatDeprecatedAPI, CatUnknownAPI:
 	default:
 		return false
 	}
-	u := strings.Split(tail, "/") // group/version/Kind
-	cat, tail, _ = strings.Cut(call, "/")
+	u := strings.Split(keyAPI(usage), "/") // group/version/Kind
+	cat, tail, _ := strings.Cut(call, "/")
 	c := strings.SplitN(tail, "/", 4) // group/version/resource[/subresource]
 	return Category(cat) == CatDeprecatedAPIInUse && len(u) == 3 && u[0] != "helm-release" && len(c) >= 3 &&
 		c[0] == u[0] && c[1] == u[1] && kindMatchesResource(u[2], c[2])

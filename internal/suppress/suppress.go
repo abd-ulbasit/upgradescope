@@ -294,6 +294,10 @@ func applyFinding(f engine.Finding, rules []Rule, opts Options) (*engine.Finding
 			break
 		}
 		if rule.Key != "" && rule.Key != f.Key || rule.Category != "" && rule.Category != string(f.Category) {
+			if base, ok := engine.BaseOfUnservedKey(f.Key); ok && rule.Key == base {
+				warnings = append(warnings, fmt.Sprintf("%s: ignore rule (%s) matches nothing for the API of %q: the key of a finding for an API the target does not serve yet ends in /unserved now, so that a rule for it never accepts the removal that follows; write %s to accept it (the bare key stays the removal's)",
+					opts.Source, rule, f.Key, f.Key))
+			}
 			continue
 		}
 		g := &group{reason: rule.Reason, source: opts.Source, expires: rule.Expires}

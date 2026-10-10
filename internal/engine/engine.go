@@ -132,7 +132,12 @@ func teamsFor(namespaces []string, nsInfo []inventory.NamespaceInfo) []string {
 //     the target does not serve yet (introduced after it) → blocker,
 //     removed-api, "not served until X": applying it fails like a removed
 //     API. Live stored objects are never judged so (the cluster serves
-//     what it stores).
+//     what it stores). Its key ends in /unserved (UnservedKey), so a rule
+//     or baseline for it never accepts the removal that follows; the
+//     removal blocker and the next-minor warning share the bare key.
+//     A removed or deprecated API with no replacement chain the target
+//     serves is remediated to the newest later version of its kind the
+//     target serves (kb.Index.ServedSuccessor), with its stability.
 //   - deprecated, removal beyond the window or unset → info, deprecated-api;
 //     a deprecation after the target is titled as such, and "projected"
 //     past the KB horizon
@@ -191,6 +196,8 @@ func evalAPIUsage(inv inventory.Inventory, k kb.KB, target inventory.Version, b 
 			}
 		} else if later, from, ok := idx.LaterReplacement(e, target); ok {
 			f.Remediation = fmt.Sprintf("no replacement Kubernetes %s serves is known; %s %s is served from %s", target, gvString(later.Group, later.Version), later.Kind, from)
+		} else if succ, ok := idx.ServedSuccessor(e, target); ok {
+			f.Remediation = "migrate to " + successorRemedy(succ)
 		} else if e.Replacement != nil {
 			f.Remediation = fmt.Sprintf("no replacement Kubernetes %s serves is known", target)
 		}
@@ -231,6 +238,9 @@ func evalAPIUsage(inv inventory.Inventory, k kb.KB, target inventory.Version, b 
 			continue // KB entry exists but is neither deprecated nor removed
 		}
 		f.Key = string(f.Category) + "/" + apiKey(u.Group, u.Version, u.Kind)
+		if unserved {
+			f.Key = UnservedKey(f.Key) // not the key of the removal that may follow (#300)
+		}
 		// Live objects carry a Manager when they were flagged for being
 		// written through this version; without one, the kind itself goes
 		// away and every stored object counts.
@@ -380,6 +390,56 @@ func writtenBy(u inventory.APIUsage) string {
 // apiKey renders the group/version/kind tail of an API finding's Key.
 func apiKey(group, version, kind string) string {
 	return keyGroup(group) + "/" + version + "/" + kind
+}
+
+// unservedKeyPhase is the last element of the key of a "not served until X"
+// finding (UnservedKey).
+const unservedKeyPhase = "unserved"
+
+// UnservedKey is the Finding.Key of a removed-api finding for an API the
+// target does not serve yet, from the key the removal of that API has,
+// removed-api/<group>/<version>/<kind>: the phase is part of the key
+// (removed-api/<group>/<version>/<kind>/unserved), as a support-lifecycle
+// key's is (SupportKey), so a rule or a baseline for one phase never
+// accepts the other (#300). The removal blocker and the next-minor removal
+// warning share the bare key: an ignore rule accepts a key whatever the
+// severity.
+func UnservedKey(removalKey string) string { return removalKey + "/" + unservedKeyPhase }
+
+// BaseOfUnservedKey is the key of the removal of the API an unserved
+// finding's key names, and whether key is an unserved key at all.
+func BaseOfUnservedKey(key string) (string, bool) {
+	base, ok := strings.CutSuffix(key, "/"+unservedKeyPhase)
+	return base, ok && strings.HasPrefix(key, string(CatRemovedAPI)+"/")
+}
+
+// keyAPI is the group/version/name of an API finding's key, after its
+// category, without the phase an unserved key adds.
+func keyAPI(key string) string {
+	if base, ok := BaseOfUnservedKey(key); ok {
+		key = base
+	}
+	_, api, _ := strings.Cut(key, "/")
+	return api
+}
+
+// successorRemedy words the version ServedSuccessor found, with the
+// stability the user needs to know about: alpha and beta APIs are off by
+// default in kube-apiserver, and an alpha successor that is itself removed
+// later says when.
+func successorRemedy(succ kb.APILifecycleEntry) string {
+	out := gvString(succ.Group, succ.Version) + " " + succ.Kind
+	switch {
+	case !kb.PreGA(succ.Version):
+		return out
+	case strings.Contains(succ.Version, "alpha"):
+		out += " (alpha; must be enabled"
+		if succ.Removed != nil {
+			out += "; itself removed in " + succ.Removed.String()
+		}
+		return out + ")"
+	}
+	return out + " (beta; may need enabling)"
 }
 
 // objectManagers returns the distinct ObjectRef managers, sorted.
@@ -549,8 +609,7 @@ func otherCallers(inv inventory.Inventory) []inventory.DeprecatedCall {
 func foldDeprecatedCalls(inv inventory.Inventory, usage, calls []Finding, b *budget) []Finding {
 	byAPI := make(map[string]int, len(usage)) // apiKey → index in usage
 	for i, f := range usage {
-		_, api, _ := strings.Cut(f.Key, "/")
-		byAPI[api] = i
+		byAPI[keyAPI(f.Key)] = i
 	}
 	byResource := make(map[string]int, 2*len(inv.APIUsage)) // resourceKey → first index in inv.APIUsage
 	for i, u := range inv.APIUsage {
@@ -2042,6 +2101,8 @@ func evalHelmManifest(rel inventory.HelmRelease, idx kb.Index, live map[string][
 			b.replacements = append(b.replacements, gvString(r.Group, r.Version)+" "+r.Kind)
 		} else if later, from, ok := idx.LaterReplacement(e, target); ok {
 			b.unserved = append(b.unserved, fmt.Sprintf("%s (%s %s is served from %s)", api, gvString(later.Group, later.Version), later.Kind, from))
+		} else if succ, ok := idx.ServedSuccessor(e, target); ok {
+			b.replacements = append(b.replacements, successorRemedy(succ))
 		} else if e.Replacement != nil {
 			b.unserved = append(b.unserved, api)
 		}
