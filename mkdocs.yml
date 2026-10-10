@@ -85,6 +85,7 @@ nav:
       - Prometheus and Grafana: guides/prometheus-grafana.md
       - Suppressions and baselines: guides/suppressions-and-baselines.md
       - Other CI systems: guides/other-ci.md
+      - The dashboard: guides/dashboard.md
   - Operations:
       - Install: operations/install.md
       - Upgrade: operations/upgrade.md
