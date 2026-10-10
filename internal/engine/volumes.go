@@ -52,9 +52,24 @@ func evalVolumePlugins(inv inventory.Inventory, k kb.KB, target inventory.Versio
 			continue
 		}
 		listed := volumeObjectsListed(inv.Source, u.Objects)
-		named := len(u.Objects) > 0 || u.ObjectsOmitted > 0
+		refs := len(u.Objects) + u.ObjectsOmitted
+		named := refs > 0
+		// unlisted is what the row counts but names no object of: a
+		// cluster's pods (its refs are its PersistentVolumes and
+		// StorageClasses), with, in the gate's proposed state, the
+		// manifests' objects beside them (mergeVolumePlugins). A row
+		// naming objects counts the rest omitted, so that Count is
+		// len(Objects) + ObjectsOmitted as suppression assumes: accepting
+		// every listed PersistentVolume or StorageClass then leaves the
+		// finding to the pods (applyFinding takes a finding whole only
+		// when it has nothing omitted). A row naming none stays
+		// objectless.
+		unlisted := 0
+		if named {
+			unlisted = max(0, u.Count-refs)
+		}
 		count := pluralObjects(u.Count)
-		subject := count
+		subject, total := count, u.Count
 		switch {
 		case listed == storedObjects && !named:
 			count = strings.Replace(count, "object", "pod", 1)
@@ -62,11 +77,15 @@ func evalVolumePlugins(inv inventory.Inventory, k kb.KB, target inventory.Versio
 		case listed == storedObjects:
 			// A cluster's row naming objects: its PersistentVolumes and
 			// StorageClasses, beside the pods it counts.
-			subject = fmt.Sprintf("%d pods, PersistentVolumes or StorageClasses", u.Count)
+			subject = pluralVolumeObjects(refs)
+			if unlisted > 0 {
+				subject = strings.Replace(pluralObjects(unlisted), "object", "pod", 1) + " and " + subject
+			}
+			total = unlisted + refs
 		}
 		f := Finding{Category: CatVolumePlugin, Key: string(CatVolumePlugin) + "/" + u.Plugin,
 			Remediation: p.Replacement, Citations: p.Citations,
-			Objects: sortedObjects(u.Objects), ObjectsOmitted: u.ObjectsOmitted}
+			Objects: sortedObjects(u.Objects), ObjectsOmitted: u.ObjectsOmitted + unlisted}
 		var consequence string
 		switch p.Classification {
 		case kb.VolumeRemoved:
@@ -103,7 +122,7 @@ func evalVolumePlugins(inv inventory.Inventory, k kb.KB, target inventory.Versio
 		}
 		where, names := namespaceBreakdown(u.Namespaces, listed.emptyNamespace())
 		verb := "name"
-		if u.Count == 1 {
+		if total == 1 {
 			verb = "names"
 		}
 		f.Detail = fmt.Sprintf("%s %s it, in: %s. %s", subject, verb, where, consequence)
@@ -116,6 +135,16 @@ func evalVolumePlugins(inv inventory.Inventory, k kb.KB, target inventory.Versio
 		}
 	}
 	return out
+}
+
+// pluralVolumeObjects counts a cluster's PersistentVolumes and
+// StorageClasses: "1 PersistentVolume or StorageClass", "2 PersistentVolumes
+// or StorageClasses".
+func pluralVolumeObjects(n int) string {
+	if n == 1 {
+		return "1 PersistentVolume or StorageClass"
+	}
+	return fmt.Sprintf("%d PersistentVolumes or StorageClasses", n)
 }
 
 // volumeObjectsListed says what a volume plugin row's objects are: a

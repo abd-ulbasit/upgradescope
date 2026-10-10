@@ -8,7 +8,7 @@
         "https://github.com/kubernetes/kubernetes/pull/124546",
         "https://github.com/kubernetes/kubernetes/pull/118552"
       ],
-      "detail": "3 pods, PersistentVolumes or StorageClasses name it, in: cluster-scoped (2), data (1). From 1.31 a pod that names it, or that mounts a claim bound to a PersistentVolume that does, does not start. A StorageClass with provisioner kubernetes.io/rbd has its new claims provisioned by the in-tree plugin, so from 1.31 they are not provisioned.",
+      "detail": "3 PersistentVolumes or StorageClasses name it, in: cluster-scoped (2), data (1). From 1.31 a pod that names it, or that mounts a claim bound to a PersistentVolume that does, does not start. A StorageClass with provisioner kubernetes.io/rbd has its new claims provisioned by the in-tree plugin, so from 1.31 they are not provisioned.",
       "key": "volume-plugin/rbd",
       "namespaces": [
         "data"
@@ -37,7 +37,7 @@
         "https://github.com/kubernetes/kubernetes/blob/master/CHANGELOG/CHANGELOG-1.27.md",
         "https://github.com/kubernetes/kubernetes/pull/115838"
       ],
-      "detail": "2 pods, PersistentVolumes or StorageClasses name it, in: shop (2). From 1.27 the ebs.csi.aws.com CSI driver serves every operation on these volumes: a cluster without it installed cannot mount them, one with it is fine. A StorageClass with provisioner kubernetes.io/aws-ebs has its new claims provisioned by the in-tree plugin, so from 1.27 by that CSI driver.",
+      "detail": "1 pod and 1 PersistentVolume or StorageClass name it, in: shop (2). From 1.27 the ebs.csi.aws.com CSI driver serves every operation on these volumes: a cluster without it installed cannot mount them, one with it is fine. A StorageClass with provisioner kubernetes.io/aws-ebs has its new claims provisioned by the in-tree plugin, so from 1.27 by that CSI driver.",
       "key": "volume-plugin/awsElasticBlockStore",
       "namespaces": [
         "shop"
@@ -47,6 +47,7 @@
           "name": "pv-ebs"
         }
       ],
+      "objectsOmitted": 1,
       "remediation": "install the ebs.csi.aws.com CSI driver (aws-ebs-csi-driver) before the upgrade",
       "severity": "warning",
       "teams": [

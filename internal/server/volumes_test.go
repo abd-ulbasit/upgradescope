@@ -2,8 +2,11 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
@@ -182,5 +185,65 @@ func TestMergeManifestsVolumePluginsWithClusterObjects(t *testing.T) {
 	}
 	if len(cluster.VolumePlugins[0].Objects) != 2 {
 		t.Error("the cluster's inventory must not be modified")
+	}
+}
+
+// glusterPod is a posted pod naming glusterfs inline, accepted by its own
+// ignore annotation.
+const glusterPod = `apiVersion: v1
+kind: Pod
+metadata:
+  name: web
+  namespace: payments-prod
+  annotations:
+    upgradescope.basit.engineer/ignore: volume-plugin/glusterfs
+    upgradescope.basit.engineer/ignore-reason: moved to CSI in this PR
+spec:
+  containers: [{name: web, image: nginx}]
+  volumes:
+    - name: data
+      glusterfs: {endpoints: gluster, path: vol}
+`
+
+// #362 review: the gate's proposed state adds the PR's located objects to
+// the cluster's volume plugin row, whose pods are never listed. The PR's
+// object accepted by its annotation leaves the cluster's glusterfs pods
+// blocking the proposed state (clusterVerdict), the finding standing with
+// them counted omitted, and the PR passes, the remainder being the
+// cluster's: one annotation in a PR does not hide the cluster's blocker.
+func TestGateAcceptedManifestVolumeKeepsClusterPods(t *testing.T) {
+	ts := httptest.NewServer(newTestServer(t, newFakeStore(), func(c *Config) { c.KB = volumesKB() }).Handler())
+	defer ts.Close()
+	if resp, out := postSnapshot(t, ts, "ingest-tok", pushReqBody(t, glusterInventory()), false); resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("seed push = %d %v", resp.StatusCode, out)
+	}
+	resp, raw := postGate(t, ts, "?target=1.35&cluster=prod-eu-1&path=deploy/pod.yaml", "", glusterPod, "application/x-yaml")
+	var b struct {
+		Verdict        string `json:"verdict"`
+		ClusterVerdict string `json:"clusterVerdict"`
+		Findings       []struct {
+			Key            string `json:"key"`
+			Severity       string `json:"severity"`
+			ObjectsOmitted int    `json:"objectsOmitted"`
+		} `json:"findings"`
+		Suppressed []struct {
+			Key string `json:"key"`
+		} `json:"suppressed"`
+	}
+	if err := json.Unmarshal(raw, &b); err != nil {
+		t.Fatalf("gate body: %v\n%s", err, raw)
+	}
+	kept := slices.IndexFunc(b.Findings, func(f struct {
+		Key            string `json:"key"`
+		Severity       string `json:"severity"`
+		ObjectsOmitted int    `json:"objectsOmitted"`
+	}) bool {
+		return f.Key == "volume-plugin/glusterfs"
+	})
+	if resp.StatusCode != http.StatusOK || b.Verdict != "ready" || b.ClusterVerdict != "blocked" || kept < 0 ||
+		b.Findings[kept].Severity != "blocker" || b.Findings[kept].ObjectsOmitted != 2 ||
+		len(b.Suppressed) != 1 || b.Suppressed[0].Key != "volume-plugin/glusterfs" {
+		t.Errorf("gate = %d, clusterVerdict %q: want 200 ready (the remainder is the cluster's), the glusterfs blocker kept with the cluster's 2 pods omitted, cluster blocked, and the PR's pod suppressed\n%s",
+			resp.StatusCode, b.ClusterVerdict, raw)
 	}
 }
