@@ -189,7 +189,11 @@ jobs:
   test:
     if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # 25, up from 15: the job took 7 to 12 minutes on main's last pushes
+    # (runs 38028648092, 38031779891, 38032862971), before #314 added a
+    # -race build of tools/promrule-test (the Prometheus tree) to make test.
+    # A cold cache or a slow runner would have run out of room at 15.
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
