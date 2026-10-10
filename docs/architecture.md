@@ -37,15 +37,17 @@ inventory (what is running)  +  knowledge base (what upstream says)  +  target v
        report: findings + score + ready + "not assessed" gaps
 ```
 
-One Go module produces one binary with three modes and two admin commands:
+One Go module produces one binary with three modes, an MCP server for AI assistants, two admin commands and a version command:
 
 | Command | Runs | Produces |
 |---|---|---|
-| `upgradescope scan` | once, from a laptop or CI | a table, JSON, SARIF or Markdown report, and an exit code (0 gate passed, 2 gate failed, 1 error; the gate fails on a finding at or above `--fail-on`, default `blocker`, or on an `unknown` verdict unless `--allow-incomplete`; `never` always passes) |
+| `upgradescope scan` | once, from a laptop or CI | a table, JSON, SARIF, Markdown, JUnit or GitLab Code Quality (`gitlab-codequality`) report, and an exit code (0 gate passed, 2 gate failed, 1 error; the gate fails on a finding at or above `--fail-on`, default `blocker`, or on an `unknown` verdict unless `--allow-incomplete`; `never` always passes) |
 | `upgradescope agent` | continuously, in the cluster | `ClusterReadiness` status, plus snapshot pushes to a server (optional) |
 | `upgradescope serve` | continuously, anywhere | stored history, fleet rollups, what-if, CI gate, exports, notifications, dashboard |
+| `upgradescope mcp` | while an assistant is connected (stdio, or HTTP with `--http`) | read-only [Model Context Protocol](getting-started/mcp.md) tools that return the report the CLI writes, the add-on registry and, against a fleet server, the fleet |
 | `upgradescope tokens` | on demand, next to `serve` | creates, lists and revokes per-cluster ingest tokens |
 | `upgradescope clusters` | on demand, against a server or its database | lists, deletes and renames clusters |
+| `upgradescope version` | on demand | the version, build and knowledge base details |
 
 The core idea is a **smart edge**. The evaluation engine is a pure function
 with no Kubernetes or network dependencies, embedded in all three modes. The
@@ -63,9 +65,15 @@ for (a what-if) without going back to the cluster.
 | `internal/kb` | Loads the knowledge base: API lifecycle data, the registry, and the version-skew policy | `inventory`, `registry` |
 | `internal/engine` | `Evaluate` and `Score`: pure, deterministic, no I/O | `inventory`, `kb`, `registry` |
 | `internal/sarif` | Renders a report as SARIF 2.1.0 | `engine` |
+| `internal/junit` | Renders a report as JUnit XML for Jenkins, GitLab and Azure Pipelines | `engine`, `inventory` |
+| `internal/codequality` | Renders a report as a GitLab Code Quality report | `engine`, `inventory` |
+| `internal/suppress` | Applies ignore rules, annotations and a baseline to a report | `engine`, `inventory` |
+| `internal/secretfile` | Reads a token or URL from a mounted file and re-reads it when the file changes | nothing internal |
+| `internal/textsafe` | Makes text a manifest or cluster controls safe to print to a terminal or a CI log | nothing internal |
+| `internal/mcp` | The MCP server behind `upgradescope mcp`: tools, schemas and the stdio and HTTP transports; what a scan does stays in the CLI's code, handed in through its config | `engine`, `registry`, `api` |
 | `internal/crd` | `ClusterReadiness` types, the embedded CRD manifest, and status projection and writes | `engine`, client-go |
 | `internal/agent` | The in-cluster loop and the snapshot push client | `collect`, `engine`, `crd`, `kb` |
-| `internal/server` | Ingest, read API, what-if, gate, exports, team mapping, delta notifications, SPA serving | `engine`, `kb`, `collect` (manifests only), `sarif` |
+| `internal/server` | Ingest, read API, what-if, gate, exports, team mapping, delta notifications, SPA serving | `engine`, `kb`, `collect` (manifests only), `sarif`, `junit`, `codequality`, `suppress`, `secretfile` |
 | `internal/server/store` | The `Store` interface and its SQLite and Postgres implementations, with embedded migrations | nothing internal |
 | `internal/server/notify` | Slack and generic-webhook delivery | nothing internal |
 | `internal/cli` | cobra commands, flag validation, output writers, exit codes | everything above |
