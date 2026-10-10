@@ -67,7 +67,7 @@ func TestScanUnrenderedChartOneTemplateJSON(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "unrendered Helm templates") || !strings.Contains(err.Error(), "helm template NAME") || ExitCode(err) != 1 {
 		t.Fatalf("err = %v, want exit 1 naming Helm; out %q", err, out)
 	}
-	if strings.Count(stderr, "looks like an unrendered Helm chart") != 1 || !strings.Contains(stderr, "1 template contain") {
+	if strings.Count(stderr, "looks like an unrendered Helm chart") != 1 || !strings.Contains(stderr, "1 template contains {{ }}") {
 		t.Errorf("stderr = %q, want the one hint", stderr)
 	}
 
@@ -230,6 +230,50 @@ func TestScanNoKubeconfigNamesPathsAndFilesAlternative(t *testing.T) {
 	}
 }
 
+// A kubeconfig that has contexts but no current-context was found: the scan
+// does not say "no kubeconfig found", it lists the contexts to pick from.
+func TestScanKubeconfigWithoutCurrentContextListsContexts(t *testing.T) {
+	cfg := filepath.Join(t.TempDir(), "config")
+	const kc = `apiVersion: v1
+kind: Config
+clusters:
+- name: c
+  cluster: {server: "https://127.0.0.1:1"}
+users:
+- name: u
+  user: {token: t}
+contexts:
+- name: prod
+  context: {cluster: c, user: u}
+- name: dev
+  context: {cluster: c, user: u}
+`
+	if err := os.WriteFile(cfg, []byte(kc), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("KUBECONFIG", "")
+	_, _, err := scanRESTConfig(cfg, "", 0)
+	if err == nil {
+		t.Fatal("want an error")
+	}
+	got := ErrorText(err)
+	for _, want := range []string{"--kubeconfig " + cfg, "sets no current-context", "--context <name> (dev, prod)", "kubectl config use-context"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("error %q lacks %q", got, want)
+		}
+	}
+	if strings.Contains(got, "no kubeconfig found") || strings.Contains(got, "KUBERNETES_MASTER") {
+		t.Errorf("error %q says no kubeconfig was found, or names KUBERNETES_MASTER", got)
+	}
+	if ExitCode(err) != 1 {
+		t.Errorf("exit = %d, want 1", ExitCode(err))
+	}
+	// --context picks one, and the config loads.
+	if _, ctx, err := scanRESTConfig(cfg, "dev", 0); err != nil || ctx != "dev" {
+		t.Errorf("--context dev: ctx %q, err %v; want dev, nil", ctx, err)
+	}
+}
+
 // A mistyped subcommand prints its suggestion on lines of its own (#338)
 // with a typed error, and the typed name is still escaped (#245).
 func TestUnknownCommandLayout(t *testing.T) {
@@ -368,5 +412,14 @@ func TestOutputShorthandIsFormatEverywhere(t *testing.T) {
 	vc.SetArgs([]string{"-o", "json"})
 	if err := vc.Execute(); err != nil || !json.Valid(vout.Bytes()) {
 		t.Errorf("version -o json: err %v, output %q", err, vout.String())
+	}
+}
+
+// The root command's examples target the knowledge base's horizon, never a
+// minor written into the help text.
+func TestRootExamplesTargetTheHorizon(t *testing.T) {
+	ex := Root().Example
+	if want := "--target " + targetExample(); strings.Count(ex, want) != 2 || strings.Contains(ex, "HORIZON") {
+		t.Errorf("root examples %q: want %q twice", ex, want)
 	}
 }

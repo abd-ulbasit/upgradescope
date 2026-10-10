@@ -160,12 +160,14 @@ score and verdict.
 
 Run it once with 'scan', continuously in the cluster with 'agent', and across
 a fleet with 'serve'.`,
-		Example: `  # Is the current kubeconfig context's cluster ready for Kubernetes 1.37?
-  upgradescope scan --target 1.37
+		// The examples' target is the knowledge base's horizon, so they
+		// never name a minor this build cannot judge.
+		Example: strings.ReplaceAll(`  # Is the current kubeconfig context's cluster ready for Kubernetes HORIZON?
+  upgradescope scan --target HORIZON
 
   # Gate a pull request on rendered manifests
   helm template ./chart --output-dir rendered
-  upgradescope scan --files rendered --target 1.37 --output sarif > upgradescope.sarif`,
+  upgradescope scan --files rendered --target HORIZON --output sarif > upgradescope.sarif`, "HORIZON", targetExample()),
 		Version:       version,
 		SilenceUsage:  true,
 		SilenceErrors: true,

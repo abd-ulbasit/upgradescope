@@ -7,10 +7,12 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"maps"
 	"net/url"
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -216,8 +218,12 @@ func templateFiles(sum collect.FilesSummary) int {
 func writeTemplateHints(w io.Writer, base string, sum collect.FilesSummary) {
 	for _, c := range sum.Charts {
 		dir := esc(path.Join(base, c.Dir))
-		fmt.Fprintf(w, "warning: %s looks like an unrendered Helm chart (Chart.yaml found, %s contain {{ }}); render it first: helm template NAME %s --output-dir rendered\n",
-			dir, plural(c.Templates, "template"), dir)
+		verb := "contain"
+		if c.Templates == 1 {
+			verb = "contains"
+		}
+		fmt.Fprintf(w, "warning: %s looks like an unrendered Helm chart (Chart.yaml found, %s %s {{ }}); render it first: helm template NAME %s --output-dir rendered\n",
+			dir, plural(c.Templates, "template"), verb, dir)
 	}
 	if sum.Templated > 0 {
 		fmt.Fprintf(w, "warning: skipped %s containing {{ }}, outside any Helm chart (Chart.yaml): unrendered templates?\n", plural(sum.Templated, "file"))
@@ -326,6 +332,11 @@ func scanRESTConfig(kubeconfig, kubecontext string, requestTimeout time.Duration
 	cfg, err := loader.ClientConfig()
 	if err != nil {
 		if clientcmd.IsEmptyConfig(err) || (kubeconfig != "" && errors.Is(err, fs.ErrNotExist)) {
+			// A kubeconfig with contexts but no current-context reads as
+			// empty to client-go; it was found, so say what it lacks.
+			if raw, rerr := loader.RawConfig(); rerr == nil && kubecontext == "" && raw.CurrentContext == "" && len(raw.Contexts) > 0 {
+				return nil, "", &noCurrentContextError{checked: kubeconfigChecked(rules, kubeconfig), contexts: slices.Sorted(maps.Keys(raw.Contexts)), err: err}
+			}
 			return nil, "", &noKubeconfigError{checked: kubeconfigChecked(rules, kubeconfig), err: err}
 		}
 		return nil, "", fmt.Errorf("load kubeconfig: %w", err)
@@ -355,6 +366,31 @@ func (e *noKubeconfigError) Error() string {
 }
 
 func (e *noKubeconfigError) Unwrap() error { return e.err }
+
+// noCurrentContextError is the refusal of a live scan whose kubeconfig has
+// contexts but sets no current-context, and no --context picked one: it
+// lists them (at most five) and says how to pick one.
+type noCurrentContextError struct {
+	checked  string   // where it looked, as kubeconfigChecked says it
+	contexts []string // sorted
+	err      error
+}
+
+func (e *noCurrentContextError) Error() string {
+	listed := e.contexts[:min(len(e.contexts), 5)]
+	names := make([]string, len(listed))
+	for i, c := range listed {
+		names[i] = esc(c)
+	}
+	more := ""
+	if n := len(e.contexts) - len(listed); n > 0 {
+		more = fmt.Sprintf(" and %d more", n)
+	}
+	return fmt.Sprintf("the kubeconfig (%s) sets no current-context; pick one of its contexts with --context <name> (%s%s), or set one with kubectl config use-context <name>",
+		e.checked, strings.Join(names, ", "), more)
+}
+
+func (e *noCurrentContextError) Unwrap() error { return e.err }
 
 // kubeconfigChecked names the kubeconfig files a load looked at: the
 // --kubeconfig file, else the $KUBECONFIG entries, else ~/.kube/config.
