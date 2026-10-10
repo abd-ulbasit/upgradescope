@@ -33,12 +33,53 @@ The server checks, in this order:
 | the admin token | the whole fleet | `serve --admin-token` |
 | a stored read token | its teams, or the whole fleet for `*` | `upgradescope tokens create --read --teams payments --teams checkout` |
 | a trusted proxy's team header | the teams it lists, never the whole fleet | `serve --trust-team-header X-Forwarded-Groups --trusted-proxy-cidr 127.0.0.1/32` |
-| nothing | the whole fleet, only while the read API is open | no `--read-token`, no read token ever minted, no trusted header |
+| nothing | the whole fleet, only while the read API is open | no `--read-token`, no read token in the database, no trusted header, and not `--require-read-credential` |
 
 All tokens are sent as `Authorization: Bearer <token>`. Once
 `--read-token` is set, a read token has been minted or the trusted header
-is configured, a request that presents no valid credential gets `401`. `serve` refuses an open read API on an address that is not
-loopback unless `--allow-anonymous-read` is set.
+is configured, a request that presents no valid credential gets `401`.
+`serve` refuses an open read API on an address that is not loopback unless
+`--allow-anonymous-read` is set.
+
+**An unknown bearer is never the open read.** On an open read API, a
+request with no `Authorization` header reads the whole fleet, but one that
+presents a bearer matching no credential the server knows (not
+`--read-token`, not the admin token, not a stored read token, and no trusted
+team mapping) gets `401`. A team-scoped token whose database was lost would
+otherwise read every team's data instead of failing. A client that sends a
+placeholder token to a server it believes is open (a CI gate's `READ_TOKEN`
+set to anything) now gets `401`: send no `Authorization` header, or a real
+token.
+
+### Keeping the read API closed (`--require-read-credential`)
+
+Whether a read token has been minted is a fact in the database. A lost
+PVC, a pod restart with `persistence.enabled=false` (an `emptyDir`), an
+older backup restored, or `--db-url` pointed at a fresh database has no
+such rows, so a server that was closed by its minted tokens, and was started
+with `--allow-anonymous-read` or on loopback, is **open again**: the fleet,
+the dashboard's data and `/api/v1/gate` answer anyone who can reach it, and
+the only signal is a `WARN` log line at startup.
+
+`serve --require-read-credential` (chart: the default when
+`server.readToken` is empty and no `allowAnonymousRead` opts in) makes the
+closed state something that cannot be lost along with the data: the read
+API is never open, so a read with no credential, or with a bearer nothing
+knows, is `401` whatever the database holds, and `serve` starts on any
+address (an open read API is what it would refuse). While no credential
+exists yet (no `--read-token`, no active read token in the store, no trusted
+header) it logs a `WARN` saying reads return `401` until one is minted. It
+excludes `--allow-anonymous-read`. Mint the first token with the same
+`--db` or `--db-url` as `serve`; the running server sees it on the next
+request, SQLite included (the command and the server are two processes on
+one WAL-mode file):
+
+```console
+$ upgradescope tokens create --read --teams '*' --db upgradescope.db
+```
+
+After the database is lost, mint again. `/healthz` and `/readyz` need no
+credential.
 
 `--read-token` must differ from `--ingest-token` (and both from
 `--admin-token`): `serve` refuses to start otherwise, since one bearer
@@ -51,13 +92,19 @@ A web page can point its own name at your loopback address: a page on
 `attacker.example` makes `attacker.example` resolve to `127.0.0.1`
 (DNS rebinding), and its requests then reach a server on the browser's
 machine as same-origin requests that carry `Host: attacker.example`.
-Two kinds of request need no credential to read: an open read API, which
-`serve` allows only on loopback, and the trusted team header, which is
-trusted from every connection out of a `--trusted-proxy-cidr` address,
-`kubectl port-forward`'s included (it delivers the browser's
-connections to the pod from `127.0.0.1`, Host unchanged). So when
-`serve` **listens on loopback, or `--trust-team-header` is set**, it
-answers a request only when its Host names one of:
+Two kinds of request need no credential to read: an anonymous read of an
+open read API, and the trusted team header, which is trusted from every
+connection out of a `--trusted-proxy-cidr` address, `kubectl port-forward`'s
+included (it delivers the browser's connections to the pod from
+`127.0.0.1`, Host unchanged). A server that listens on every interface
+(`--listen :8080`, the chart's) is reached on loopback too, by the same
+port-forward, so the address it bound says nothing about who can send such a
+request. So `serve` answers a request only when its Host names one of the
+names below, when it **listens on loopback**, when **`--trust-team-header`
+is set**, or when **the read API is open and the request presents no bearer**
+(an anonymous read; decided on each request, so minting a read token ends it
+without a restart, and a store that cannot say whether the API is open is
+treated as open). The names:
 
 - `localhost`, or a loopback address (`127.0.0.0/8`, `::1`);
 - the address the request arrived on, as an IP literal: the kubelet's
@@ -77,10 +124,17 @@ token, team header or scope is looked at, `/healthz`, ingest and the
 dashboard included. Each refusal is counted in `/metrics`
 (`upgradescope_http_requests_total{route="host-refused",code="421"}`)
 and logged at most once a minute, with the Host quoted and escaped, so
-a name clients use but serve was not given shows up in the log. On a
-routable address with a read credential and no trusted header nothing
-changes: any Host is answered, since every read needs a token a page
-does not have.
+a name clients use but serve was not given shows up in the log. The
+exceptions are the requests the check cannot help: with a read credential
+(`--read-token`, a minted read token or `--require-read-credential`) on a
+routable address and no trusted header, any Host is answered, since every
+read needs a token a page does not have; and on an open read API a request
+that presents a bearer is left to its credential (an unknown one is `401`,
+whatever its Host), so an agent pushing to an open hub under a name nobody
+listed is not turned away by the check, only by its token. Probes
+(`/healthz`, `/readyz`) and Prometheus scrapes of the pod's IP name the
+address they arrive on and are answered; a scrape through a Service name
+needs that name in `--allowed-host` (the chart passes its Service names).
 
 The chart passes `--allowed-host` with the server Service's DNS names
 (`<release>-server`, `.<namespace>`, `.<namespace>.svc` and
@@ -117,10 +171,15 @@ an ingest token never reads. The commands take the same `--db` or
 `--db-url` as `serve`, and the server looks a token up on every request,
 so one minted or revoked takes effect at once, without a restart.
 
-- **Minting the first read token closes the read API.** A server that ran
-  open (on loopback, or with `--allow-anonymous-read`) needs a credential
-  from then on. Rows are only ever revoked, never deleted, so revoking the
-  last one does not open the read API again.
+- **Minting the first read token closes the read API, while this database
+  lasts.** A server that ran open (on loopback, or with
+  `--allow-anonymous-read`) needs a credential from then on. Rows are only
+  ever revoked, never deleted, so revoking the last one does not open the
+  read API again. The rows are in the database, though: a lost, emptied or
+  restored one has none, and the API is open again after the next start.
+  Run `serve --require-read-credential` (see
+  [above](#keeping-the-read-api-closed-require-read-credential)) to make the
+  closed state independent of the data.
 - **`--read-token` keeps working** as a fleet-wide token, answering exactly
   what it answered before scoped tokens existed (a regression test
   compares the bytes of every read endpoint and the gate with the answers
@@ -353,9 +412,9 @@ So pick the gate's credential by what the repository can break:
 
 Every read that presents a bearer other than `--read-token` or the admin
 token looks it up in the store (an indexed query on its hash), and while
-no read token has been minted an open read API lists them once per read,
-before the read and fleet concurrency limits apply. Requests with random
-bearers therefore each cost a store query; put the server behind a proxy
+no read token has been minted an open read API lists them once per
+anonymous read, before the read and fleet concurrency limits apply.
+Requests with random bearers therefore each cost a store query; put the server behind a proxy
 that rate-limits unauthenticated clients if that matters to you.
 
 ### With the Helm chart
@@ -367,13 +426,27 @@ Read tokens minted with `tokens create --read` work with the chart as it
 is (`kubectl exec deploy/<fullname>-server -- /upgradescope tokens create
 --read --teams payments --db /data/upgradescope.sqlite`, where `<fullname>`
 is the release name plus `-upgradescope`, cut to 63 characters, or the
-release name alone when it contains `upgradescope`). Its Ingress
-guard knows only `server.readToken` and `server.ingress.allowAnonymousRead`:
-a deployment that relies on minted tokens alone sets
-`server.ingress.allowAnonymousRead=true`, which passes
-`--allow-anonymous-read`. That is safe once the first read token is
-minted (the read API is closed from then on, for good) and open until
-then, so mint one before enabling the Ingress.
+release name alone when it contains `upgradescope`).
+
+With no `server.readToken` the chart passes `--require-read-credential`:
+the read API is closed, reads return `401`, and the install notes print the
+command above for your database (SQLite or Postgres). A deployment that
+relies on minted tokens alone sets nothing else; the Ingress renders without
+`server.ingress.allowAnonymousRead`. A lost or restored database, or
+`persistence.enabled=false` on every pod restart, leaves it closed, and you
+mint again. `metrics.serviceMonitor` sends only `server.readToken`, so with
+the read API closed it needs one (the render fails otherwise).
+
+To leave the read API **open** (an authenticating layer in front is the
+access control), set `server.allowAnonymousRead=true` (or the older
+`server.ingress.allowAnonymousRead=true`, the same opt-in; with an Ingress
+the render requires the latter too, as the statement that a proxy fronts
+it): the chart then passes `--allow-anonymous-read`, and the API is open
+whenever no read credential exists, including after the database is lost.
+Do not set either to rely on minted tokens: that was the documented advice
+before this flag existed, and it leaves the API open after a database loss.
+Open or not, a read-token `server.readToken` takes precedence and the chart
+passes neither flag.
 
 ## Putting the dashboard behind SSO
 
@@ -389,8 +462,11 @@ Three patterns, from simplest to most integrated:
    tokens, directly or through a proxy route that skips authentication.
    No server flag changes.
 2. **The proxy is the gate.** Run without any read credential
-   (`--allow-anonymous-read`, chart `server.ingress.allowAnonymousRead=true`
-   when the chart's Ingress carries the auth annotations) and make sure
+   (`--allow-anonymous-read`, chart `server.allowAnonymousRead=true` and
+   `server.ingress.allowAnonymousRead=true` when the chart's Ingress carries
+   the auth annotations; the proxy's Host must be an `--allowed-host`, which
+   the chart does for `server.ingress.host`, and it must not pass an
+   `Authorization` bearer, which an open server answers with `401`) and make sure
    nothing but the proxy can reach the read API: a ClusterIP Service, a
    NetworkPolicy (`networkPolicy.enabled`, `serverIngressFrom` naming the
    proxy, Prometheus and the agents' sources). Everyone the proxy lets in

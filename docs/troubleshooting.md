@@ -151,7 +151,16 @@ To accept a finding for now, with a reason and an expiry, use an
   (`upgradescope tokens create --read --teams '*'`), trust an
   authenticating proxy's team header, listen on loopback, or pass
   `--allow-anonymous-read` when something in front of the server
-  authenticates ([Read access](operations/auth.md)).
+  authenticates ([Read access](operations/auth.md)). To keep the API closed
+  even after the database is lost, `--require-read-credential` starts
+  without a credential and answers `401` until one is minted.
+- **`401` from an open server, for a token that "worked before".** An open
+  read API now refuses a bearer it does not know instead of reading the
+  whole fleet for it. Send no `Authorization` header, or a token the server
+  holds (`tokens list --read`). **`421` from `serve` for a name that worked.**
+  An open read API answers an anonymous request only for `localhost`, a
+  loopback address, the address it arrived on and the `--allowed-host`
+  names ([the Host check](operations/auth.md#the-host-check-dns-rebinding)).
 - **A scoped read token gets 404 for a cluster that exists, or 403 on
   `/metrics`.** The cluster has no namespace of the token's teams in its
   latest evaluated snapshot, and `/metrics` takes a fleet-wide credential

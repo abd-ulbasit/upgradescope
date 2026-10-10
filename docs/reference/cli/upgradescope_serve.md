@@ -16,6 +16,14 @@ a credential: --read-token (fleet-wide), read tokens minted with
 (--trust-team-header with --trusted-proxy-cidr); or an explicit
 --allow-anonymous-read.
 
+Whether a read token has been minted lives in the database, so a lost,
+emptied or restored database reopens a read API that relied on minted tokens
+(and --allow-anonymous-read allows it). --require-read-credential closes it
+for good: reads are never open, and return 401 until a credential exists.
+While the read API is open, a request that presents a bearer nothing knows
+gets 401, and an anonymous request must name a host the server answers for
+(--allowed-host), on any listen address.
+
 ```
 upgradescope serve [flags]
 ```
@@ -37,8 +45,8 @@ upgradescope serve [flags]
 ```
       --admin-token string             bearer token for cluster administration: DELETE and PATCH (rename) /api/v1/clusters/{id}, 'upgradescope clusters delete|rename --server'; it also reads (empty = administration refused) (visible in process listings: prefer $UPGRADESCOPE_ADMIN_TOKEN or --admin-token-file)
       --admin-token-file string        read --admin-token from this file, e.g. a mounted Secret (surrounding whitespace is trimmed); the file is re-read when it changes (checked at most every 5s, when it is next needed), so a rotated Secret needs no restart. A value from the flag or the environment is read once
-      --allow-anonymous-read           serve the read API and /api/v1/gate without a read token on a non-loopback --listen address
-      --allowed-host strings           a host name (or IP) requests may name in their Host header, any port, repeatable or comma separated (default $UPGRADESCOPE_ALLOWED_HOSTS): on a loopback --listen, or with --trust-team-header, any other Host than localhost, a loopback address, the --listen host (not 0.0.0.0 or ::) or the address the request arrived on gets 421, which stops DNS-rebinding pages; name the Service, Ingress or proxy host the server is reached under
+      --allow-anonymous-read           serve the read API and /api/v1/gate without a read token on a non-loopback --listen address (it is open only while no read credential exists: --read-token, a read token minted in the database, or a trusted team header; a lost or restored database reopens it, and a request that presents a bearer nothing knows gets 401); anonymous reads must name a host the server answers for (see --allowed-host); excludes --require-read-credential
+      --allowed-host strings           a host name (or IP) requests may name in their Host header, any port, repeatable or comma separated (default $UPGRADESCOPE_ALLOWED_HOSTS): on a loopback --listen, with --trust-team-header, or for an anonymous request while the read API is open (any --listen address), any other Host than localhost, a loopback address, the --listen host (not 0.0.0.0 or ::) or the address the request arrived on gets 421, which stops DNS-rebinding pages; name the Service, Ingress or proxy host the server is reached under
       --db string                      path to the SQLite database (parent directory is created) (default "upgradescope.db")
       --db-url string                  Postgres URL (postgres://user:pass@host:5432/db); mutually exclusive with --db (visible in process listings: prefer $UPGRADESCOPE_DB_URL or --db-url-file)
       --db-url-file string             read --db-url from this file, e.g. a mounted Secret (surrounding whitespace is trimmed)
@@ -49,9 +57,10 @@ upgradescope serve [flags]
       --max-gate-bytes int             largest accepted /api/v1/gate manifest stream, in bytes; the body must arrive within the 60s read timeout or the request gets 408, and a stream of too many YAML nodes gets 413 whatever its size (the 400k-node budget is about 4.4 MiB of typical kubectl YAML, so it, not this cap, limits a realistic stream) (default 10485760)
       --max-snapshot-bytes int         largest accepted snapshot push body, in bytes (also applied after gzip decompression); the body must arrive within the 60s read timeout (~350 KiB/s at the 20 MiB default) or the push gets 408, and a push that decodes to too many JSON values gets 413 whatever its size; it also caps every report the server evaluates, stores or exports (a push whose report would be larger gets 413) (default 20971520)
       --optional-secret-file strings   names of --*-file flags (ingest-token, slack-webhook, webhook, webhook-secret) whose file may be missing at start, as a key absent from a Secret you manage is: the secret is then unset; a token file that appears later is picked up, and one removed later stops that token working. A file that exists is read as usual
-      --read-token string              bearer token for the read API and /api/v1/gate (empty = OPEN read access; refused on non-loopback --listen without --allow-anonymous-read) (visible in process listings: prefer $UPGRADESCOPE_READ_TOKEN or --read-token-file)
+      --read-token string              bearer token for the read API and /api/v1/gate (empty = OPEN read access unless a read token is minted in the database; refused on non-loopback --listen without --allow-anonymous-read; --require-read-credential keeps it closed whatever the database holds) (visible in process listings: prefer $UPGRADESCOPE_READ_TOKEN or --read-token-file)
       --read-token-file string         read --read-token from this file, e.g. a mounted Secret (surrounding whitespace is trimmed); the file is re-read when it changes (checked at most every 5s, when it is next needed), so a rotated Secret needs no restart. A value from the flag or the environment is read once
       --registry-dir string            extra add-on registry entries: one <id>.yaml file or a directory of them, in the schema of registry/CONTRIBUTING.md and validated like the embedded entries; an entry with an embedded id replaces it
+      --require-read-credential        never open the read API: a read with no credential, or with a bearer nothing knows, gets 401 even when the database holds no read token (a lost or restored database cannot reopen it); serve warns at startup while no credential exists yet, and mint the first with: upgradescope tokens create --read --teams '*' (same --db or --db-url), or set --read-token; excludes --allow-anonymous-read
       --retention string               prune snapshots and evaluations older than this, in days (90d) or a Go duration (2160h), at startup and daily; each cluster's latest snapshot and its evaluations are always kept; 0 keeps everything (default "90d")
       --slack-webhook string           Slack incoming-webhook URL for delta notifications (visible in process listings: prefer $UPGRADESCOPE_SLACK_WEBHOOK or --slack-webhook-file)
       --slack-webhook-file string      read --slack-webhook from this file, e.g. a mounted Secret (surrounding whitespace is trimmed); the file is re-read when it changes (checked at most every 5s, when it is next needed), so a rotated Secret needs no restart. A value from the flag or the environment is read once

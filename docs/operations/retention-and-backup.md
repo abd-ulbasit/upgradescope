@@ -208,12 +208,31 @@ keeps the exports from the time (`GET /api/v1/clusters/{id}/export`).
 
 The database holds each cluster's registration (name bound to its cluster
 UID), the stored snapshots and evaluations (score history, exports), the
-notification outbox and the hashes of per-cluster ingest tokens. Losing it
-loses history, not the present: every agent pushes its full inventory at
-least hourly (`--force-sync-every`), so the fleet view refills within about
-an hour of a fresh start, and the `ClusterReadiness` objects in each cluster
-are untouched. What does not come back is history, the per-cluster tokens
-(mint and roll out new ones) and the bindings of names to cluster UIDs.
+notification outbox and the hashes of per-cluster ingest tokens and of
+**read tokens**. Losing it loses history, not the present: every agent
+pushes its full inventory at least hourly (`--force-sync-every`), so the
+fleet view refills within about an hour of a fresh start, and the
+`ClusterReadiness` objects in each cluster are untouched. What does not come
+back is history, the per-cluster tokens (mint and roll out new ones), the
+read tokens (mint them again, and give them out again) and the bindings of
+names to cluster UIDs.
+
+**A lost or restored database reopens the read API** unless
+`--require-read-credential` or `--read-token` is set. Whether the read API
+is closed is decided by the read tokens in the database: with none (a lost
+PVC, an emptied volume, `--db-url` pointed at a fresh database, or an older
+backup taken before the first token was minted) and none of those two
+settings, a server that allows an open read API (`--allow-anonymous-read`,
+or a loopback listener) answers the whole fleet, the dashboard's data and
+`/api/v1/gate` to anyone who can reach it, and logs only a `WARN` line at
+startup. A restore of an older backup also makes a token you revoked since
+active again, and forgets tokens minted since. The Helm chart with
+`server.persistence.enabled=false` (an `emptyDir`) does this on every pod
+restart. Run `serve --require-read-credential` (the chart's default when
+`server.readToken` is empty and `server.allowAnonymousRead` is not set) or
+give `--read-token` (`server.readToken`), and after a restore list the
+tokens (`upgradescope tokens list --read`) and mint again what is missing
+([Read access](auth.md#keeping-the-read-api-closed-require-read-credential)).
 
 **SQLite.** The database is one file plus its `-wal` and `-shm` files, in
 WAL mode. Copy it with the server stopped, so the three files are
