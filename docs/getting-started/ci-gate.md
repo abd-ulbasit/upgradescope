@@ -43,11 +43,30 @@ jobs:
           fail-on: blocker
           version: v0.2.0                        # pin the binary, and with it the knowledge base
       - uses: github/codeql-action/upload-sarif@v4
-        if: ${{ !cancelled() && steps.gate.outputs.sarif-file != '' }}  # also when the gate failed
+        # Also when the gate failed. Not on a fork PR: its token is read-only.
+        if: >-
+          ${{ !cancelled() && steps.gate.outputs.sarif-file != ''
+          && (github.event_name != 'pull_request'
+          || github.event.pull_request.head.repo.full_name == github.repository) }}
         with:
           sarif_file: ${{ steps.gate.outputs.sarif-file }}
           category: upgradescope
 ```
+
+**Pull requests from forks.** GitHub gives a fork's `pull_request` run a
+read-only token, so `upload-sarif` would fail with "Resource not accessible
+by integration" after the gate has run, and turn the job red for a reason
+that is not the gate. The `if:` above skips the upload when the pull request
+comes from another repository, so on a fork PR the gate still runs and fails
+the job only when the gate fails; the job summary and the step annotations,
+which need no write permission, are the fork's report, and the SARIF is not
+uploaded. The same step works unchanged on a push and on a same-repository
+pull request. Do not switch the trigger to `pull_request_target` to get the
+upload back: it runs with a write token and the base repository's secrets,
+and the gate would read files the pull request controls. Instead of the
+guard, `continue-on-error: true` on the upload step also keeps a failed
+upload from failing the job, but it hides every upload error, not only the
+fork one.
 
 **Where the alerts land.** Each SARIF result sits on the file and line the
 scan read: the object's `apiVersion` line, in a path relative to the
@@ -97,7 +116,7 @@ there the default is `latest`, and the wrapper should set `version`.
 The action sets `sarif-file` only when the gate exits 0 or 2, which leaves a
 complete SARIF, a failed gate included. After a scan error (exit 1) or any
 other exit, such as an out-of-memory kill, it sets no `sarif-file`, so the
-`sarif-file != ''` guard above skips the upload instead of failing on an
+`sarif-file != ''` condition above skips the upload instead of failing on an
 empty file.
 
 **Targets past the horizon.** A `target` newer than the knowledge base's
