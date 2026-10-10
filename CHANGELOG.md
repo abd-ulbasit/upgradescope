@@ -136,10 +136,11 @@ a CI gate.
   DaemonSets, StatefulSets, ReplicaSets, Jobs and CronJobs, the volumes of
   Pods, and PersistentVolume manifests, each located by file and line. A live
   `scan` and the agent count the pods they already list, per plugin and
-  namespace, with no extra API request (between full pod passes, the pods
-  outside kube-system are counted as the last full pass read them, as the
-  add-ons are). Live PersistentVolumes and StorageClasses are not read, so a
-  pod that reaches an in-tree volume through a claim is not found live.
+  namespace, with no extra API request for them (between full pod passes,
+  the pods outside kube-system are counted as the last full pass read them,
+  as the add-ons are), and list PersistentVolumes and StorageClasses, so a
+  claim's in-tree volume is found live too (#362, see **Fixed** and
+  **Changed**).
   `photonPersistentDisk` is not in the dataset, because its removal minor was
   not confirmed. The new optional `volumes` capability and the inventory field
   `volumePlugins` carry the evidence, and `volume-plugin` is a new category in
@@ -699,6 +700,18 @@ a CI gate.
   manifests can exit `2` for it. A plugin that moved to CSI only warns. Ignore
   rules, ignore annotations and baselines work on `volume-plugin/<plugin>` as
   on any other key (#351).
+- Chart: the agent's ClusterRole gains `get` and `list` on
+  `persistentvolumes` (core) and `storageclasses` (`storage.k8s.io`), with no
+  `watch` and no writes, for the in-tree volume plugin check (see **Fixed**).
+  Each collection makes two more paged lists, one of each (more pages on a
+  cluster with over 500 PersistentVolumes or StorageClasses). If you manage
+  the agent's RBAC yourself (`rbac.create=false`), add both rules: an agent
+  without them reports `volumes` partial, with a reason such as `list
+  persistentvolumes: <error>; PersistentVolumes were not checked`, and checks
+  the pods only. A live volume-plugin finding that names PersistentVolumes or
+  StorageClasses reads "2 pods and 1 PersistentVolume or StorageClass name
+  it" and counts those pods in `objectsOmitted`, which was 0 on every live
+  finding before (#362).
 - Table and Markdown reports end with a scope line, "Field-level removals
   other than in-tree volume plugins are not checked by this version." (the
   Markdown report prefixes it with **Scope.**), so a `READY` with a score of
@@ -1657,6 +1670,31 @@ a CI gate.
   evaluates the condition in all three copies, and the claim AC-04 now says
   what the guarded snippet provides, and that the fork behaviour is read from
   GitHub's token rules, not from a fork run (#357).
+- The CI gate (`POST /api/v1/gate`, with and without `?cluster=`) adds the
+  posted manifests' counts to the cluster's with a saturating add. A cluster
+  whose stored API-usage or volume-plugin count was at the integer maximum no
+  longer wraps negative when the gate adds a manifest, which dropped the
+  cluster's own finding from the proposed state and could change the
+  verdict. The decrement for a replaced object no longer goes below zero
+  (#361).
+- A live `scan` and the agent read PersistentVolumes and StorageClasses for
+  in-tree volume plugins. An `rbd` (or other in-tree) PersistentVolume behind
+  a claim, counted under its bound claim's namespace, or a StorageClass whose
+  provisioner is an in-tree one such as `kubernetes.io/rbd` or
+  `kubernetes.io/aws-ebs`, is a `volume-plugin/<plugin>` finding that names
+  the object (`rbd` blocks at 1.31). The knowledge base adds a cited in-tree
+  provisioner to 13 plugins, part of the knowledge base version (`cephfs` has
+  no provisioner upstream and is not mapped), and StorageClass manifests are
+  checked by `scan --files` and the gate too. The finding's text covers pods
+  that mount a claim bound to such a PersistentVolume and the claims such a
+  StorageClass provisions. Accepting every named PersistentVolume or
+  StorageClass (an ignore annotation, or a `name:` rule) leaves the finding
+  standing for the pods that name the plugin inline, which are counted as
+  omitted; a rule with no object selectors still takes the whole finding. The
+  gate counts the cluster's pods the same way beside a pull request's
+  objects, so one annotated object in the pull request does not hide the
+  cluster's blocker in `clusterVerdict`. The chart's new RBAC is under
+  **Changed** (#362).
 - A Helm release whose newest revision failed is judged by its newest
   deployed revision, else its newest superseded one, which is what `helm
   upgrade` would diff against, not the failed one; a release with only
