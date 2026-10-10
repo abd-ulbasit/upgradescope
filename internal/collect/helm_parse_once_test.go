@@ -581,3 +581,15 @@ func TestParseOnce_WorstCaseCost(t *testing.T) {
 		t.Logf("%-70s %4d KiB: CPU %4d ms once, %4d ms twice (mean of %d); %d documents answered, %d left", tc.name, len(manifest)>>10, (once / reps).Milliseconds(), (twice / reps).Milliseconds(), reps, a, d)
 	}
 }
+
+// FuzzParseOnceMatchesTwoParses: for any text, a stream parsed once yields
+// the objects, evidence and problems it yields parsed twice.
+func FuzzParseOnceMatchesTwoParses(f *testing.F) {
+	for _, d := range helmDocs {
+		f.Add(d)
+	}
+	f.Add(manifestOf(helmDocs[:6]...))
+	f.Fuzz(func(t *testing.T, text string) {
+		requireSameStream(t, "fuzz", text)
+	})
+}
