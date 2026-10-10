@@ -4,7 +4,7 @@ go 1.26.9
 
 require (
 	github.com/Masterminds/semver/v3 v3.5.0
-	github.com/google/gnostic-models v0.7.0
+	github.com/google/gnostic-models v0.7.1
 	github.com/google/jsonschema-go v0.4.3
 	github.com/jackc/pgx/v5 v5.11.0
 	github.com/modelcontextprotocol/go-sdk v1.8.0
