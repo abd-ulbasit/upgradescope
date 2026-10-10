@@ -73,17 +73,16 @@ verdict() {
   rm -f "${TMPDIR:-/tmp}/ci-ok.out.$$"
 }
 
-docs_only='{"go":"false","cross":"false","test-scope":"none","e2e":"false","release":"false","action":"false"}'
-docs_scope='{"go":"false","cross":"false","test-scope":"docs","e2e":"false","release":"false","action":"false"}'
+no_code='{"go":"false","cross":"false","test-scope":"readers","e2e":"false","release":"false","action":"false"}'
 code='{"go":"true","cross":"true","test-scope":"all","e2e":"true","release":"false","action":"true"}'
 code_nocross='{"go":"true","cross":"false","test-scope":"all","e2e":"true","release":"false","action":"false"}'
-off="test=skipped test-heap=skipped build=skipped cross-build=skipped examples=skipped images=skipped vuln=skipped pg-conformance=skipped kube=skipped envtest=skipped release-check=skipped action=skipped"
+off="test-heap=skipped build=skipped cross-build=skipped examples=skipped images=skipped vuln=skipped pg-conformance=skipped kube=skipped envtest=skipped release-check=skipped action=skipped"
 
 # A pull request that changes nothing a gated job reads: they are skipped, and
-# that is fine because the changes job ran and said so.
-verdict "PR touching no code: every gated job skipped, ci-ok passes" pass pull_request "$docs_only" $off
-verdict "PR touching no code: the gated jobs may also have run" pass pull_request "$docs_only"
-verdict "PR touching docs only: the docs readers run, the rest are skipped" pass pull_request "$docs_scope" $(sed 's/test=skipped//' <<<"$off")
+# that is fine because the changes job ran and said so. The unit tests are not
+# among them: they run (in the readers scope) whatever the change is.
+verdict "PR touching no code: every gated job skipped, the readers' tests ran: ci-ok passes" pass pull_request "$no_code" $off
+verdict "PR touching no code: the gated jobs may also have run" pass pull_request "$no_code"
 verdict "PR touching Go code: every job ran" pass pull_request "$code"
 verdict "PR touching Go code but no compile input: cross-build skipped" pass pull_request "$code_nocross" cross-build=skipped action=skipped release-check=skipped
 
@@ -93,14 +92,25 @@ for job in test test-heap build examples images vuln pg-conformance kube envtest
   verdict "PR touching code: $job skipped though needed fails ci-ok" fail pull_request "$code" "$job=skipped"
 done
 verdict "PR touching code: cross-build skipped though needed fails ci-ok" fail pull_request "$code" cross-build=skipped
-verdict "PR touching docs only: test skipped though the docs readers are needed fails ci-ok" fail pull_request "$docs_scope" test=skipped
-verdict "PR touching docs only: test-heap skipped is fine, build skipped is fine, test skipped is not" fail pull_request "$docs_scope" test-heap=skipped build=skipped test=skipped
+# test is never gated off: not by the readers scope (a change to a workflow
+# or a script is read by internal/server and internal/crd/apigroup), not by
+# anything the changes outputs say.
+verdict "PR touching no code: test skipped fails ci-ok (a test that walks the checkout can fail on any file)" fail pull_request "$no_code" test=skipped
+verdict "PR touching no code: test-heap and build skipped are fine, test skipped is not" fail pull_request "$no_code" test-heap=skipped build=skipped test=skipped
+verdict "PR whose changes outputs lie that no test is needed (test-scope none): test skipped fails ci-ok" fail pull_request '{"go":"false","cross":"false","test-scope":"none","e2e":"false","release":"false","action":"false"}' test=skipped
 
 # The changes job's own failure modes: a gated job that was skipped for the
 # want of an answer must not turn green.
 verdict "changes failed, gated jobs skipped: ci-ok fails" fail pull_request '{}' changes=failure $off
 verdict "changes cancelled, gated jobs skipped: ci-ok fails" fail pull_request '{}' changes=cancelled $off
-verdict "changes skipped on a PR, gated jobs skipped: ci-ok fails" fail pull_request "$docs_only" changes=skipped $off
+verdict "changes skipped on a PR, gated jobs skipped: ci-ok fails" fail pull_request "$no_code" changes=skipped $off
+# Each check on its own, so removing one is seen (a gated job skipped, or one
+# that failed, would fail the verdict by another route and hide it): nothing
+# is skipped, nothing failed, and still a pull request whose changes job did
+# not succeed cannot pass, because nothing says what it needed.
+verdict "changes skipped on a PR, every other job ran: ci-ok fails" fail pull_request "$code" changes=skipped
+doc=$(needs_json "$code" | jq -c 'del(.changes)')
+NEEDS=$doc EVENT=pull_request hack/ci-ok.sh >/dev/null 2>&1 && { echo "FAIL ci-ok passed a pull request with no changes job in its needs" >&2; rc=1; } || echo "ok   a pull request with no changes job in needs fails ci-ok"
 verdict "changes failed though every other job passed: ci-ok fails" fail pull_request "$code" changes=failure
 verdict "changes succeeded with no outputs, test-heap skipped: ci-ok fails" fail pull_request '{}' test-heap=skipped
 verdict "changes output is garbage, test-heap skipped: ci-ok fails" fail pull_request '{"go":"maybe"}' test-heap=skipped
@@ -108,7 +118,7 @@ verdict "changes says the PR needs code jobs, but nothing ran: ci-ok fails" fail
 
 # Failed and cancelled gated jobs fail, needed or not.
 for r in failure cancelled; do
-  verdict "PR touching no code: a gated job that $r fails" fail pull_request "$docs_only" test-heap=$r
+  verdict "PR touching no code: a gated job that $r fails" fail pull_request "$no_code" test-heap=$r
   verdict "PR touching code: test $r fails" fail pull_request "$code" test=$r
   verdict "PR touching code: a non-gated job that $r fails" fail pull_request "$code" lint=$r
 done
@@ -126,15 +136,18 @@ done
 # On a push the gates do not apply: a gated job other than the docs-only skips
 # a push keeps (e2e, release) must run even if the changes outputs say
 # otherwise, so ci-ok does not lean on hack/ci-changes.sh printing go=true.
-# (Dropping `[ "$changes" = success ] &&` from the skip branch of ci-ok.sh is
-# an equivalent mutant: the results loop and, on a pull request, the changes
-# check already fail a changes job that did not succeed.)
-push_lying='{"go":"false","cross":"false","test-scope":"none","e2e":"false","release":"false","action":"false"}'
+# The skip branch's own `changes = success` check is held by a skipped changes
+# job whose (forged) outputs say not needed: nothing else fails that case on a
+# push, because a skipped changes job is no failure.
+push_lying='{"go":"false","cross":"false","test-scope":"readers","e2e":"false","release":"false","action":"false"}'
 for job in test test-heap build cross-build examples images vuln pg-conformance; do
   verdict "push to main with changes saying not needed: $job skipped still fails ci-ok" fail push "$push_lying" "$job=skipped"
 done
 verdict "push to main: kube, envtest and release-check may skip on e2e=false and release=false" pass push "$push_lying" kube=skipped envtest=skipped release-check=skipped action=skipped
 verdict "push to main with changes failed: kube skipped fails ci-ok" fail push "$push_lying" changes=failure kube=skipped
+verdict "push to main with changes skipped yet outputs saying not needed: kube skipped fails ci-ok" fail push "$push_lying" changes=skipped kube=skipped
+verdict "push to main with changes skipped yet outputs saying not needed: envtest skipped fails ci-ok" fail push "$push_lying" changes=skipped envtest=skipped
+verdict "push to main with changes cancelled yet outputs saying not needed: kube skipped fails ci-ok" fail push "$push_lying" changes=cancelled kube=skipped
 verdict "push to main with e2e=true: kube skipped fails ci-ok" fail push "$push_all" kube=skipped
 verdict "dispatch with outputs claiming not needed (changes ran): test-heap skipped fails ci-ok" fail workflow_dispatch "$push_lying" test-heap=skipped
 

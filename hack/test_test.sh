@@ -2,10 +2,10 @@
 # Tests for hack/test.sh (make hack-test), offline, with a stub `go` for the
 # runs: its units are every package of every module; --shard i/n gives each
 # to exactly one shard (a package the duration table has never heard of
-# too); --docs-readers selects the packages whose tests read documentation,
-# and the list of those cannot go stale (a package that names a docs page
-# must be on it); and CI's test matrix names every shard, so none can go
-# missing. Running the tests is CI's test job.
+# too); --readers selects the packages whose tests read the repository
+# outside Go code, and the list of those cannot go stale (a package that
+# names a docs page, or walks the whole tree, must be on it); and CI's test
+# matrix names every shard, so none can go missing. Running the tests is CI's test job.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 export LC_ALL=C
@@ -58,9 +58,9 @@ else
 fi
 
 # ---- the shards -----------------------------------------------------------
-for scope in all docs; do
+for scope in all readers; do
   flags=()
-  [ "$scope" = docs ] && flags=(--docs-readers)
+  [ "$scope" = readers ] && flags=(--readers)
   want=$(hack/test.sh --list ${flags[@]+"${flags[@]}"} | sort)
   for n in 1 2 3 4; do
     got=$(for i in $(seq 1 "$n"); do hack/test.sh --list ${flags[@]+"${flags[@]}"} --shard "$i/$n" 2>/dev/null; done | sort)
@@ -94,17 +94,17 @@ stale=$(grep -vE '^(#|[[:space:]]*$)' hack/test-durations.txt | awk '{print $1, 
 unknown=$(comm -13 <(grep -vE '^(#|[[:space:]]*$)' hack/test-durations.txt | awk '{print $1, $2}' | sort) <(sort <<<"$all"))
 [ -z "$unknown" ] || echo "note: packages with no line in hack/test-durations.txt (10 s assumed): $(echo $unknown)"
 
-# ---- the docs readers -----------------------------------------------------
-readers=$(sed -e 's/#.*//' -e '/^[[:space:]]*$/d' hack/test-docs-readers.txt | sort)
+# ---- the readers -----------------------------------------------------
+readers=$(sed -e 's/#.*//' -e '/^[[:space:]]*$/d' hack/test-readers.txt | sort)
 if lines=$(grep -vE '^[^ ]+ [^ ]+$' <<<"$readers"); then
-  bad "hack/test-docs-readers.txt has a line that is not '<module> <package>': $lines"
+  bad "hack/test-readers.txt has a line that is not '<module> <package>': $lines"
 else
-  ok "hack/test-docs-readers.txt holds only '<module> <package>' lines"
+  ok "hack/test-readers.txt holds only '<module> <package>' lines"
 fi
 # A reader that is not a package of the tree would silently drop its tests
 # from the docs run (a rename): fail on it.
 gone=$(comm -23 <(echo "$readers") <(sort <<<"$all"))
-if [ -n "$gone" ]; then bad "hack/test-docs-readers.txt names packages that do not exist: $(echo $gone)"; else ok "every docs reader is a package of the tree"; fi
+if [ -n "$gone" ]; then bad "hack/test-readers.txt names packages that do not exist: $(echo $gone)"; else ok "every reader is a package of the tree"; fi
 # Every package that names a docs page or a Markdown file in a string is on
 # the list. The reading is by path, from the package's own directory, so a
 # string is how a test finds a page: docs/..., ../../README.md, a name like
@@ -114,10 +114,44 @@ detected=$(git ls-files -z -- '*.go' | xargs -0 grep -nE "$re" 2>/dev/null |
   grep -vE '^[^:]+:[0-9]+:[[:space:]]*//' | cut -d: -f1 | sort -u | while read -r f; do unit_of "$(dirname "$f")"; done | sort -u)
 missing=$(comm -23 <(echo "$detected") <(echo "$readers"))
 if [ -n "$missing" ]; then
-  bad "packages that name a docs page or Markdown file are not in hack/test-docs-readers.txt (a docs-only change would skip their tests): $(echo $missing)"
+  bad "packages that name a docs page or Markdown file are not in hack/test-readers.txt (a docs-only change would skip their tests): $(echo $missing)"
 else
   ok "every package that names a docs page is a docs reader ($(wc -l <<<"$detected" | tr -d ' ') found)"
 fi
+
+# ...and so is every package whose tests walk or list the checkout from
+# outside their own directory. Such a test reads files nobody named: it
+# decodes every YAML file under the root, or every tracked file, so a change
+# to ANY file (a workflow, an issue template, a script) can fail it, and
+# deleting files to see what breaks cannot find it (it skips what is missing).
+# This is why a pull request that changes no Go code still runs this list
+# (CI's test-scope "readers"), never nothing. The heuristic: a WalkDir or
+# Walk whose root is a "../" path or a variable called root, repoRoot, top
+# and the like; `git ls-files`; `git rev-parse --show-toplevel`.
+walk_re='Walk(Dir)?\((filepath\.Join\()?("\.\./|[A-Za-z]*([Rr]oot|[Tt]op)\b)|DirFS\(("\.\./|[A-Za-z]*([Rr]oot|[Tt]op)\b)|"ls-files"|--show-toplevel'
+# The detector itself: lines it must flag, and lines it must leave alone.
+detector_bad=0
+for line in 'filepath.WalkDir("../..", func(' 'err := filepath.WalkDir(filepath.Join(repoRoot, dir), func(' \
+  'filepath.WalkDir(root, func(' 'filepath.Walk(top, fn)' 'exec.Command("git", "ls-files", "-z")' 'exec.Command(git, "-C", root, "ls-files", "-z")' \
+  'exec.Command("git", "rev-parse", "--show-toplevel")' 'fs.WalkDir(os.DirFS("../.."), ".", fn)'; do
+  grep -qE "$walk_re" <<<"$line" || { bad "the tree-walk detector misses: $line"; detector_bad=1; }
+done
+for line in 'filepath.WalkDir("testdata/adversarial", fn)' 'filepath.WalkDir(dir, fn)' 'filepath.WalkDir(".", fn)' 'filepath.Glob("testdata/*")' 'os.ReadFile("../engine/testdata/a.json")'; do
+  grep -qE "$walk_re" <<<"$line" && { bad "the tree-walk detector flags a read inside the package: $line"; detector_bad=1; }
+done
+[ "$detector_bad" = 0 ] && ok "the tree-walk detector flags walks from outside a package and leaves its own testdata alone"
+walkers=$(git ls-files -z -- '*.go' | xargs -0 grep -nE "$walk_re" 2>/dev/null |
+  grep -vE '^[^:]+:[0-9]+:[[:space:]]*//' | cut -d: -f1 | grep '_test\.go$' | sort -u | while read -r f; do unit_of "$(dirname "$f")"; done | sort -u)
+[ -n "$walkers" ] || bad "the tree-walk detector found no package: it is broken (internal/server walks the repository)"
+missing=$(comm -23 <(echo "$walkers") <(echo "$readers"))
+if [ -n "$missing" ]; then
+  bad "packages whose tests walk the whole tree are not in hack/test-readers.txt (a change to a file no Go job reads would skip them): $(echo $missing)"
+else
+  ok "every package that walks the tree is a reader ($(wc -l <<<"$walkers" | tr -d ' ') found)"
+fi
+for pkg in ". internal/server" ". internal/crd/apigroup"; do
+  grep -qxF "$pkg" <<<"$walkers" || bad "the tree-walk detector no longer finds $pkg, which reads every file of the checkout"
+done
 
 # ---- refusals -------------------------------------------------------------
 for spec in 0/2 3/2 2 a/b -1/2 1/0; do
@@ -173,10 +207,10 @@ for n in 2 3; do
   [ "$(units_of_log "$work/log-n" vet)" = "$(sort <<<"$all")" ] && ok "$n shards run go vet on every package exactly once" || bad "$n shards: go vet does not cover every package exactly once"
   if grep -E ' test ' "$work/log-n" | grep -qv -- ' -race -count=1 '; then bad "$n shards: a go test without -race -count=1"; else ok "$n shards: every go test is -race -count=1"; fi
 done
-# Docs scope: only the readers, and sharded too.
+# Readers scope: only the readers, and sharded too.
 : >"$work/log-d"
-for i in 1 2; do run_stub "$work/log-d$i" --docs-readers --shard "$i/2" && cat "$work/log-d$i" >>"$work/log-d"; done
-check "--docs-readers --shard 1/2 and 2/2 test exactly the readers" "$readers" "$(units_of_log "$work/log-d" test)"
+for i in 1 2; do run_stub "$work/log-d$i" --readers --shard "$i/2" && cat "$work/log-d$i" >>"$work/log-d"; done
+check "--readers --shard 1/2 and 2/2 test exactly the readers" "$readers" "$(units_of_log "$work/log-d" test)"
 # gofmt still runs on every shard (it is cheap), and a bad file fails it.
 grep -q '^== gofmt' "$work/out" && ok "each run starts with gofmt" || bad "the run does not gofmt"
 # A failing go fails the run.
@@ -189,7 +223,7 @@ fx=$work/repo
 mkdir -p "$fx/hack" "$fx/a" "$fx/b" "$fx/c/d" "$fx/tools/t"
 cp hack/test.sh hack/shard.sh "$fx/hack/"
 printf '. a 500\n' >"$fx/hack/test-durations.txt"
-printf '. b\n' >"$fx/hack/test-docs-readers.txt"
+printf '. b\n' >"$fx/hack/test-readers.txt"
 printf 'module example.com/fx\n\ngo 1.22\n' >"$fx/go.mod"
 printf 'module example.com/fx/t\n\ngo 1.22\n' >"$fx/tools/t/go.mod"
 for d in a b c/d; do printf 'package x\n' >"$fx/$d/x.go"; done
@@ -201,9 +235,9 @@ for n in 1 2 3 4; do
   got=$(for i in $(seq 1 "$n"); do (cd "$fx" && hack/test.sh --list --shard "$i/$n" 2>/dev/null); done | sort)
   check "fixture, $n shards: each package, the new ones too, in exactly one" "$fx_all" "$got"
 done
-check "fixture: --docs-readers selects the listed package" ". b" "$(cd "$fx" && hack/test.sh --list --docs-readers)"
-printf '. gone\n' >"$fx/hack/test-docs-readers.txt"
-if (cd "$fx" && hack/test.sh --list --docs-readers >/dev/null 2>&1); then bad "fixture: a readers list naming no package passed"; else ok "fixture: a readers list naming no package of the tree fails"; fi
+check "fixture: --readers selects the listed package" ". b" "$(cd "$fx" && hack/test.sh --list --readers)"
+printf '. gone\n' >"$fx/hack/test-readers.txt"
+if (cd "$fx" && hack/test.sh --list --readers >/dev/null 2>&1); then bad "fixture: a readers list naming no package passed"; else ok "fixture: a readers list naming no package of the tree fails"; fi
 
 # ---- the wiring -----------------------------------------------------------
 ci=.github/workflows/ci.yml
@@ -222,12 +256,12 @@ else
 fi
 grep -q 'fail-fast: false' <<<"$block" && ok "test's matrix does not stop at the first failing shard" || bad "test's matrix is fail-fast"
 if grep -qF 'make test TEST_SHARD="$SHARD" TEST_SCOPE="$SCOPE"' <<<"$block" && grep -qF 'SHARD: ${{ matrix.shard }}' <<<"$block" &&
-  grep -qF "SCOPE: \${{ needs.changes.outputs.test-scope == 'docs' && 'docs' || 'all' }}" <<<"$block"; then
+  grep -qF "SCOPE: \${{ needs.changes.outputs.test-scope == 'readers' && 'readers' || 'all' }}" <<<"$block"; then
   ok "the job passes its shard and the changes job's test-scope to make test"
 else
   bad "test's run does not pass matrix.shard and the test-scope output to make test"
 fi
-grep -qF -- '--shard $(TEST_SHARD)' Makefile && grep -qF -- '--docs-readers' Makefile && ok "make test takes TEST_SHARD and TEST_SCOPE" || bad "the Makefile's test target does not pass TEST_SHARD and TEST_SCOPE"
+grep -qF -- '--shard $(TEST_SHARD)' Makefile && grep -qF -- '--readers' Makefile && ok "make test takes TEST_SHARD and TEST_SCOPE" || bad "the Makefile's test target does not pass TEST_SHARD and TEST_SCOPE"
 
 echo "test_test: $pass passed, $fail failed"
 [ "$fail" = 0 ]

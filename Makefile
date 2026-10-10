@@ -39,13 +39,13 @@ web-test:
 # The CI unit gate: gofmt, go vet, go test -race -count=1, for the main
 # module and every tools/ module. Needs only Go. CI runs it as two shards
 # (TEST_SHARD=1/2, 2/2: every package in exactly one, balanced by
-# hack/test-durations.txt); TEST_SCOPE=docs runs only the packages whose
-# tests read documentation (hack/test-docs-readers.txt), for a pull request
-# that changes docs and no code. With neither, everything runs.
+# hack/test-durations.txt); TEST_SCOPE=readers runs only the packages whose
+# tests read the repository outside Go code (hack/test-readers.txt), for a
+# pull request that changes no Go code. With neither, everything runs.
 TEST_SHARD ?=
 TEST_SCOPE ?= all
 test:
-	./hack/test.sh $(if $(TEST_SHARD),--shard $(TEST_SHARD)) $(if $(filter docs,$(TEST_SCOPE)),--docs-readers)
+	./hack/test.sh $(if $(TEST_SHARD),--shard $(TEST_SHARD)) $(if $(filter readers,$(TEST_SCOPE)),--readers)
 
 # The heap-bound tests (the proofs of the server's and the Helm collector's
 # memory bounds), without the race detector, under which they skip or

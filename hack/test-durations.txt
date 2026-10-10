@@ -26,6 +26,10 @@
 . internal/codequality/codequalitytest 1
 . internal/collect 151
 . internal/crd 34
+# not from that run (the package came from main later): go test -race
+# -count=1 on a laptop, 2026-10-10, 4.9 s; replace it when the table is next
+# refreshed from a CI run
+. internal/crd/apigroup 5
 . internal/engine 37
 . internal/inventory 2
 . internal/junit 2

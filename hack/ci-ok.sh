@@ -37,7 +37,6 @@ set -euo pipefail
 # action job is not here: it is skipped on a release by design (see its `if`),
 # which a table keyed on the changes job's answer cannot tell from a mistake.
 GATED='
-test          test-scope none  yes
 test-heap     go         false yes
 build         go         false yes
 cross-build   cross      false yes
@@ -57,8 +56,11 @@ PUSH_SKIPPABLE='e2e release'
 
 # The jobs that run on every pull request and push, whatever it changes: they
 # must succeed, so a stray `if` that skips one cannot pass. The first group
-# skips on a schedule by its own `if`; the second runs there too.
-UNGATED_OFF_SCHEDULE='lint repo-checks web helm notices'
+# skips on a schedule by its own `if`; the second runs there too. `test` is
+# here and not gated: the changes job only picks its scope (all, or the
+# packages that read the repository outside Go code), because two of its
+# tests walk the whole checkout and a change to any file can fail them.
+UNGATED_OFF_SCHEDULE='lint test repo-checks web helm notices'
 UNGATED_ALWAYS='kb-freshness kube-matrix pg-matrix'
 
 # One jq call each: "<job> <result>" lines and "<output> <value>" lines of the

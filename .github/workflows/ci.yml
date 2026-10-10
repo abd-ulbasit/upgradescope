@@ -89,17 +89,20 @@ concurrency:
 # runs"; the numbers are above ci-ok): the longest jobs are sharded
 # (test-heap four ways, test two, cross-build one job per OS), and a pull
 # request runs the Go-heavy jobs only for a change they can see, decided by
-# the changes job. ci-ok accepts a skipped gated job only when the changes
-# job ran and said so. A push to main, the schedule, a dispatch and a release
-# run what they ran before the gates existed.
+# the changes job. The unit tests are never skipped. ci-ok accepts a skipped
+# gated job only when the changes job ran and said so. A push to main, the
+# schedule, a dispatch and a release run what they ran before the gates
+# existed.
 jobs:
   # Which areas a PR or main push touches, for the jobs too expensive to run
   # on everything. On a PR the Go-heavy jobs (test-heap, build, images,
   # examples, vuln, pg-conformance, the kind e2e and envtest) run only for a
-  # change they can see, and the unit tests run in full for code or, for a
-  # change to documentation alone, only the packages whose tests read it
-  # (hack/test-docs-readers.txt). A push to main keeps what it ran before,
-  # which is everything, but the kind e2e and envtest after a docs-only push.
+  # change they can see. The unit tests are never skipped: they run in full
+  # for code and, for a change to no Go code, in the packages whose tests read
+  # the repository outside Go code (hack/test-readers.txt), because some of
+  # those walk the whole checkout and fail on a change to any file. A push to
+  # main keeps what it ran before, which is everything, but the kind e2e and
+  # envtest after a docs-only push.
   # Skipped on the schedule, workflow_dispatch and release (tag) runs, which
   # run everything: a gated job then sees `changes` skipped and runs.
   #
@@ -123,8 +126,8 @@ jobs:
       cross: ${{ steps.decide.outputs.cross }}
       test-scope: ${{ steps.decide.outputs.test-scope }}
       e2e: ${{ steps.decide.outputs.e2e }}
-      release: ${{ steps.paths.outputs.release }}
-      action: ${{ steps.paths.outputs.action }}
+      release: ${{ steps.decide.outputs.release }}
+      action: ${{ steps.decide.outputs.action }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -195,11 +198,12 @@ jobs:
             # What the Go-heavy jobs can see: Go code, and every other file
             # one of them reads (the embedded data and dashboard, the chart
             # and examples the tests and the kind e2e load, the Dockerfiles,
-            # the scripts the jobs call). A file in none of go and docs below
-            # is one no gated job reads. hack/ci-gates_test.sh (make
-            # hack-test) holds this to that: every tracked file is matched
-            # here, in docs, or on its short list of files nothing gated
-            # reads, and every hack/ script a gated job reaches is matched.
+            # the scripts the jobs call). A file not here is one no gated job
+            # reads. hack/ci-gates_test.sh (make hack-test) holds this to
+            # that: every tracked file is matched here or is on its short list
+            # of files nothing gated reads, and every hack/ script a gated job
+            # reaches is matched. (The unit tests are not gated: a change to
+            # a file not here still runs hack/test-readers.txt.)
             go:
               - '**/*.go'
               - '**/go.mod'
@@ -233,7 +237,7 @@ jobs:
               - 'hack/shard.sh'
               - 'hack/test.sh'
               - 'hack/test-durations.txt'
-              - 'hack/test-docs-readers.txt'
+              - 'hack/test-readers.txt'
               - 'hack/test-heap.sh'
               - 'hack/test-heap-durations.txt'
               - 'hack/dashboard-smoke.sh'
@@ -257,14 +261,6 @@ jobs:
               - 'hack/e2e.s*' # (same)
               - 'hack/e2e/**'
               - 'hack/demo/**'
-            # Documentation some Go test reads (the docs-drift tests): a
-            # change to these and to nothing in go runs only the packages in
-            # hack/test-docs-readers.txt.
-            docs:
-              - 'docs/**'
-              - '**/*.md'
-              - 'hack/docs/**'
-              - 'mkdocs.yml'
             # What can break a platform's compile (cross-build): any Go
             # file or module file, the build's own inputs. Everything here is
             # in go too.
@@ -281,11 +277,15 @@ jobs:
       - id: decide
         env:
           EVENT: ${{ github.event_name }}
+          # The PR's file count: the filters see at most 3000 files
+          # (hack/ci-changes.sh runs everything from there up).
+          CHANGED_FILES: ${{ github.event.pull_request.changed_files }}
           GO: ${{ steps.paths.outputs.go }}
-          DOCS: ${{ steps.paths.outputs.docs }}
           CROSS: ${{ steps.paths.outputs.cross }}
           E2E_CODE: ${{ steps.code.outputs.e2e }}
           E2E_DOC: ${{ steps.code.outputs.e2e_doc }}
+          RELEASE: ${{ steps.paths.outputs.release }}
+          ACTION: ${{ steps.paths.outputs.action }}
         # shell: bash runs with -o pipefail; the default `bash -e` would let
         # tee hide a failed ci-changes.sh and report an empty success.
         shell: bash
@@ -314,18 +314,23 @@ jobs:
   # took 9.4 minutes for the main module alone (run 38038631216). The ITs
   # stay env-gated, so this is the unit set.
   #
-  # A pull request that changes documentation and no code runs only the
-  # packages whose tests read documentation (test-scope docs, from
-  # hack/ci-changes.sh): their docs-drift tests fail on a stale page, so a
-  # docs-only change cannot skip them. One that changes neither skips this
-  # job, and ci-ok accepts that only because the changes job said so.
+  # Never skipped on a pull request. One that changes no Go code runs only
+  # the packages whose tests read the repository outside Go code (test-scope
+  # readers, from hack/ci-changes.sh; hack/test-readers.txt): the docs-drift
+  # tests fail on a stale page, and two tests walk the whole checkout
+  # (internal/server decodes every YAML file in it, internal/crd/apigroup
+  # reads every tracked file), so a change to a workflow, an issue template
+  # or a script can fail them and cannot skip them. That costs a
+  # documentation or CI-only pull request the weight of its slowest shard
+  # (hack/test-durations.txt: 336 s of -race package weight, a relative
+  # figure, not measured wall time) instead of nothing: the price of never
+  # passing ci-ok with a needed test not run. A failed changes job runs
+  # everything.
   test:
     name: test (shard ${{ matrix.shard }})
     needs: changes
     if: >-
-      !cancelled() && github.event_name != 'schedule' &&
-      (needs.changes.outputs.test-scope == 'all' || needs.changes.outputs.test-scope == 'docs' ||
-       needs.changes.result != 'success')
+      !cancelled() && github.event_name != 'schedule'
     runs-on: ubuntu-latest
     # 25, up from 15: the job took 7 to 12 minutes on main's last pushes
     # (runs 38028648092, 38031779891, 38032862971), before #314 added a
@@ -352,7 +357,7 @@ jobs:
       - name: go vet and go test -race, shard ${{ matrix.shard }}
         env:
           SHARD: ${{ matrix.shard }}
-          SCOPE: ${{ needs.changes.outputs.test-scope == 'docs' && 'docs' || 'all' }}
+          SCOPE: ${{ needs.changes.outputs.test-scope == 'readers' && 'readers' || 'all' }}
         run: make test TEST_SHARD="$SHARD" TEST_SCOPE="$SCOPE"
 
   # The checks that read the repository rather than the Go code, so a change
@@ -1289,11 +1294,18 @@ jobs:
   #     36 s, build 12 m 17 s, release-check 11 m 22 s.
   #   before, run 38031481959 (docs and a Go test file): 22 m 11 s wall;
   #     test-heap 22 m 1 s, test 8 m 34 s, build 12 m 14 s.
-  #   after: expected from the duration tables (test-heap shards about 305 s
-  #     of tests each, the test shards about half of 562 s), not measured:
-  #     about 7 to 10 minutes for a code PR, about 4 to 6 for docs only.
-  #     The measured figures of this change's own pull request runs go here
-  #     and in its description.
+  #   after: expected from the duration tables, NOT measured. A code PR:
+  #     test-heap shards about 305 s of tests each, the test shards about half
+  #     of 562 s, so about 7 to 10 minutes. A PR that changes no Go code
+  #     (documentation, CI, scripts): the test job in readers scope, whose
+  #     slowest shard carries 336 s of -race package weight (a relative
+  #     figure: the packages ran in parallel on one runner), plus checkout,
+  #     setup and compile, so the 4 to 6 minutes first hoped for is unproven
+  #     and may be exceeded. The unit tests of those packages are not skipped
+  #     on any PR because two of them read every file of the checkout. The
+  #     measured figures of this change's own pull request runs go here and in
+  #     its description; they need a docs-only run and a small code run apart
+  #     (a PR that edits ci.yml runs everything).
   ci-ok:
     if: always()
     needs: [changes, lint, test, repo-checks, test-heap, build, cross-build, notices, vuln, web, helm, examples, images, registry, pg-matrix, pg-conformance, release-check, action, kube-matrix, kube, envtest, kb-freshness]

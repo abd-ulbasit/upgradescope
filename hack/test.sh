@@ -18,12 +18,13 @@
 #                     10 s, so a new package is placed without editing
 #                     anything). CI runs the shards as the test job's matrix:
 #                     one runner took 9.4 minutes for the main module alone.
-#   --docs-readers    only the packages whose tests read documentation
-#                     (hack/test-docs-readers.txt). For a pull request that
-#                     changes documentation and no code: the docs-drift tests
-#                     (the CLI's flags in docs/, the metrics reference, the
-#                     chart's upgrade notes) fail on a stale page, so a
-#                     docs-only change cannot skip them, but it needs no more.
+#   --readers         only the packages whose tests read the repository
+#                     outside Go code (hack/test-readers.txt): the docs-drift
+#                     tests and the ones that walk the whole tree. What a pull
+#                     request that changes no Go code runs: those tests fail on
+#                     a stale page, or on any file at all (a workflow that
+#                     names a retired API group), so no change can skip them,
+#                     but a change to no Go code needs no more.
 #
 # --list prints the "<module dir> <package dir>" units the other flags
 # select and runs nothing.
@@ -31,17 +32,17 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 usage() {
-  echo "usage: hack/test.sh [--list] [--shard <i>/<n>] [--docs-readers]" >&2
+  echo "usage: hack/test.sh [--list] [--shard <i>/<n>] [--readers]" >&2
   exit 2
 }
 list=false
 shard=""
-docs=false
+readers_only=false
 while [ $# -gt 0 ]; do
   case "$1" in
     --list) list=true; shift ;;
     --shard) [ $# -ge 2 ] || usage; shard=$2; shift 2 ;;
-    --docs-readers) docs=true; shift ;;
+    --readers) readers_only=true; shift ;;
     *) usage ;;
   esac
 done
@@ -69,11 +70,11 @@ if [ -z "$selected" ]; then
   echo "test: go list found no packages" >&2
   exit 1
 fi
-if $docs; then
-  readers=$(sed -e 's/#.*//' -e '/^[[:space:]]*$/d' hack/test-docs-readers.txt)
+if $readers_only; then
+  readers=$(sed -e 's/#.*//' -e '/^[[:space:]]*$/d' hack/test-readers.txt)
   selected=$(LC_ALL=C comm -12 <(LC_ALL=C sort <<<"$selected") <(LC_ALL=C sort <<<"$readers"))
   if [ -z "$selected" ]; then
-    echo "test: hack/test-docs-readers.txt names no package of this tree" >&2
+    echo "test: hack/test-readers.txt names no package of this tree" >&2
     exit 1
   fi
 fi

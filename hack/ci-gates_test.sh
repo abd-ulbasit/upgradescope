@@ -3,11 +3,13 @@
 # offline. A pull request runs a Go-heavy job only for a change it can see,
 # and ci-ok must never pass with a job skipped that the change needed. So:
 #
-#   1. the go, docs and cross path filters are held to what is in the tree:
-#      every tracked file is matched by go or docs, or is on the list below
-#      of files no gated job reads; and every hack/ script a gated job
-#      reaches (through the Makefile and the scripts' own references) is
-#      matched by go (or cross, for the cross-build job);
+#   1. the go and cross path filters are held to what is in the tree: every
+#      tracked file is matched by go, or is on the list below of files no
+#      gated job reads; and every hack/ script a gated job reaches (through
+#      the Makefile and the scripts' own references) is matched by go (or
+#      cross, for the cross-build job). The unit tests are not gated at all:
+#      a pull request that changes no Go code still runs the packages in
+#      hack/test-readers.txt, because some read every file of the checkout;
 #   2. hack/ci-changes.sh turns the filters into the outputs correctly;
 #   3. every gated job's `if`, evaluated for each kind of run and each
 #      combination of filter results, runs exactly the jobs the scenario
@@ -69,10 +71,8 @@ filter_re() {
   alt_re "${pats[@]}"
 }
 go_re=$(filter_re go)
-docs_re=$(filter_re docs)
 cross_re=$(filter_re cross)
 in_go() { grep -qE "$go_re" <<<"$1"; }
-in_docs() { grep -qE "$docs_re" <<<"$1"; }
 in_cross() { grep -qE "$cross_re" <<<"$1"; }
 
 # Examples of each, so the glob translation above is itself held to account.
@@ -87,9 +87,10 @@ for f in docs/getting-started/ci-gate.md README.md CHANGELOG.md .github/workflow
   hack/check-changelog.sh hack/release-check.sh hack/ci-ok_test.sh hack/docs-live-check.sh registry/CONTRIBUTING.md .github/CODEOWNERS; do
   if in_go "$f"; then bad "go matches $f, which no gated job reads"; else ok "go does not match $f"; fi
 done
-for f in docs/x.md docs/reference/cli/a.md README.md CHANGELOG.md deploy/chart/README.md hack/docs/chart-README.md.gotmpl mkdocs.yml registry/CONTRIBUTING.md; do
-  in_docs "$f" && ok "docs matches $f" || bad "docs does not match $f"
-done
+# There is no docs filter: a change to no Go code runs the readers' tests, not
+# nothing, so which files are documentation decides nothing (and a docs filter
+# was where a file read by a test that walks the tree could fall between).
+if grep -qE '^            docs:' "$ci"; then bad "$ci has a docs filter again: nothing may decide that a pull request runs no unit test"; else ok "there is no docs path filter that could skip the unit tests"; fi
 for f in cmd/upgradescope/main.go internal/cli/scan.go deploy/chart/rbac_test.go tools/gen-kb/main.go go.mod go.sum tools/gen-kb/go.mod .goreleaser.yml Makefile hack/cross-build.sh .github/workflows/ci.yml; do
   in_cross "$f" && ok "cross matches $f" || bad "cross does not match $f"
 done
@@ -102,11 +103,29 @@ only_cross=$(grep -E "$cross_re" <<<"$tracked" | grep -vE "$go_re" || true)
 [ -z "$only_cross" ] && ok "every file the cross filter matches is also matched by go" || bad "the cross filter matches files go does not: $(echo $only_cross | cut -c1-200)"
 
 # ---- 1. every tracked file is judged --------------------------------------
-# Files no gated job reads, each with why. A file that is in neither filter and
-# not here fails the test: a new directory or workflow must be decided on, by
-# someone reading what the gated jobs read, not left to fall through. (The
-# Go tests were run on a tree with exactly these deleted: none failed.)
+# Files no Go-heavy job (test-heap, build, cross-build, examples, images, vuln,
+# pg-conformance, the kind e2e, envtest) reads, each with why. A file that is
+# in the go filter or not here fails the test: a new directory or workflow must
+# be decided on, by someone reading what the gated jobs read, not left to fall
+# through.
+#
+# What this list does NOT say is that no Go test reads these files. The unit
+# tests (the test job) are not gated: a change to any of them runs at least
+# hack/test-readers.txt, which holds every package that reads files outside Go
+# code, the two that walk the whole checkout included (internal/server decodes
+# every YAML file under the root; internal/crd/apigroup reads every tracked
+# file). hack/test_test.sh holds that list to the tree with a detector for
+# tests that walk it. (The earlier evidence for this list, the Go tests run on
+# a tree with the files deleted, proved nothing for those two, which skip a
+# file that is missing; the rule is the list, not the deletion.)
 inert=(
+  # documentation and the site: no gated job reads a page (the e2e's one page
+  # has its own filter, e2e_doc, and release-check its own, release); the
+  # readers' tests do, and run on every pull request
+  'docs/**'
+  '**/*.md'
+  'hack/docs/**'
+  'mkdocs.yml'
   # the repository's own metadata and the workflows the gated jobs do not run
   '.github/CODEOWNERS'
   '.github/ISSUE_TEMPLATE/*'
@@ -152,11 +171,11 @@ inert_re=$(alt_re "${inert[@]}")
 # * in an inert pattern crosses nothing it should not: it is one path segment,
 # the way the filters read it, except that these patterns are written as globs
 # of one directory.
-unjudged=$(grep -vE "$go_re" <<<"$tracked" | grep -vE "$docs_re" | grep -vE "$inert_re" || true)
+unjudged=$(grep -vE "$go_re" <<<"$tracked" | grep -vE "$inert_re" || true)
 if [ -n "$unjudged" ]; then
-  bad "files in neither the go nor docs filter nor the list of files no gated job reads (decide: add to a filter in $ci, or to this test's list with the reason): $(echo $unjudged | cut -c1-400)"
+  bad "files in neither the go filter nor the list of files no gated job reads (decide: add to a filter in $ci, or to this test's list with the reason): $(echo $unjudged | cut -c1-400)"
 else
-  ok "every tracked file is matched by go or docs, or is a file no gated job reads"
+  ok "every tracked file is matched by go, or is a file no gated job reads"
 fi
 # The list is true: every pattern on it names something.
 for pat in "${inert[@]}"; do
@@ -275,10 +294,10 @@ grep -qE '^        shell: bash$' <<<"$decide" && grep -qE '^        run: hack/ci
 if (set -e; bash -e -o pipefail -c 'false | tee /dev/null') 2>/dev/null; then bad "bash -o pipefail did not fail a failing pipeline"; else ok "a failing script piped to tee fails under pipefail"; fi
 
 # ---- 2. hack/ci-changes.sh -------------------------------------------------
-changes() { # EVENT GO DOCS CROSS E2E_CODE E2E_DOC -> "go cross scope e2e" or "fail"
+changes() { # EVENT GO CROSS E2E_CODE E2E_DOC [CHANGED_FILES [RELEASE [ACTION]]] -> "go cross scope e2e release action" or "fail"
   local out
-  out=$(EVENT=$1 GO=$2 DOCS=$3 CROSS=$4 E2E_CODE=$5 E2E_DOC=$6 hack/ci-changes.sh 2>/dev/null) || { echo fail; return; }
-  echo "$(sed -n 's/^go=//p' <<<"$out") $(sed -n 's/^cross=//p' <<<"$out") $(sed -n 's/^test-scope=//p' <<<"$out") $(sed -n 's/^e2e=//p' <<<"$out")"
+  out=$(EVENT=$1 GO=$2 CROSS=$3 E2E_CODE=$4 E2E_DOC=$5 CHANGED_FILES=${6-10} RELEASE=${7-false} ACTION=${8-false} hack/ci-changes.sh 2>/dev/null) || { echo fail; return; }
+  echo "$(sed -n 's/^go=//p' <<<"$out") $(sed -n 's/^cross=//p' <<<"$out") $(sed -n 's/^test-scope=//p' <<<"$out") $(sed -n 's/^e2e=//p' <<<"$out") $(sed -n 's/^release=//p' <<<"$out") $(sed -n 's/^action=//p' <<<"$out")"
 }
 expect_changes() { # name want args...
   local name=$1 want=$2
@@ -287,44 +306,79 @@ expect_changes() { # name want args...
   got=$(changes "$@")
   if [ "$got" = "$want" ]; then ok "ci-changes: $name"; else bad "ci-changes: $name: want [$want] got [$got]"; fi
 }
-#                   event  GO    DOCS  CROSS E2Ec  E2Ed
-expect_changes "PR touching nothing gated: nothing runs" "false false none false" pull_request false false false false false
-expect_changes "PR touching docs only: the docs readers run" "false false docs false" pull_request false true false true false
-expect_changes "PR touching code: the Go jobs and the e2e run, cross does not" "true false all true" pull_request true false false true false
-expect_changes "PR touching code and docs: the whole suite" "true false all true" pull_request true true false true false
-expect_changes "PR touching a compile input: cross runs too" "true true all true" pull_request true false true true false
-expect_changes "PR whose cross filter matched but go did not: go is forced on" "true true all true" pull_request false false true false false
-expect_changes "PR touching only the e2e's docs page: the e2e runs, no Go job" "false false none true" pull_request false false false true true
-expect_changes "PR touching that page and docs: docs readers and the e2e" "false false docs true" pull_request false true false true true
-expect_changes "push to main, a code change: everything" "true true all true" push true false true true false
-expect_changes "push to main, a docs-only change: all but the e2e" "true true all false" push false true false false false
-expect_changes "push to main, only the e2e page: everything" "true true all true" push false true false false true
-expect_changes "any other event: everything" "true true all true" workflow_dispatch false false false false false
-for v in GO DOCS CROSS E2E_CODE E2E_DOC; do
-  args=(pull_request false false false false false)
-  case $v in GO) args[1]=maybe ;; DOCS) args[2]= ;; CROSS) args[3]=1 ;; E2E_CODE) args[4]=TRUE ;; E2E_DOC) args[5]= ;; esac
+#                   event  GO    CROSS E2Ec  E2Ed    files release action
+expect_changes "PR touching nothing gated: no Go job, the readers' tests still run" "false false readers false false false" pull_request false false false false
+expect_changes "PR touching code: the Go jobs and the e2e run, cross does not" "true false all true false false" pull_request true false true false
+expect_changes "PR touching a compile input: cross runs too" "true true all true false false" pull_request true true true false
+expect_changes "PR whose cross filter matched but go did not: go is forced on" "true true all true false false" pull_request false true false false
+expect_changes "PR touching only the e2e's docs page: the e2e runs, no Go job, the readers' tests" "false false readers true false false" pull_request false false false true
+expect_changes "PR for release-check and the action: their outputs are passed on" "false false readers false true true" pull_request false false false false 10 true true
+expect_changes "push to main, a code change: everything" "true true all true false false" push true true true false
+expect_changes "push to main, a docs-only change: all but the e2e" "true true all false false false" push false false false false
+expect_changes "push to main, only the e2e page: everything" "true true all true false false" push false false false true
+expect_changes "push to main passes release and action on" "true true all false true true" push false false false false 10 true true
+expect_changes "any other event: everything" "true true all true true true" workflow_dispatch false false false false
+# The paths-filter action lists at most 3000 files: a list that long may have
+# lost the file a job reads, so a pull request that big runs everything.
+expect_changes "PR of 2999 files believes the filters" "false false readers false false false" pull_request false false false false 2999
+expect_changes "PR of 3000 files runs everything" "true true all true true true" pull_request false false false false 3000
+expect_changes "PR of 12000 files runs everything" "true true all true true true" pull_request false false false false 12000
+expect_changes "a push does not read the file count" "true true all false false false" push false false false false ""
+for v in GO CROSS E2E_CODE E2E_DOC RELEASE ACTION; do
+  args=(pull_request false false false false 10 false false)
+  case $v in GO) args[1]=maybe ;; CROSS) args[2]=1 ;; E2E_CODE) args[3]=TRUE ;; E2E_DOC) args[4]= ;; RELEASE) args[6]=yes ;; ACTION) args[7]= ;; esac
   expect_changes "an unusable $v fails the step" fail "${args[@]}"
 done
+for n in "" many 12x -1 "1 2"; do
+  expect_changes "a pull request whose file count is '$n' fails the step" fail pull_request false false false false "$n"
+done
+
+# The case a reviewer found: a pull request that changes ONE file no filter
+# lists (a workflow, an issue template, Dependabot's config) must still run the
+# tests that read the whole checkout. For each pair of filter answers a tracked
+# file can have, the packages the resulting scope runs include them.
+walkers=". internal/server
+. internal/crd/apigroup"
+for pair in "false false" "true false" "true true"; do
+  set -- $pair
+  scope=$(changes pull_request "$1" "$2" false false | cut -d' ' -f3)
+  case $scope in
+    all) ran=$(hack/test.sh --list) ;;
+    readers) ran=$(hack/test.sh --list --readers) ;;
+    *) bad "a PR with go=$1 cross=$2 gets test-scope '$scope': the unit tests would not run"; continue ;;
+  esac
+  lost=$(comm -23 <(sort <<<"$walkers") <(sort <<<"$ran"))
+  [ -z "$lost" ] && ok "PR with go=$1 cross=$2 (scope $scope) runs the packages that read every file of the checkout" || bad "PR with go=$1 cross=$2 (scope $scope) does not run: $(echo $lost)"
+done
+# Every tracked file has one of those answers, so the three cover the tree; an
+# inert file is the first of them.
+inert_only=$(grep -vE "$go_re" <<<"$tracked" | grep -E "$inert_re" | head -1)
+[ -n "$inert_only" ] && ! in_go "$inert_only" && ok "an inert file ($inert_only) is a go=false change, which runs the readers' scope" || bad "no inert file found to stand for a go=false change"
 
 # ---- 3. every gated job's `if`, for every kind of run ----------------------
 table=$(awk '/^GATED=/{c=1;next} c&&/^'"'"'/{c=0} c&&NF' hack/ci-ok.sh)
 gated_jobs=$(awk '{print $1}' <<<"$table")
+# test is evaluated with them though it is not gated: it must run in every
+# scenario a unit test could be needed, which is every one but a schedule's.
+if grep -qx test <<<"$gated_jobs"; then bad "test is in ci-ok's GATED table: no change may skip the unit tests"; else ok "test is not among the gated jobs"; fi
+eval_jobs="$gated_jobs test"
 job_if() { job_block "$1" | awk '/^    if:/ { c = 1; sub(/^    if: *(>-)? */, ""); print; next } c && /^    [a-z-]+:/ { c = 0 } c'; }
-ifs_json=$(for j in $gated_jobs; do printf '%s\t%s\n' "$j" "$(job_if "$j" | tr '\n' ' ')"; done | jq -Rn '[inputs | split("\t") | {key: .[0], value: .[1]}] | from_entries')
+ifs_json=$(for j in $eval_jobs; do printf '%s\t%s\n' "$j" "$(job_if "$j" | tr '\n' ' ')"; done | jq -Rn '[inputs | split("\t") | {key: .[0], value: .[1]}] | from_entries')
 scope_expr=$(job_block test | sed -n "s/^          SCOPE: \\\${{ \\(.*\\) }}\$/\\1/p")
 [ -n "$scope_expr" ] || bad "the test job has no SCOPE expression"
 
 # scenarios: event | changes result | the four filter inputs for ci-changes.sh
+# (the file count, release and action never vary here: ci-changes covers them)
 scen="$work/scenarios"
 : >"$scen"
-for go in true false; do for docs in true false; do for cross in true false; do for e2ec in true false; do for e2ed in true false; do
+for go in true false; do for cross in true false; do for e2ec in true false; do for e2ed in true false; do
   for ev in pull_request push; do
-    echo "$ev success $go $docs $cross $e2ec $e2ed" >>"$scen"
+    echo "$ev success $go $cross $e2ec $e2ed" >>"$scen"
   done
-done; done; done; done; done
-for ev in schedule workflow_dispatch release; do echo "$ev skipped false false false false false" >>"$scen"; done
+done; done; done; done
+for ev in schedule workflow_dispatch release; do echo "$ev skipped false false false false" >>"$scen"; done
 # A changes job that failed (a paths-filter API error): its outputs are empty.
-for ev in pull_request push; do echo "$ev failure false false false false false" >>"$scen"; done
+for ev in pull_request push; do echo "$ev failure false false false false" >>"$scen"; done
 
 # Evaluate with node: job runs (true/false) for each scenario.
 cat >"$work/eval.js" <<'JS'
@@ -354,10 +408,10 @@ process.stdout.write(JSON.stringify(res));
 JS
 # the outputs each scenario's changes job would produce
 {
-  while read -r ev res go docs cross e2ec e2ed; do
+  while read -r ev res go cross e2ec e2ed; do
     if [ "$res" = success ]; then
-      o=$(EVENT=$ev GO=$go DOCS=$docs CROSS=$cross E2E_CODE=$e2ec E2E_DOC=$e2ed hack/ci-changes.sh)
-      jq -nc --arg ev "$ev" --arg res "$res" --arg in "$go $docs $cross $e2ec $e2ed" --arg o "$o" \
+      o=$(EVENT=$ev GO=$go CROSS=$cross E2E_CODE=$e2ec E2E_DOC=$e2ed CHANGED_FILES=10 RELEASE=false ACTION=false hack/ci-changes.sh)
+      jq -nc --arg ev "$ev" --arg res "$res" --arg in "$go $cross $e2ec $e2ed" --arg o "$o" \
         '{event: $ev, changes: $res, inputs: $in, outputs: ($o | split("\n") | map(select(length > 0) | split("=") | {key: .[0], value: .[1]}) | from_entries)}'
     else
       jq -nc --arg ev "$ev" --arg res "$res" '{event: $ev, changes: $res, inputs: "", outputs: {}}'
@@ -366,7 +420,7 @@ JS
 } | jq -sc '.' >"$work/outs.json"
 evaluated=$(IFS_JSON=$ifs_json SCOPE_EXPR=$scope_expr OUTS_JSON=$work/outs.json node "$work/eval.js")
 echo "$evaluated" >"$work/evaluated.json"
-[ "$(jq length <<<"$evaluated")" -gt 60 ] && ok "evaluated every gated job's if in $(jq length <<<"$evaluated") scenarios" || bad "the evaluation produced too few scenarios"
+[ "$(jq length <<<"$evaluated")" -gt 30 ] && ok "evaluated every gated job's if in $(jq length <<<"$evaluated") scenarios" || bad "the evaluation produced too few scenarios"
 
 # What must run, for the scenarios that matter (the gated jobs only).
 runs_of() { jq -r --arg ev "$1" --arg in "$2" '[.[] | select(.event == $ev and .inputs == $in)][0].runs | to_entries | map(select(.value) | .key) | sort | join(" ")' <<<"$evaluated"; }
@@ -379,14 +433,13 @@ every="build cross-build envtest examples images kube pg-conformance release-che
 # (release-check follows the release filter on a pull request and a push,
 # whose output these scenarios do not vary; it is asserted for the other runs.)
 every_nr="build cross-build envtest examples images kube pg-conformance test test-heap vuln"
-# inputs are "GO DOCS CROSS E2E_CODE E2E_DOC"
-want_runs "PR touching nothing gated runs none of the gated jobs" "" pull_request "false false false false false"
-want_runs "PR touching docs only runs only test (the docs readers)" "test" pull_request "false true false true false"
-want_runs "PR touching code runs the Go jobs, the e2e and envtest, not cross-build" "build envtest examples images kube pg-conformance test test-heap vuln" pull_request "true false false true false"
-want_runs "PR touching a compile input also runs cross-build" "build cross-build envtest examples images kube pg-conformance test test-heap vuln" pull_request "false false true false false"
-want_runs "PR touching only the e2e's docs page runs the kind e2e and envtest" "envtest kube" pull_request "false false false true true"
-want_runs "push to main after code runs everything" "$every_nr" push "true false true true false"
-want_runs "push to main after docs only runs all but kube and envtest" "build cross-build examples images pg-conformance test test-heap vuln" push "false true false false false"
+# inputs are "GO CROSS E2E_CODE E2E_DOC"
+want_runs "PR touching nothing a Go-heavy job reads runs only test (the readers' packages)" "test" pull_request "false false false false"
+want_runs "PR touching code runs the Go jobs, the e2e and envtest, not cross-build" "build envtest examples images kube pg-conformance test test-heap vuln" pull_request "true false true false"
+want_runs "PR touching a compile input also runs cross-build" "build cross-build envtest examples images kube pg-conformance test test-heap vuln" pull_request "false true false false"
+want_runs "PR touching only the e2e's docs page runs the kind e2e and envtest, and test" "envtest kube test" pull_request "false false true true"
+want_runs "push to main after code runs everything" "$every_nr" push "true true true false"
+want_runs "push to main after docs only runs all but kube and envtest" "build cross-build examples images pg-conformance test test-heap vuln" push "false false false false"
 # A failed changes job cannot hide a test: every gated job runs (a push to main
 # keeps its test signal; on a pull request ci-ok fails on the changes job anyway).
 want_runs "a push to main whose changes job failed still runs every gated job" "$every" push ""
@@ -394,14 +447,24 @@ want_runs "a PR whose changes job failed runs every gated job" "$every" pull_req
 want_runs "a schedule runs vuln, pg-conformance, kube and envtest only" "envtest kube pg-conformance vuln" schedule ""
 want_runs "a dispatch runs every gated job" "$every" workflow_dispatch ""
 want_runs "a release runs every gated job" "$every" release ""
-# PR runs of release-check follow its own filter, which is not one of the
-# inputs here: release-check is checked for the other events only.
-sc=$(jq -r '[.[] | select(.event == "pull_request" and .inputs == "false true false false false")][0].scope' <<<"$evaluated")
-[ "$sc" = docs ] && ok "the docs-only PR's test shards get SCOPE=docs" || bad "the docs-only PR's SCOPE is '$sc', want docs"
-sc=$(jq -r '[.[] | select(.event == "pull_request" and .inputs == "true false false false false")][0].scope' <<<"$evaluated")
+# The unit tests, on their own: every kind of run but a schedule, whatever the
+# filters say (a test that walks the checkout can fail on any file).
+t=$(jq -r '[.[] | select(.event != "schedule" and .runs.test == false)] | length' <<<"$evaluated")
+[ "$t" = 0 ] && ok "the unit tests run in every scenario but a schedule's" || bad "the unit tests are skipped in $t scenarios that are not a schedule"
+t=$(jq -r '[.[] | select(.event == "schedule" and .runs.test)] | length' <<<"$evaluated")
+[ "$t" = 0 ] && ok "the unit tests do not run on a schedule" || bad "the unit tests run on a schedule"
+# ...with the readers' scope when no Go-heavy job needs the full set.
+scope_of() { jq -r --arg ev "$1" --arg in "$2" '[.[] | select(.event == $ev and .inputs == $in)][0].scope' <<<"$evaluated"; }
+sc=$(scope_of pull_request "false false false false")
+[ "$sc" = readers ] && ok "a PR that changes no Go code gets SCOPE=readers" || bad "a PR that changes no Go code gets SCOPE='$sc', want readers"
+sc=$(scope_of pull_request "true false false false")
 [ "$sc" = all ] && ok "a code PR's test shards get SCOPE=all" || bad "a code PR's SCOPE is '$sc', want all"
+sc=$(scope_of pull_request "false true false false")
+[ "$sc" = all ] && ok "a compile-input PR's test shards get SCOPE=all" || bad "a compile-input PR's SCOPE is '$sc', want all"
 sc=$(jq -r '[.[] | select(.event == "workflow_dispatch")][0].scope' <<<"$evaluated")
 [ "$sc" = all ] && ok "a dispatch's test shards get SCOPE=all" || bad "a dispatch's SCOPE is '$sc', want all"
+sc=$(jq -r '[.[] | select(.event == "pull_request" and .changes == "failure")][0].scope' <<<"$evaluated")
+[ "$sc" = all ] && ok "a PR whose changes job failed runs the whole unit suite" || bad "a PR whose changes job failed gets SCOPE='$sc', want all"
 # On a pull request or a push, release-check follows the release filter, whose
 # output these scenarios do not vary (they run with release=false): it is
 # asserted above for the other kinds of run, and below with the verdict.
