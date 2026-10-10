@@ -3,6 +3,7 @@ package engine
 import (
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/abd-ulbasit/upgradescope/internal/inventory"
@@ -83,5 +84,54 @@ func TestEvaluateVolumePluginWindows(t *testing.T) {
 		if !reflect.DeepEqual(got, want) {
 			t.Errorf("target 1.%d: %v, want %v", tc.target, got, want)
 		}
+	}
+}
+
+// #362: live, a PersistentVolume bound to a claim in data, an unbound one
+// and a StorageClass with the in-tree provisioner, all rbd, beside a pod:
+// a warning the minor before rbd's removal, a blocker at it, the objects
+// named, the unbound PersistentVolume and the StorageClass counted as
+// cluster-scoped, and the claims and the class's new claims explained.
+func TestEvaluateVolumePluginPersistentVolumesAndStorageClasses(t *testing.T) {
+	inv := clusterInv()
+	inv.ServerVersion, inv.Nodes = "v1.30.4", []inventory.NodeInfo{{Name: "n", KubeletVersion: "v1.30.4"}}
+	inv.VolumePlugins = []inventory.VolumePluginUse{{Plugin: "rbd", Count: 4, Namespaces: map[string]int{"data": 1, "shop": 1, "": 2},
+		Objects: []inventory.ObjectRef{{Name: "sc-rbd"}, {Name: "pv-rbd"}, {Name: "pv-unbound"}}}}
+	for target, want := range map[int]Severity{30: SevWarning, 31: SevBlocker, 36: SevBlocker} {
+		r := Evaluate(inv, volumeKB(t), inventory.Version{Major: 1, Minor: target}, testNow)
+		i := slices.IndexFunc(r.Findings, func(f Finding) bool { return f.Key == "volume-plugin/rbd" })
+		if i < 0 {
+			t.Fatalf("1.%d: no volume-plugin/rbd finding in %+v", target, r.Findings)
+		}
+		f := r.Findings[i]
+		if f.Severity != want {
+			t.Errorf("1.%d: severity %s, want %s", target, f.Severity, want)
+		}
+		if names := []inventory.ObjectRef{{Name: "pv-rbd"}, {Name: "pv-unbound"}, {Name: "sc-rbd"}}; !reflect.DeepEqual(f.Objects, names) {
+			t.Errorf("1.%d: objects %+v, want %+v", target, f.Objects, names)
+		}
+		for _, s := range []string{"4 pods, PersistentVolumes or StorageClasses name it", "cluster-scoped (2), data (1), shop (1)",
+			"a claim bound to a PersistentVolume", "StorageClass with provisioner kubernetes.io/rbd"} {
+			if !strings.Contains(f.Detail, s) {
+				t.Errorf("1.%d: detail %q, want %q in it", target, f.Detail, s)
+			}
+		}
+		if f.Title != "In-tree volume plugin rbd removed in 1.31 (4 objects)" {
+			t.Errorf("1.%d: title %q", target, f.Title)
+		}
+	}
+}
+
+// The gate's proposed state lists the cluster's PersistentVolumes and
+// StorageClasses (no line) before the manifests' objects: an empty
+// namespace there is either.
+func TestEvaluateVolumePluginGateMixedObjects(t *testing.T) {
+	inv := clusterInv()
+	inv.VolumePlugins = []inventory.VolumePluginUse{{Plugin: "rbd", Count: 2, Namespaces: map[string]int{"": 2},
+		Objects: []inventory.ObjectRef{{Name: "pv-rbd"}, {Name: "pv-new", File: "pv.yaml", Line: 1}}}}
+	r := Evaluate(inv, volumeKB(t), inventory.Version{Major: 1, Minor: 31}, testNow)
+	i := slices.IndexFunc(r.Findings, func(f Finding) bool { return f.Key == "volume-plugin/rbd" })
+	if i < 0 || !strings.Contains(r.Findings[i].Detail, "in: cluster-scoped or no namespace set (2)") {
+		t.Errorf("findings %+v, want the rbd one counting 2 cluster-scoped or with no namespace set", r.Findings)
 	}
 }

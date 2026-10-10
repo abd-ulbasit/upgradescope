@@ -1,0 +1,26 @@
+[
+  {
+    "description": "In-tree volume plugin rbd removed in 1.31 (3 objects). 3 pods, PersistentVolumes or StorageClasses name it, in: cluster-scoped (2), data (1). From 1.31 a pod that names it, or that mounts a claim bound to a PersistentVolume that does, does not start. A StorageClass with provisioner kubernetes.io/rbd has its new claims provisioned by the in-tree plugin, so from 1.31 they are not provisioned. Objects: pv-rbd, pv-unbound, sc-rbd. Fix: redeploy the workload on a volume of the RBD CSI driver (ceph-csi); its CSI migration support was removed with the plugin.",
+    "check_name": "volume-plugin/rbd",
+    "fingerprint": "308c5e98b8659f7632d740f107ecef195f3da308df6afa8f6bdd416c313da7a9",
+    "severity": "critical",
+    "location": {
+      "path": "upgradescope/volume-plugin/rbd",
+      "lines": {
+        "begin": 1
+      }
+    }
+  },
+  {
+    "description": "In-tree volume plugin awsElasticBlockStore needs CSI driver ebs.csi.aws.com from 1.27 (2 objects). 2 pods, PersistentVolumes or StorageClasses name it, in: shop (2). From 1.27 the ebs.csi.aws.com CSI driver serves every operation on these volumes: a cluster without it installed cannot mount them, one with it is fine. A StorageClass with provisioner kubernetes.io/aws-ebs has its new claims provisioned by the in-tree plugin, so from 1.27 by that CSI driver. Objects: pv-ebs. Fix: install the ebs.csi.aws.com CSI driver (aws-ebs-csi-driver) before the upgrade.",
+    "check_name": "volume-plugin/awsElasticBlockStore",
+    "fingerprint": "14656c0cd8f13c085169de4b169a2996f7953e65bb2735e909f35cbb05e88993",
+    "severity": "minor",
+    "location": {
+      "path": "upgradescope/volume-plugin/awsElasticBlockStore",
+      "lines": {
+        "begin": 1
+      }
+    }
+  }
+]
