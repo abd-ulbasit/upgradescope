@@ -180,7 +180,7 @@ func (s *server) scan(ctx context.Context, _ *mcpsdk.CallToolRequest, in scanInp
 	}
 	// The reports are kept whatever their size, so a scan too large to
 	// send whole can still be read through list_findings.
-	return markedResult(out, "the reports are kept: read them with list_findings and a severity, a category or a limit, with target to pick one")
+	return markedResult(out, "the reports are kept: read them with list_findings and a severity, a category or a limit, with target to pick one", scanResolved())
 }
 
 func (s *server) getReport(ctx context.Context, _ *mcpsdk.CallToolRequest, in sourceInput) (*mcpsdk.CallToolResult, json.RawMessage, error) {
@@ -188,7 +188,7 @@ func (s *server) getReport(ctx context.Context, _ *mcpsdk.CallToolRequest, in so
 	if err != nil {
 		return nil, nil, err
 	}
-	return markedResult(doc, "ask list_findings for the findings instead, filtered by severity or category, or with a limit")
+	return markedResult(doc, "ask list_findings for the findings instead, filtered by severity or category, or with a limit", reportResolved())
 }
 
 // fits refuses a result too large for a client to receive in one message,
@@ -245,24 +245,17 @@ func (s *server) listFindings(ctx context.Context, _ *mcpsdk.CallToolRequest, in
 	if err != nil {
 		return nil, nil, err
 	}
-	var rep struct {
-		Target    string            `json:"target"`
-		KBVersion string            `json:"kbVersion"`
-		Findings  []json.RawMessage `json:"findings"`
-	}
-	if err := json.Unmarshal(doc, &rep); err != nil {
-		return nil, nil, fmt.Errorf("decoding the report: %w", errNotJSON)
+	rep, err := decodeReport(doc)
+	if err != nil {
+		return nil, nil, fmt.Errorf("decoding the report: %w", err)
 	}
 	var matched []json.RawMessage
 	for _, raw := range rep.Findings {
-		var f struct {
-			Severity string `json:"severity"`
-			Category string `json:"category"`
+		severity, category, err := findingKey(raw)
+		if err != nil {
+			return nil, nil, fmt.Errorf("decoding a finding: %w", err)
 		}
-		if err := json.Unmarshal(raw, &f); err != nil {
-			return nil, nil, fmt.Errorf("decoding a finding: %w", errNotJSON)
-		}
-		if (in.Severity == "" || f.Severity == in.Severity) && (in.Category == "" || f.Category == in.Category) {
+		if (in.Severity == "" || severity == in.Severity) && (in.Category == "" || category == in.Category) {
 			matched = append(matched, raw)
 		}
 	}
@@ -284,7 +277,7 @@ func (s *server) listFindings(ctx context.Context, _ *mcpsdk.CallToolRequest, in
 	if err != nil {
 		return nil, nil, err
 	}
-	return markedResult(out, "narrow it with severity or category, or a smaller limit")
+	return markedResult(out, "narrow it with severity or category, or a smaller limit", findingsResolved())
 }
 
 // report resolves which report a tool reads and returns it with the
@@ -379,14 +372,6 @@ func (s *server) scanTargets() []string {
 	return ts
 }
 
-func reportTarget(doc json.RawMessage) string {
-	var r struct {
-		Target string `json:"target"`
-	}
-	_ = json.Unmarshal(doc, &r)
-	return r.Target
-}
-
 // readReportFile reads a JSON report and refuses a file that is not one
 // api/report.schema.json accepts, with the reason, in place of the SDK's
 // output check, whose failure is a protocol error.
@@ -438,7 +423,7 @@ func (s *server) registryLookup(_ context.Context, _ *mcpsdk.CallToolRequest, in
 	}
 	// The registry is compiled in, but its text is the upstream projects'
 	// and endoflife.date's, so it is marked as every result is.
-	return markedResult(out, "pass a narrower query or a smaller limit")
+	return markedResult(out, "pass a narrower query or a smaller limit", registryResolved())
 }
 
 // addOnMatches reports whether the lower-case query q is part of the add-on's
@@ -469,5 +454,5 @@ func (s *server) fleetSummary(ctx context.Context, _ *mcpsdk.CallToolRequest, in
 	if d := bytes.TrimSpace(doc); len(d) == 0 || d[0] != '{' || !json.Valid(d) {
 		return nil, nil, errors.New("upgradescope server: the fleet response is not a JSON object (is --server-url an upgradescope server?)")
 	}
-	return markedResult(doc, "pass fewer targets")
+	return markedResult(doc, "pass fewer targets", fleetResolved())
 }
