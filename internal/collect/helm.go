@@ -498,6 +498,13 @@ func installedRevision(revs []helmRevision) (helmRevision, revisionPick) {
 // err (errManifestDocTooLarge) names the first, and the objects of the
 // other documents are still returned.
 func manifestAPIs(manifest string, flagged map[gvk]bool) (rows []inventory.APIUsage, err error) {
+	return manifestAPIsWith(manifest, flagged, false)
+}
+
+// manifestAPIsWith is manifestAPIs, optionally with kubectl's decoder
+// parsing every document again (see parseManifestStreamWith): the reference
+// the tests hold the single parse to.
+func manifestAPIsWith(manifest string, flagged map[gvk]bool, reparse bool) (rows []inventory.APIUsage, err error) {
 	if len(flagged) == 0 || manifest == "" {
 		return nil, nil
 	}
@@ -513,7 +520,7 @@ func manifestAPIs(manifest string, flagged map[gvk]bool) (rows []inventory.APIUs
 			}
 			return
 		}
-		objs, _, _, _ := parseManifestStream(strings.NewReader(text)) // a strings.Reader never fails
+		objs, _, _, _ := parseManifestStreamWith(strings.NewReader(text), reparse) // a strings.Reader never fails
 		objs = slices.DeleteFunc(objs, func(o manifestObject) bool { return !flagged[gvk{o.group, o.version, o.kind}] })
 		for i := range objs {
 			objs[i].ref.Line += line - 1 // lines of the run → lines of the manifest
