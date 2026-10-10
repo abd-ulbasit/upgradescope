@@ -567,14 +567,23 @@ must differ from both, and it also authorizes reads.
 
 | | API | CLI |
 |---|---|---|
-| list | `GET /api/v1/clusters` (read token) | `upgradescope clusters list --server URL` |
-| delete | `DELETE /api/v1/clusters/{id}` → 204 | `upgradescope clusters delete <name> --server URL` |
-| rename | `PATCH /api/v1/clusters/{id}` `{"name": "new"}` → 200 | `upgradescope clusters rename <name> <new-name> --server URL` |
+| list | `GET /api/v1/clusters` (read token) | `upgradescope clusters list --server-url URL` |
+| delete | `DELETE /api/v1/clusters/{id}` → 204 | `upgradescope clusters delete <name> --server-url URL` |
+| rename | `PATCH /api/v1/clusters/{id}` `{"name": "new"}` → 200 | `upgradescope clusters rename <name> <new-name> --server-url URL` |
 
 The CLI takes the token from `--admin-token` (`--read-token` for `list`),
-the environment variable or a `-file` flag. Without `--server` it works on
+the environment variable or a `-file` flag. Without `--server-url` it works on
 the database directly (`--db` or `--db-url`), for example while the server
 is stopped.
+
+`--server-url` is the flag `agent` and `mcp` use too; `--server`, its former
+name, still works as a hidden, deprecated alias. Over `https://` to a
+server whose certificate a private CA issued, pass the CA bundle with
+`--server-ca-file ca.pem` (trusted on top of the system roots; it needs an
+`https://` URL, and verification is never skipped). A token sent over plain
+`http://` to a host that is not loopback crosses the network in the clear:
+the command warns on stderr (never printing the token) and carries on, so
+serve the server over https.
 
 - **Delete** removes the cluster, its snapshots and evaluations, its queued
   notifications, and the per-cluster ingest tokens minted for its name.
@@ -604,7 +613,7 @@ re-binds its per-cluster tokens to the new name, then set the agent's
 `--cluster-name` to that name:
 
 ```sh
-upgradescope clusters rename Prod_EU prod-eu --server https://upgradescope.example.com
+upgradescope clusters rename Prod_EU prod-eu --server-url https://upgradescope.example.com
 helm upgrade upgradescope oci://ghcr.io/abd-ulbasit/charts/upgradescope -n upgradescope \
   --reset-then-reuse-values --set agent.clusterName=prod-eu
 ```
