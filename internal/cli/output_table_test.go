@@ -75,7 +75,7 @@ NOT ASSESSED
 
 // Files mode: each finding names the affected objects (file:line, first
 // few, then a count), the fix and the citations; an Ingress and a CronJob
-// without metadata.namespace read "namespace unset", never cluster-scoped.
+// without metadata.namespace read "no namespace set", never cluster-scoped.
 func TestWriteTableFilesModeGolden(t *testing.T) {
 	guide := "https://kubernetes.io/docs/reference/using-api/deprecation-guide/"
 	var many []inventory.ObjectRef
@@ -92,7 +92,7 @@ func TestWriteTableFilesModeGolden(t *testing.T) {
 			{
 				Category: engine.CatRemovedAPI, Severity: engine.SevBlocker,
 				Title:       "batch/v1beta1 CronJob removed in 1.25 (1 object)",
-				Detail:      "1 manifest object(s) use this API: namespace unset (1).",
+				Detail:      "1 manifest object(s) use this API: no namespace set (1).",
 				Remediation: "migrate to batch/v1 CronJob",
 				Citations:   []string{guide},
 				Objects:     []inventory.ObjectRef{{Name: "nightly", File: "rendered/all.yaml", Line: 3, RenderedFrom: "demo/templates/cronjob.yaml"}},
@@ -100,7 +100,7 @@ func TestWriteTableFilesModeGolden(t *testing.T) {
 			{
 				Category: engine.CatRemovedAPI, Severity: engine.SevBlocker,
 				Title:          "networking.k8s.io/v1beta1 Ingress removed in 1.22 (8 objects)",
-				Detail:         "8 manifest object(s) use this API: namespace unset (7), shop (1).",
+				Detail:         "8 manifest object(s) use this API: no namespace set (7), shop (1).",
 				Remediation:    "migrate to networking.k8s.io/v1 Ingress",
 				Citations:      []string{guide, "https://example.com/ingress-migration"},
 				Objects:        many,
@@ -124,12 +124,12 @@ READY  no
 
 BLOCKER (2)
   [removed-api] batch/v1beta1 CronJob removed in 1.25 (1 object)
-      1 manifest object(s) use this API: namespace unset (1).
+      1 manifest object(s) use this API: no namespace set (1).
       - nightly  rendered/all.yaml:3 (rendered from demo/templates/cronjob.yaml)
       fix: migrate to batch/v1 CronJob
       see: https://kubernetes.io/docs/reference/using-api/deprecation-guide/
   [removed-api] networking.k8s.io/v1beta1 Ingress removed in 1.22 (8 objects)
-      8 manifest object(s) use this API: namespace unset (7), shop (1).
+      8 manifest object(s) use this API: no namespace set (7), shop (1).
       - shop/web-0  rendered/ingress.yaml:1
       - web-1  rendered/ingress.yaml:8
       - web-2  rendered/ingress.yaml:15

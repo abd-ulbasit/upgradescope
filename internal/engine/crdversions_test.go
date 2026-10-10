@@ -137,7 +137,7 @@ func TestEvalCRDVersionsUnservedInUse(t *testing.T) {
 	if !ok || f.Severity != SevBlocker {
 		t.Fatalf("version missing from the CRD: %+v (found %v), want a blocker", f, ok)
 	}
-	for _, want := range []string{"1 manifest object(s) use this version: namespace unset (1).", "CRD certificates.cert-manager.io does not list v1beta1"} {
+	for _, want := range []string{"1 manifest object(s) use this version: no namespace set (1).", "CRD certificates.cert-manager.io does not list v1beta1"} {
 		if !strings.Contains(f.Detail, want) {
 			t.Errorf("Detail lacks %q:\n%s", want, f.Detail)
 		}

@@ -326,9 +326,9 @@ func listedObjects(src inventory.Source, u inventory.APIUsage) objectsListed {
 func (l objectsListed) emptyNamespace() string {
 	switch l {
 	case manifestObjects:
-		return "namespace unset"
+		return "no namespace set"
 	case mixedObjects:
-		return "cluster-scoped or namespace unset"
+		return "cluster-scoped or no namespace set"
 	}
 	return "cluster-scoped"
 }
@@ -916,7 +916,7 @@ func unnamespaced(in addOnInstall) bool {
 // nsLabel names a namespace in an evidence sentence; "" is a manifest
 // object's unset metadata.namespace (files mode).
 func nsLabel(ns string) string {
-	return cmp.Or(ns, "namespace unset")
+	return cmp.Or(ns, "no namespace set")
 }
 
 // namedNamespaces drops the unset namespace "" from a finding's sorted
