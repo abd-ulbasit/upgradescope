@@ -50,6 +50,8 @@ spec:
           args:
             - agent
             - {{ printf "--interval=%s" .Values.agent.interval | quote }}
+            - {{ printf "--pod-pass-every=%d" (int .Values.agent.podPassEvery) | quote }}
+            - {{ printf "--pod-pass-max-age=%s" .Values.agent.podPassMaxAge | quote }}
             - {{ printf "--cr-name=%s" .Values.agent.crName | quote }}
             - {{ printf "--team-label=%s" .Values.agent.teamLabel | quote }}
             - {{ printf "--manage-crd=%t" .Values.agent.manageCRD | quote }}

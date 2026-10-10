@@ -451,6 +451,14 @@ type Report struct {
 	// the ones the cap dropped.
 	UnrecognizedImages        []string `json:"unrecognizedImages,omitempty"`
 	UnrecognizedImagesOmitted int      `json:"unrecognizedImagesOmitted,omitempty"`
+	// AddOnEvidenceAgeSeconds is how old the pod evidence the add-ons were
+	// detected from was, in seconds, when the agent reused the last full
+	// pod pass instead of listing every pod again (inventory
+	// AddOnEvidenceAgeSeconds, #228): an add-on installed or upgraded since
+	// is reported as it was then. Absent when every pod was read for this
+	// report, and in reports of collectors that predate it. The verdict does
+	// not depend on it.
+	AddOnEvidenceAgeSeconds int64 `json:"addOnEvidenceAgeSeconds,omitempty"`
 	// Hops is the upgrade plan up to Target (see Plan), set by scan
 	// --plan; Evaluate never sets it. The rest of the report is the
 	// final target's.

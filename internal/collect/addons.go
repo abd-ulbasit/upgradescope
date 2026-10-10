@@ -88,7 +88,7 @@ func (ev *addOnEvidence) addPod(namespace string, labels map[string]string, imag
 // inventory.SkippedPods keeps the gap required; IngressClasses only add
 // evidence.
 func collectAddOns(ctx context.Context, kube kubernetes.Interface, addons []registry.AddOn, inv *inventory.Inventory) error {
-	return collectAddOnsFrom(ctx, kube, addons, inv, &kubeSystemPods{})
+	return collectAddOnsFrom(ctx, kube, addons, inv, &kubeSystemPods{}, nil)
 }
 
 // kubeSystemPods is what the add-ons capability takes from the versions
@@ -127,7 +127,7 @@ func podContainerImages(p *corev1.Pod) []string {
 // later page failing keeps the pages read, as it always did. A server or
 // proxy that rejects the field selector with a 400 is asked once more
 // without it, and its kube-system pods are skipped here.
-func collectAddOnsFrom(ctx context.Context, kube kubernetes.Interface, addons []registry.AddOn, inv *inventory.Inventory, sysPods *kubeSystemPods) error {
+func collectAddOnsFrom(ctx context.Context, kube kubernetes.Interface, addons []registry.AddOn, inv *inventory.Inventory, sysPods *kubeSystemPods, pass *PodPassCache) error {
 	ev := addOnEvidence{releases: inv.HelmReleases, gitops: inv.GitOpsCharts}
 	var failures, skipped []string
 	var podErr error
@@ -137,7 +137,20 @@ func collectAddOnsFrom(ctx context.Context, kube kubernetes.Interface, addons []
 		ev.images, ev.labelled = sysPods.ev.images, sysPods.ev.labelled
 		opts.FieldSelector = "metadata.namespace!=" + metav1.NamespaceSystem
 	}
-	for {
+	// The pods outside kube-system are listed only every few collections,
+	// and reused in between (PodPassCache, #228); the kube-system pods are
+	// versions' list of this collection, so only a collection that has it
+	// can do without the pass.
+	listPods := true
+	if sysPods.read {
+		if images, labelled, age, ok := pass.reuse(); ok {
+			ev.images, ev.labelled = slices.Concat(ev.images, images), slices.Concat(ev.labelled, labelled)
+			inv.AddOnEvidenceAgeSeconds = age
+			listPods = false
+		}
+	}
+	passStart := pass.clock()
+	for listPods {
 		pods, err := kube.CoreV1().Pods(metav1.NamespaceAll).List(ctx, opts)
 		if err != nil && opts.Continue == "" && opts.FieldSelector != "" && apierrors.IsBadRequest(err) {
 			// A server or proxy that refuses the field selector: list every
@@ -169,6 +182,16 @@ func collectAddOnsFrom(ctx context.Context, kube kubernetes.Interface, addons []
 			break
 		}
 		opts.Continue, opts.Limit = pods.Continue, pageLimit(largest, podPageSize)
+	}
+	if listPods {
+		// Only a pass that read every pod is kept; a failed or partial one
+		// drops the earlier evidence too, and the next collection lists
+		// every pod again.
+		if podErr == nil {
+			pass.record(ev, passStart)
+		} else {
+			pass.forget()
+		}
 	}
 	opts = metav1.ListOptions{Limit: listPageSize}
 	for {

@@ -38,6 +38,8 @@ type agentOptions struct {
 	crName          string
 	teamLabel       string
 	forceSyncEvery  time.Duration
+	podPassEvery    int
+	podPassMaxAge   time.Duration
 	kubeconfig      string
 	kubecontext     string
 	requestTimeout  time.Duration
@@ -121,6 +123,8 @@ var runAgent = func(ctx context.Context, opts agentOptions) error {
 		CRName:            opts.crName,
 		TeamLabel:         opts.teamLabel,
 		ForceSyncEvery:    opts.forceSyncEvery,
+		PodPassEvery:      opts.podPassEvery,
+		PodPassMaxAge:     opts.podPassMaxAge,
 		Targets:           opts.targets,
 		SkipCRDManagement: !opts.manageCRD,
 		HealthAddr:        opts.healthAddr,
@@ -238,6 +242,12 @@ The Helm chart (deploy/chart) runs it in the cluster with read-only RBAC.`,
 			if err := agent.ValidateForceSyncEvery(opts.forceSyncEvery); err != nil {
 				return fmt.Errorf("invalid --force-sync-every: %w", err) // 0 is refused too, not "the default"
 			}
+			if err := agent.ValidatePodPassEvery(opts.podPassEvery); err != nil {
+				return fmt.Errorf("invalid --pod-pass-every: %w", err)
+			}
+			if err := agent.ValidatePodPassMaxAge(opts.podPassMaxAge); err != nil {
+				return fmt.Errorf("invalid --pod-pass-max-age: %w", err)
+			}
 			if err := validPushSettings(cmd, &opts); err != nil {
 				return err
 			}
@@ -273,6 +283,10 @@ The Helm chart (deploy/chart) runs it in the cluster with read-only RBAC.`,
 	cmd.Flags().StringVar(&opts.teamLabel, "team-label", "team", "namespace label used for team attribution")
 	cmd.Flags().DurationVar(&opts.forceSyncEvery, "force-sync-every", time.Hour,
 		"push a snapshot even if unchanged after this long; must be positive, and a value at or below --interval means every tick")
+	cmd.Flags().IntVar(&opts.podPassEvery, "pod-pass-every", collect.DefaultPodPassEvery,
+		"list every pod outside kube-system once per this many ticks (the full pass is the first of them) and detect add-ons from that pass's images and labels in between, so an add-on installed or upgraded since is reported as it was for at most this many ticks minus one; 1 lists them every tick. kube-system pods, Helm releases and IngressClasses are read every tick")
+	cmd.Flags().DurationVar(&opts.podPassMaxAge, "pod-pass-max-age", collect.DefaultPodPassMaxAge,
+		"list every pod again when the last full pass is this old, whatever --pod-pass-every says; must be positive. The age of reused evidence is status.addOnEvidenceAgeSeconds")
 	cmd.Flags().StringSliceVar(&opts.targets, "targets", nil,
 		"target minors, CSV, e.g. 1.37,1.38, at most 8 distinct minors (the ClusterReadiness spec.targets cap; more is refused at start); when set, the ClusterReadiness spec.targets is reconciled to them every tick (overriding kubectl edits)")
 	cmd.Flags().BoolVar(&opts.manageCRD, "manage-crd", true,

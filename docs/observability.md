@@ -142,6 +142,7 @@ categories, capabilities, route patterns, and on the server cluster names
 | `upgradescope_findings` | gauge | `target`, `severity`, `category` | finding count; combinations with no findings are absent |
 | `upgradescope_capability_available` | gauge | `capability` | 1 when the collector capability was available |
 | `upgradescope_capability_partial` | gauge | `capability` | 1 when the capability was available but could not read everything it covers (`status.notAssessed` marks it partial) |
+| `upgradescope_addon_evidence_age_seconds` | gauge | | 0 when the last successful tick listed every pod; otherwise the age of the full pod pass it reused for add-on detection (`--pod-pass-every`, `--pod-pass-max-age`; also `status.addOnEvidenceAgeSeconds`) |
 | `upgradescope_kb_info` | gauge | `kb_version`, `max_known_k8s` | always 1; the embedded knowledge base |
 
 Score, verdict, findings and capability gauges describe the last

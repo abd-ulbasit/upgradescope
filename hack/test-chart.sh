@@ -152,6 +152,8 @@ assert_contains "$TMP/default.yaml" 'readOnlyRootFilesystem: true'    "readOnlyR
 assert_contains "$TMP/default.yaml" 'allowPrivilegeEscalation: false' "no privilege escalation"
 assert_line "$TMP/default.yaml" '              - ALL'                "all capabilities dropped"
 assert_contains "$TMP/default.yaml" '--interval=10m'   "default interval flag"
+assert_contains "$TMP/default.yaml" '--pod-pass-every=3' "default pod-pass-every flag (#228)"
+assert_contains "$TMP/default.yaml" '--pod-pass-max-age=1h' "default pod-pass-max-age flag (#228)"
 assert_contains "$TMP/default.yaml" '--cr-name=cluster' "default cr-name flag"
 assert_contains "$TMP/default.yaml" '--team-label=team' "default team-label flag"
 assert_not_contains "$TMP/default.yaml" '--server-url' "CRD-only mode: no server-url flag"
@@ -538,7 +540,8 @@ for bad in 'server.enable=true' 'agent.interval=30s' 'agent.interval=59s' 'agent
   'agent.targets={v1.38}' 'agent.targets={1.37.2}' 'rbac.helmSecret=false' \
   'server.targets={1.36,1.37,1.38,1.39,1.40}' \
   'agent.targets={1.30,1.31,1.32,1.33,1.34,1.35,1.36,1.37,1.38}' \
-  'agent.crName=a..b' 'agent.crName=a.-b' 'agent.crName=Prod'; do
+  'agent.crName=a..b' 'agent.crName=a.-b' 'agent.crName=Prod' \
+  'agent.podPassEvery=0' 'agent.podPassEvery=-1' 'agent.podPassEvery=1.5' 'agent.podPassMaxAge=30s' 'agent.podPassMaxAge=1'; do
   if helm template upgradescope "$CHART" --set "$bad" >/dev/null 2>&1; then
     fail "schema accepted --set $bad"
   else
@@ -550,13 +553,17 @@ for good in 'agent.interval=1m' 'agent.interval=1h30m' 'agent.interval=10m0s' 'a
   'agent.interval=1.5m' 'agent.interval=2m30.5s' 'agent.targets={1.37,1.38}' \
   'server.targets={1.36,1.37,1.38,1.39}' \
   'agent.targets={1.30,1.31,1.32,1.33,1.34,1.35,1.36,1.37}' \
-  'agent.crName=prod.eu-west-1'; do
+  'agent.crName=prod.eu-west-1' 'agent.podPassEvery=1' 'agent.podPassEvery=6' 'agent.podPassMaxAge=2h'; do
   if helm template upgradescope "$CHART" --set "$good" >/dev/null 2>&1; then
     pass "schema accepts --set $good"
   else
     fail "schema rejected --set $good"
   fi
 done
+# The pod pass settings reach the agent as flags (#228).
+helm template upgradescope "$CHART" --namespace upgradescope --set agent.podPassEvery=1 --set agent.podPassMaxAge=20m > "$TMP/podpass.yaml"
+assert_contains "$TMP/podpass.yaml" '--pod-pass-every=1' "agent.podPassEvery renders --pod-pass-every"
+assert_contains "$TMP/podpass.yaml" '--pod-pass-max-age=20m' "agent.podPassMaxAge renders --pod-pass-max-age"
 # agent.crName takes 253 bytes, the most an object name has, and not 254.
 name253=$(printf 'a%.0s' $(seq 1 253))
 if helm template upgradescope "$CHART" --set "agent.crName=$name253" >/dev/null 2>&1; then

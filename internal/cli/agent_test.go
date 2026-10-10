@@ -157,6 +157,7 @@ func TestAgentCmdFlagsParsed(t *testing.T) {
 		interval: 5 * time.Minute, serverURL: "http://scope:8080", serverToken: "tok",
 		clusterName: "prod-eu-1", crName: "main", teamLabel: "squad",
 		forceSyncEvery: 30 * time.Minute, kubeconfig: "/tmp/kc", kubecontext: "ctx1",
+		podPassEvery: 3, podPassMaxAge: time.Hour,
 		manageCRD: true, healthAddr: ":8081", logFormat: "text", logLevel: "info", requestTimeout: 30 * time.Second,
 	}
 	if !reflect.DeepEqual(got, want) {
@@ -433,5 +434,26 @@ func TestAgentServerTokenFileFollowsRotation(t *testing.T) {
 	}
 	if got, err = execAgent(t, "--server-token", "flag-tok"); err != nil || got.serverTokenFile != "" {
 		t.Fatalf("flag token: serverTokenFile = %q, err %v; want none", got.serverTokenFile, err)
+	}
+}
+
+// #228: --pod-pass-every and --pod-pass-max-age default to 3 and 1h, are
+// passed through, and refuse a value that could never work, 0 included,
+// before any cluster access.
+func TestAgentPodPassFlags(t *testing.T) {
+	got, err := execAgent(t)
+	if err != nil || got.podPassEvery != 3 || got.podPassMaxAge != time.Hour {
+		t.Fatalf("defaults = %d, %v, err %v; want 3 and 1h", got.podPassEvery, got.podPassMaxAge, err)
+	}
+	got, err = execAgent(t, "--pod-pass-every", "1", "--pod-pass-max-age", "20m")
+	if err != nil || got.podPassEvery != 1 || got.podPassMaxAge != 20*time.Minute {
+		t.Fatalf("set = %d, %v, err %v; want 1 and 20m", got.podPassEvery, got.podPassMaxAge, err)
+	}
+	for _, tc := range []struct{ flag, val string }{
+		{"--pod-pass-every", "0"}, {"--pod-pass-every", "-2"}, {"--pod-pass-max-age", "0"}, {"--pod-pass-max-age", "-1m"},
+	} {
+		if _, err := execAgent(t, tc.flag, tc.val); err == nil || !strings.Contains(err.Error(), "invalid "+tc.flag) {
+			t.Errorf("%s %s: err = %v, want it refused, naming the flag", tc.flag, tc.val, err)
+		}
 	}
 }

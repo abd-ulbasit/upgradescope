@@ -344,3 +344,26 @@ func TestRestartHoldFromAFutureClockEnds(t *testing.T) {
 		t.Fatalf("became-ready events after the clock was corrected = %d, want exactly 1", ready)
 	}
 }
+
+// The age of the pod evidence an agent reused (#228) grows with every tick
+// that reuses a pass: a push that differs only in it is a duplicate, and
+// the snapshot keeps the age it was pushed with.
+func TestAddOnEvidenceAgeIsNotANewSnapshot(t *testing.T) {
+	h := newHarness(t, Config{KB: testKB()}, aug1)
+	h.pushAt(aug1, testInventory())
+	points, first := h.historyPoints("1.35"), h.latestSnapshotID()
+	for i, age := range []int64{600, 1200, 1800} {
+		at := aug1.Add(time.Duration(i+1) * 10 * time.Minute)
+		inv := testInventory()
+		inv.AddOnEvidenceAgeSeconds = age
+		if code := h.pushAt(at, inv); code != http.StatusOK {
+			t.Fatalf("push with age %d: status %d, want a duplicate", age, code)
+		}
+	}
+	if got := h.historyPoints("1.35"); got != points {
+		t.Fatalf("history points = %d, want %d", got, points)
+	}
+	if latest := h.latestSnapshotID(); latest != first {
+		t.Fatalf("latest snapshot = %d, want %d", latest, first)
+	}
+}

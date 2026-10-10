@@ -311,3 +311,17 @@ func TestCRDPreferredVersion(t *testing.T) {
 		})
 	}
 }
+
+// Canonical leaves out what describes the collection and not the cluster,
+// and nothing else (#228).
+func TestCanonicalDropsOnlyTheCollectionsOwnFields(t *testing.T) {
+	at := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	inv := Inventory{ClusterID: "c", ServerVersion: "v1.35.2", CollectedAt: at, APIServerStartTime: at, AddOnEvidenceAgeSeconds: 600}
+	got := inv.Canonical()
+	if want := (Inventory{ClusterID: "c", ServerVersion: "v1.35.2"}); !reflect.DeepEqual(got, want) {
+		t.Errorf("Canonical() = %+v, want %+v", got, want)
+	}
+	if inv.AddOnEvidenceAgeSeconds != 600 || inv.CollectedAt != at {
+		t.Error("Canonical modified its receiver")
+	}
+}

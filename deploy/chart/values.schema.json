@@ -82,6 +82,8 @@
       "properties": {
         "enabled": { "type": "boolean" },
         "interval": { "$ref": "#/definitions/duration" },
+        "podPassEvery": { "description": "Ticks per full read of the pods outside kube-system: at least 1, as the agent's --pod-pass-every refuses less.", "type": "integer", "minimum": 1 },
+        "podPassMaxAge": { "$ref": "#/definitions/duration" },
         "crName": { "type": "string", "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$", "maxLength": 253 },
         "teamLabel": { "type": "string", "minLength": 1 },
         "clusterName": { "type": "string" },

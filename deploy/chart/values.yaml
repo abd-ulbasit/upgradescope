@@ -83,6 +83,21 @@ agent:
   # -- Evaluation interval: a Go duration of at least 1m, e.g. 10m, 1h, 1m30s,
   # 300s or 1.5h.
   interval: 10m
+  # -- Read the pods outside kube-system once per this many ticks (the full
+  # pass is the first of them), passed to the agent as --pod-pass-every. In
+  # between the agent detects add-ons from the images and labels of that
+  # pass, so an add-on installed or upgraded since is reported as it was for
+  # at most this many ticks minus one (status.addOnEvidenceAgeSeconds says
+  # how old the evidence is). The kube-system pods, Helm releases and
+  # IngressClasses are read every tick. The pods are most of a tick's
+  # requests on a large cluster (16 of 31 at 2,001 nodes); 1 reads them every
+  # tick, as before. See docs/operations/scale.md.
+  podPassEvery: 3
+  # -- List every pod again when the last full pass is this old, whatever
+  # podPassEvery says (agent --pod-pass-max-age): a Go duration of at least
+  # 1m. A bound on how stale add-on evidence can be on a long interval, where
+  # podPassEvery ticks are longer than this.
+  podPassMaxAge: 1h
   # -- Name of the ClusterReadiness object the agent manages: an RFC 1123
   # subdomain (dot-separated labels of lowercase letters, digits and -, each
   # starting and ending with a letter or digit; at most 253 bytes). The

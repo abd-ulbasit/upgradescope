@@ -98,6 +98,11 @@ spec:
                   format: date-time
                 agentVersion:
                   type: string
+                addOnEvidenceAgeSeconds:
+                  description: How old, in seconds, the pod evidence the add-ons were detected from was when the agent reused its last full pod pass instead of listing every pod again (--pod-pass-every, --pod-pass-max-age); an add-on installed or upgraded since is reported as it was then. Absent when every pod was read for this status. The pods in kube-system, Helm releases and IngressClasses are read on every evaluation whatever this says.
+                  type: integer
+                  format: int64
+                  minimum: 1
                 supportPhase:
                   description: Where the cluster's Kubernetes minor stands in its managed provider's (EKS, GKE, AKS) support calendar - standard, ending (standard support ends within 90 days), extended (past standard support, before the provider's extended window ends; where that window is opt-in, as on GKE and AKS, it applies to the cluster only if extendedSupportCondition holds, which the agent cannot see) or ended. Absent when the provider is not one of the three or its dates for the minor are not in the knowledge base. The same for every target.
                   type: string
