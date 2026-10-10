@@ -33,7 +33,11 @@ Pick how the gate moves:
   v0.2.0 on), and only when no higher v0.x release is published: a re-run
   of an older release, or the slower of two releases cut close together,
   leaves `v0`, GitHub's latest release and the image's `:latest` on the
-  higher one. Since `v0` is not a release tag, the default `version`
+  higher one. GitHub's latest moves to a release only after that
+  release's provenance attestation exists (the release workflow, not
+  GoReleaser, sets it), so a `latest` install never meets a release that
+  cannot yet be verified; if the attestation step fails, latest stays on the
+  previous release. Since `v0` is not a release tag, the default `version`
   is `latest`, and the binary and its knowledge base move with it. This is
   the convenient choice, but a release can change the verdict on an
   unchanged pull request.
