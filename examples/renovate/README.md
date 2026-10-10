@@ -6,7 +6,7 @@ chart bumps for the add-ons upgradescope's registry tracks.
 **It is static.** The chart names and the end-of-life list were written by
 hand from `registry/data`; the preset does not read a scan, your cluster, or
 the registry at run time, so it knows nothing about what *your* scan flags.
-(Generating it from `upgradescope scan --format json` is possible and is not
+(Generating it from `upgradescope scan --output json` is possible and is not
 done here.) `go test ./examples` fails when the preset's chart list stops
 matching the registry's, so a new add-on or a changed support status cannot
 drift in unnoticed, but a copy of the file in your repository will not

@@ -7,7 +7,7 @@ in manifests, and in requests the apiserver still receives), add-ons past
 end of life, version skew outside the upstream policy, and Helm charts that
 declare they do not support the target. The answer is a verdict (`ready`,
 `blocked` or `unknown`), a 0–100 score, and the findings with their fixes,
-as a table, JSON, SARIF or Markdown, an exit code for CI, and a
+as a table, JSON, SARIF, Markdown, JUnit or GitLab Code Quality, an exit code for CI, and a
 `ClusterReadiness` object in the cluster.
 
 !!! note "These docs describe v0.2.0"

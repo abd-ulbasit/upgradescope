@@ -102,3 +102,39 @@ func TestScanFilesJUnit(t *testing.T) {
 		t.Errorf("failures %d, errors %d: want the new blockers as failures, no errors (files mode needs no versions)", *doc.Failures, *doc.Errors)
 	}
 }
+
+// A clean files-mode scan is not "readiness/no findings" (#308): files mode
+// never runs deprecated-calls, helm or versions, so the report holds one
+// skipped test per optional check that did not run, and nothing passed.
+// Jenkins still sees three tests, so its empty-report check does not fire.
+// docs/guides/other-ci.md describes exactly this shape
+// (TestDocsOtherCIJUnitCleanReport).
+func TestScanFilesCleanJUnit(t *testing.T) {
+	dir := writeFiles(t, map[string]string{"web.yaml": "apiVersion: apps/v1\nkind: Deployment\nmetadata: {name: web, namespace: shop}\n" +
+		"spec:\n  selector: {matchLabels: {a: b}}\n  template:\n    metadata: {labels: {a: b}}\n    spec:\n      containers: [{name: c, image: nginx:1.27}]\n"})
+	out, _, err := execScanFiles(t, "--files", dir, "--output", "junit")
+	if err != nil {
+		t.Fatalf("a clean files-mode scan must pass the gate: %v", err)
+	}
+	doc := junittest.Read(t, []byte(out))
+	want := map[string]string{
+		"not-assessed/deprecated-calls": "skipped",
+		"not-assessed/helm":             "skipped",
+		"not-assessed/versions":         "skipped",
+	}
+	got := junittest.Outcomes(doc)
+	if len(got) != len(want) {
+		t.Errorf("outcomes = %v, want exactly %v", got, want)
+	}
+	for k, w := range want {
+		if got[k] != w {
+			t.Errorf("%s = %q, want %q (all: %v)", k, got[k], w, got)
+		}
+	}
+	if *doc.Tests != 3 || *doc.Failures != 0 || *doc.Errors != 0 {
+		t.Errorf("tests %d, failures %d, errors %d: want 3 skipped tests and nothing else", *doc.Tests, *doc.Failures, *doc.Errors)
+	}
+	if strings.Contains(out, "no findings") {
+		t.Errorf("a files-mode scan has unassessed optional checks, so it must not claim `no findings` with every check assessed:\n%s", out)
+	}
+}

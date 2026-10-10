@@ -36,15 +36,17 @@ cluster and no network beyond the Go module proxy.
 ```sh
 git clone https://github.com/abd-ulbasit/upgradescope
 cd upgradescope
-make build        # bin/upgradescope (no dashboard, see below)
+make build        # bin/upgradescope, dashboard included (see below)
 make test         # gofmt, go vet, go test -race, tools/ modules too: the CI gate
 make lint         # go vet + pinned staticcheck, the same gate CI runs
 ```
 
-The binary embeds the dashboard from `internal/server/webdist/`, which in a
-fresh clone holds only `.gitkeep`. `make build` therefore produces a binary
-whose `serve` answers `/` with a "dashboard not built" message. To build with
-the dashboard, run `make web build`, which needs Node.
+The staged dashboard bundle in `internal/server/webdist/` is committed, so
+`make build` embeds the dashboard and `serve` answers `/` with it: a fresh
+clone needs only Go. `make web` (which needs Node) rebuilds the bundle from
+`web/`; run it, and commit the result, only after you change `web/`. CI's
+`web` job rebuilds it and fails when the committed bundle is stale. A build
+with `-tags nodashboard` leaves the bundle out (the API still serves).
 
 ## Repository map
 
@@ -61,8 +63,15 @@ internal/
   server/              ingest + read API, what-if, gate, exports, notifiers, SPA
     store/             Store interface, SQLite and Postgres implementations, migrations
     notify/            Slack and generic webhook delivery
-  cli/                 cobra commands: scan, agent, serve, tokens
+  cli/                 cobra commands: scan, agent, serve, mcp, tokens, clusters, version
+  mcp/                 the MCP server behind `upgradescope mcp`: read-only tools over stdio or HTTP
   sarif/               SARIF 2.1.0 rendering shared by the CLI and the gate
+  junit/               JUnit XML rendering (--output junit and /gate?format=junit)
+  codequality/         GitLab Code Quality rendering (--output gitlab-codequality and /gate)
+  suppress/            ignore rules, annotations and baselines applied to a report
+  secretfile/          reads a token or URL from a mounted file and re-reads it on change
+  textsafe/            makes manifest-controlled text safe for terminals and CI logs
+api/                   OpenAPI and the report and webhook JSON schemas; embeds the report schema for the MCP server
 registry/              the add-on EOL/compat dataset (data/*.yaml), its schema and validator
 tools/
   gen-kb/              separate Go module: regenerates internal/kb/data/apilifecycle.json

@@ -98,7 +98,11 @@ var categoryOrder = []engine.Category{
 //
 // A report with none of these is one passing test case ("no findings",
 // suite readiness), since Jenkins fails a build whose reports hold no
-// tests. Times are 0. A failed write is returned.
+// tests. Any gap, even a skipped optional one, adds a not-assessed suite
+// instead, so that case appears only when every check ran: a live scan.
+// A clean files-mode scan is one skipped test per optional check that did
+// not run (deprecated-calls, helm, versions) and none passed. Times are 0.
+// A failed write is returned.
 func Write(w io.Writer, r engine.Report, opts Options) error {
 	failOn := opts.FailOn
 	if failOn == "" {
