@@ -489,7 +489,9 @@ func TestMCPHTTPDisconnectCancelsTheCall(t *testing.T) {
 // tell from the server's) change neither the count nor the wait for it to
 // fall.
 func TestServerGoroutinesCountsOnlyTheServers(t *testing.T) {
-	base := serverGoroutines()
+	// Earlier tests' servers may still be winding down their connections:
+	// count from a baseline that has stopped moving, not from a snapshot.
+	base := settledServerGoroutines(t, 10*time.Second)
 
 	stop := make(chan struct{})
 	var wg sync.WaitGroup
@@ -516,4 +518,23 @@ func TestServerGoroutinesCountsOnlyTheServers(t *testing.T) {
 			t.Errorf("%d open connections: the count is %d, want %d", want, got, base+want)
 		}
 	}
+}
+
+// settledServerGoroutines returns the count of server goroutines once it has
+// stayed the same for 500ms (other tests' servers finishing their shutdown),
+// failing the test if it does not settle within d.
+func settledServerGoroutines(t *testing.T, d time.Duration) int {
+	t.Helper()
+	deadline := time.Now().Add(d)
+	last, since := serverGoroutines(), time.Now()
+	for time.Now().Before(deadline) {
+		time.Sleep(50 * time.Millisecond)
+		if n := serverGoroutines(); n != last {
+			last, since = n, time.Now()
+		} else if time.Since(since) >= 500*time.Millisecond {
+			return n
+		}
+	}
+	t.Fatalf("the server goroutine count did not settle within %s (last %d)", d, last)
+	return last
 }
