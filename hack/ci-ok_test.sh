@@ -138,6 +138,21 @@ for job in test test-heap build cross-build examples images vuln pg-conformance 
   verdict "dispatch: $job skipped fails ci-ok" fail workflow_dispatch '{}' changes=skipped "$job=skipped"
 done
 
+# The jobs no path gates must succeed: skipped is not a pass for them (a stray
+# `if` cannot quietly drop lint or the repository checks), but the ones that
+# skip on a schedule by their own `if` may be skipped there.
+for job in lint repo-checks web helm notices kb-freshness kube-matrix pg-matrix; do
+  verdict "PR: $job skipped fails ci-ok" fail pull_request "$code" "$job=skipped"
+  verdict "push to main: $job skipped fails ci-ok" fail push "$push_all" "$job=skipped"
+  verdict "release: $job skipped fails ci-ok" fail push '{}' changes=skipped "$job=skipped"
+done
+for job in lint repo-checks web helm notices; do
+  verdict "schedule: $job skipped is fine (it skips there by its own if)" pass schedule '{}' changes=skipped test=skipped test-heap=skipped build=skipped cross-build=skipped examples=skipped images=skipped release-check=skipped "$job=skipped"
+done
+for job in kb-freshness kube-matrix pg-matrix; do
+  verdict "schedule: $job skipped fails ci-ok (it runs on a schedule)" fail schedule '{}' changes=skipped test=skipped test-heap=skipped build=skipped cross-build=skipped examples=skipped images=skipped release-check=skipped "$job=skipped"
+done
+
 # A gated job that is not among ci-ok's needs cannot be judged.
 doc=$(needs_json "$code" | jq -c 'del(.["test-heap"])')
 NEEDS=$doc EVENT=pull_request hack/ci-ok.sh >/dev/null 2>&1 && { echo "FAIL ci-ok passed with test-heap missing from its needs" >&2; rc=1; } || echo "ok   a gated job missing from needs fails ci-ok"
@@ -174,5 +189,14 @@ while read -r job out notneeded onsched; do
     ! grep -qF "github.event_name != 'schedule'" <<<"$cond" || { echo "FAIL $job is marked as running on a schedule but its if skips it there" >&2; rc=1; }
   fi
 done <<<"$table"
+# The ungated lists name real jobs, whose ifs agree with the schedule split.
+for job in $(sed -n "s/^UNGATED_OFF_SCHEDULE='\(.*\)'/\1/p" hack/ci-ok.sh); do
+  grep -qx "$job" <<<"$jobs" || { echo "FAIL hack/ci-ok.sh names $job, which is not a job in ci.yml" >&2; rc=1; }
+  job_if "$job" | grep -qF "github.event_name != 'schedule'" || { echo "FAIL $job is listed as skipped on a schedule, but its if does not skip it there" >&2; rc=1; }
+done
+for job in $(sed -n "s/^UNGATED_ALWAYS='\(.*\)'/\1/p" hack/ci-ok.sh); do
+  grep -qx "$job" <<<"$jobs" || { echo "FAIL hack/ci-ok.sh names $job, which is not a job in ci.yml" >&2; rc=1; }
+  if job_if "$job" | grep -qF "github.event_name != 'schedule'"; then echo "FAIL $job is listed as running on a schedule, but its if skips it there" >&2; rc=1; fi
+done
 [ "$rc" = 0 ] && echo "ok   every gated job reads its output, runs when changes was skipped, and agrees with the schedule column"
 exit "$rc"

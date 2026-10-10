@@ -19,7 +19,8 @@
 #     on which changes does not run.
 # Every other result than success or skipped fails, and the changes job must
 # have succeeded on a pull request (nothing says a pull request needs nothing
-# unless it did).
+# unless it did). The jobs no path gates (below) must have succeeded too:
+# skipped is not a pass for them, except the ones that skip on a schedule.
 set -euo pipefail
 
 : "${NEEDS:?ci-ok: NEEDS is not set}"
@@ -43,6 +44,12 @@ kube          e2e        false no
 envtest       e2e        false no
 release-check release    false yes
 '
+
+# The jobs that run on every pull request and push, whatever it changes: they
+# must succeed, so a stray `if` that skips one cannot pass. The first group
+# skips on a schedule by its own `if`; the second runs there too.
+UNGATED_OFF_SCHEDULE='lint repo-checks web helm notices'
+UNGATED_ALWAYS='kb-freshness kube-matrix pg-matrix'
 
 # One jq call each: "<job> <result>" lines and "<output> <value>" lines of the
 # changes job, looked up in bash (no process per lookup).
@@ -94,6 +101,20 @@ while read -r job out notneeded onschedule; do
       ;;
   esac
 done <<<"$GATED"
+
+for job in $UNGATED_OFF_SCHEDULE $UNGATED_ALWAYS; do
+  r=$(result "$job")
+  case $r in
+    missing) bad+=("$job: not in ci-ok's needs") ;;
+    skipped)
+      if [ "$EVENT" = schedule ] && [[ " $UNGATED_OFF_SCHEDULE " == *" $job "* ]]; then
+        :
+      else
+        bad+=("$job: skipped, but it runs on every $EVENT event")
+      fi
+      ;;
+  esac
+done
 
 echo "$results"
 if [ "${#bad[@]}" -gt 0 ]; then

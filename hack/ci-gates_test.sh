@@ -385,9 +385,9 @@ sc=$(jq -r '[.[] | select(.event == "pull_request" and .inputs == "true false fa
 [ "$sc" = all ] && ok "a code PR's test shards get SCOPE=all" || bad "a code PR's SCOPE is '$sc', want all"
 sc=$(jq -r '[.[] | select(.event == "workflow_dispatch")][0].scope' <<<"$evaluated")
 [ "$sc" = all ] && ok "a dispatch's test shards get SCOPE=all" || bad "a dispatch's SCOPE is '$sc', want all"
-# On a pull request, release-check follows the release filter, not these
-# inputs: it is skipped here because the scenarios set release empty, which
-# ci-ok reads as "not needed" only with changes' own answer. Not asserted.
+# On a pull request or a push, release-check follows the release filter, whose
+# output these scenarios do not vary (they run with release=false): it is
+# asserted above for the other kinds of run, and below with the verdict.
 
 # Nothing a PR's changes need is ever skipped: for every distinct scenario,
 # jobs that did not run are skipped, the rest succeed, and ci-ok must accept
@@ -400,7 +400,8 @@ while read -r line; do
   needs=$(jq -c --argjson outs "$outs" --arg chg "$chg" '
     (.runs | to_entries | map({key, value: {result: (if .value then "success" else "skipped" end), outputs: {}}}) | from_entries)
     + {changes: {result: $chg, outputs: $outs}, lint: {result: "success"}, registry: {result: "success"}, action: {result: "skipped"},
-       "kube-matrix": {result: "success"}, "pg-matrix": {result: "success"}, "repo-checks": {result: "success"}}' <<<"$line")
+       "kube-matrix": {result: "success"}, "pg-matrix": {result: "success"}, "repo-checks": {result: "success"},
+       web: {result: "success"}, helm: {result: "success"}, notices: {result: "success"}, "kb-freshness": {result: "success"}}' <<<"$line")
   # release-check's own filter said false on pull requests and pushes
   if [ "$ev" = pull_request ] || [ "$ev" = push ]; then needs=$(jq -c '."release-check".result = "skipped"' <<<"$needs"); fi
   ciev=$ev
@@ -436,7 +437,6 @@ grep -qF 'CROSS_BUILD_PLATFORMS: ${{ matrix.platforms }}' <<<"$block" && grep -q
 
 # ---- every job is still in ci-ok's needs; the new ones exist ----------------
 grep -qE '^  repo-checks:$' "$ci" && ok "the repo-checks job (check-toolchain, hack-test, claims-check) is not gated" || bad "no repo-checks job"
-rc_if=$(job_if repo-checks 2>/dev/null || true)
 block=$(job_block repo-checks)
 if grep -qF 'needs.changes' <<<"$block"; then bad "repo-checks reads the changes job: it must run on every pull request"; else ok "repo-checks does not depend on the changes job"; fi
 for step in 'make check-toolchain' 'make hack-test' 'make claims-check'; do

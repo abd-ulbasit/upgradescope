@@ -60,7 +60,7 @@ units() {
       awk -v mod="$mod" -v mp="$mp" '
         { if ($0 == mp) d = "."; else if (index($0, mp "/") == 1) d = substr($0, length(mp) + 2); else d = $0
           print mod, d }'
-  done | sort -u
+  done | LC_ALL=C sort -u
 }
 
 all_units=$(units)
@@ -71,7 +71,7 @@ if [ -z "$selected" ]; then
 fi
 if $docs; then
   readers=$(sed -e 's/#.*//' -e '/^[[:space:]]*$/d' hack/test-docs-readers.txt)
-  selected=$(comm -12 <(sort <<<"$selected") <(sort <<<"$readers"))
+  selected=$(LC_ALL=C comm -12 <(LC_ALL=C sort <<<"$selected") <(LC_ALL=C sort <<<"$readers"))
   if [ -z "$selected" ]; then
     echo "test: hack/test-docs-readers.txt names no package of this tree" >&2
     exit 1
@@ -112,7 +112,7 @@ run_module() { # <module dir> <package dirs...>
   (cd "$mod" && go vet "${args[@]}" && go test -race -count=1 "${args[@]}")
 }
 
-for mod in $(cut -d' ' -f1 <<<"$selected" | sort -u); do
+for mod in $(cut -d' ' -f1 <<<"$selected" | LC_ALL=C sort -u); do
   # shellcheck disable=SC2046
   run_module "$mod" $(awk -v m="$mod" '$1 == m { print $2 }' <<<"$selected")
 done

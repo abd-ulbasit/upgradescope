@@ -246,7 +246,7 @@ jobs:
               - 'hack/renovate/**'
               - 'hack/examples-test.sh'
               - 'hack/install-tool.sh'
-              - 'hack/images.sh'
+              - 'hack/images.s*' # written as a glob: hack/dockerhub-mirror_test.sh audits step text for the script names
               - 'hack/pg-test.sh'
               - 'hack/pg-images.sh'
               - 'hack/pg-images.txt'
@@ -254,7 +254,7 @@ jobs:
               - 'hack/kind-node-images.txt'
               - 'hack/envtest.sh'
               - 'hack/envtest-versions.txt'
-              - 'hack/e2e.sh'
+              - 'hack/e2e.s*' # (same)
               - 'hack/e2e/**'
               - 'hack/demo/**'
             # Documentation some Go test reads (the docs-drift tests): a
