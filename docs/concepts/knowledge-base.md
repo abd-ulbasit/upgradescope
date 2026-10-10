@@ -23,7 +23,7 @@ $ upgradescope version
   registry date: 2026-10-01
 ```
 
-The KB version names the `k8s.io/api` release and a digest of each dataset (the registry digest covers the add-ons and the provider calendars),
+The KB version names the `k8s.io/api` release and a digest of each dataset (the lifecycle digest covers the migration notes and the in-tree volume plugins too, so editing a note or a plugin changes it; the registry digest covers the add-ons and the provider calendars),
 so two binaries with the same KB version judge identically. The digests
 shown in this documentation's examples are illustrative: a digest changes
 with any edit to its dataset, so run `upgradescope version` for your
@@ -112,6 +112,9 @@ A finding's remediation is the generated hint, then `; `, then the note, or
 the note alone when there is no hint. The note's citations follow the
 deprecation guide in the finding's. The text appears wherever the finding
 does: the table's `fix:` line, the Markdown cell, `--output json` and SARIF.
+A Helm stored-manifest finding carries no note: its fix is to upgrade the
+release to a chart version that renders supported APIs, not to edit the
+manifest. Editing a note changes the lifecycle digest of the KB version.
 
 The file is separate from `apilifecycle.json` so a regeneration or a weekly
 refresh cannot drop a note, and the KB refuses to load when it cannot be

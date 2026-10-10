@@ -61,7 +61,7 @@ edit to its dataset):
       "title": "networking.k8s.io/v1beta1 Ingress removed in 1.22 (1 object)",
       "detail": "1 manifest object(s) use this API: shop (1).",
       "namespaces": ["shop"],
-      "remediation": "migrate to networking.k8s.io/v1 Ingress",
+      "remediation": "migrate to networking.k8s.io/v1 Ingress; networking.k8s.io/v1 is not a rename of the apiVersion: spec.backend becomes spec.defaultBackend, a backend's serviceName becomes service.name and its servicePort becomes service.port.number (numeric) or service.port.name (string), and pathType (Prefix, Exact or ImplementationSpecific, which matches the undefined v1beta1 behaviour) is required on every path",
       "citations": ["https://kubernetes.io/docs/reference/using-api/deprecation-guide/"],
       "objects": [{"namespace": "shop", "name": "web", "file": "all.yaml", "line": 1}]
     }
