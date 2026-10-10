@@ -284,7 +284,7 @@ The Helm chart (deploy/chart) runs it in the cluster with read-only RBAC.`,
 	cmd.Flags().DurationVar(&opts.forceSyncEvery, "force-sync-every", time.Hour,
 		"push a snapshot even if unchanged after this long; must be positive, and a value at or below --interval means every tick")
 	cmd.Flags().IntVar(&opts.podPassEvery, "pod-pass-every", collect.DefaultPodPassEvery,
-		"list every pod outside kube-system once per this many ticks (the full pass is the first of them) and detect add-ons from that pass's images and labels in between, so an add-on installed or upgraded since is reported as it was for at most this many ticks minus one; 1 lists them every tick. kube-system pods, Helm releases and IngressClasses are read every tick")
+		"list every pod outside kube-system once per this many ticks (the full pass is the first of them) and detect add-ons from that pass's images and labels in between, so an add-on installed or upgraded since is reported as it was for at most this many ticks minus one; 1 lists them every tick. kube-system pods, Helm releases, GitOps charts and IngressClasses are read every tick, and a change in the Helm releases or GitOps charts that name an add-on lists every pod on the next one")
 	cmd.Flags().DurationVar(&opts.podPassMaxAge, "pod-pass-max-age", collect.DefaultPodPassMaxAge,
 		"list every pod again when the last full pass is this old, whatever --pod-pass-every says; must be positive. The age of reused evidence is status.addOnEvidenceAgeSeconds")
 	cmd.Flags().StringSliceVar(&opts.targets, "targets", nil,

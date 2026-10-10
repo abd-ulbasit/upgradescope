@@ -264,10 +264,15 @@ cluster. The requests of one tick are:
   Helm releases, GitOps resources and IngressClasses are read on every
   tick. A pass is also forced when the last full pass is
   `--pod-pass-max-age` old (1h), when the last one failed or read only some
-  of its pages (it is never kept), and when `versions` did not list the
-  `kube-system` pods this tick. So an add-on installed or upgraded right
-  after a pass is reported as it was for at most `--pod-pass-every` minus
-  one ticks, and never past the maximum age; the age of the evidence is
+  of its pages (it is never kept), when `versions` did not list the
+  `kube-system` pods this tick, and when the Helm releases or GitOps chart
+  references that name an add-on differ from those the pass was taken with
+  (they are read every tick, so the trigger costs no request, and a release
+  upgraded across a release line is not joined with the old pods). So an
+  add-on installed or upgraded right after a pass, by other means than
+  Helm or a chart reference, is reported as it was for at most
+  `--pod-pass-every` minus one ticks, and a tick does not reuse a pass of
+  the maximum age or more; the age of the evidence is
   `addOnEvidenceAgeSeconds` in the inventory, the report and the
   ClusterReadiness status, left out of the snapshot hash so a reusing tick
   pushes nothing new. A cheap trigger from the Deployments', DaemonSets'

@@ -68,8 +68,10 @@ type Config struct {
 	// outside kube-system: every PodPassEvery ticks (the pass is the first
 	// of them), and sooner when the last full pass is PodPassMaxAge old; in
 	// between, add-ons are detected from that pass's images and labels, so
-	// an add-on installed or upgraded since is reported as it was for at
-	// most PodPassEvery-1 ticks and never past PodPassMaxAge (#228).
+	// an add-on installed or upgraded since (other than through a Helm
+	// release or GitOps chart reference, whose change forces a full pass) is
+	// reported as it was for at most PodPassEvery-1 ticks, and a pass
+	// PodPassMaxAge old is not reused (#228).
 	// Defaults collect.DefaultPodPassEvery (3) and
 	// collect.DefaultPodPassMaxAge (1h); 1 lists every pod every tick.
 	PodPassEvery  int

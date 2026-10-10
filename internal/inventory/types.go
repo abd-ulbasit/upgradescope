@@ -175,7 +175,10 @@ type Inventory struct {
 	// --pod-pass-every ticks (or --pod-pass-max-age), and in between detects
 	// add-ons from the images and labels the last full pass read (#228). An
 	// add-on installed or upgraded since is then reported as it was at that
-	// pass, for at most this long, and never longer than --pod-pass-max-age.
+	// pass, for at most this long: a pass of --pod-pass-max-age or more is
+	// not reused, so this is below it when the collection began, and the
+	// report stays up until the next one. A change in the Helm releases or
+	// GitOps charts that name an add-on forces a full pass instead.
 	// Absent (0) when every pod was read in this collection, as a scan's
 	// always are, and in inventories from collectors that predate the field.
 	// The kube-system pods, Helm releases, GitOps resources and IngressClasses

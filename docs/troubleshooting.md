@@ -134,16 +134,23 @@ To accept a finding for now, with a reason and an expiry, use an
   default interval), or sooner when the last full pass is
   `--pod-pass-max-age` old (1h), and detects add-ons from that pass's
   images and labels in between. An add-on changed right after a pass is
-  reported as it was for at most `--pod-pass-every` minus one ticks, and
-  never for longer than `--pod-pass-max-age`. `status.addOnEvidenceAgeSeconds`
+  reported as it was for at most `--pod-pass-every` minus one ticks, and a
+  pass that is `--pod-pass-max-age` old or more is not reused (the age is
+  measured at the tick that reuses it, and that tick's report stays up until
+  the next one). `status.addOnEvidenceAgeSeconds`
   (also `addOnEvidenceAgeSeconds` in the report and the
   `upgradescope_addon_evidence_age_seconds` gauge) says how old the evidence
   of the last tick was: absent or 0 means every pod was read. Wait for the
   next full pass, or set `agent.podPassEvery=1` to read the pods on every
   tick, at the request count [Scale and cost](operations/scale.md) gives
-  for it. Helm releases, Argo CD and Flux charts, IngressClasses and the
-  `kube-system` pods are read on every tick, so an add-on installed with
-  Helm or found in `kube-system` is never behind. `scan` reads every pod.
+  for it. The `kube-system` pods, Helm releases, Argo CD and Flux charts
+  and IngressClasses are read on every tick, and a change in the Helm
+  releases or chart references that name an add-on (a new release or
+  revision, a new chart reference) makes the next tick list every pod. So
+  an add-on in `kube-system`, or installed or upgraded through Helm or a
+  GitOps chart reference, is not behind; one installed another way, or whose
+  image was changed in place (`kubectl set image`), is, for the ticks above.
+  `scan` reads every pod.
 - **The pod never becomes Ready.** Readiness waits for a successful tick.
   `kubectl logs` shows one line per tick, with `tick failed` and the error.
   A tick fails when no target can be evaluated (no `spec.targets` and an

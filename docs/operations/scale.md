@@ -43,9 +43,11 @@ quote them.
   (3.3 on the wire) in 4.4 s and 3.4 CPU-seconds, as before. The mean over a
   cycle of 3 is 23.7 requests, 35.3 MiB and 2.3 CPU-seconds (computed from
   those medians, not measured). The price is staleness: an add-on installed
-  or upgraded right after a full pass is reported as it was for at most 2
-  ticks (about 20 minutes at the default interval), and never for longer
-  than `--pod-pass-max-age`; the report, the ClusterReadiness status and
+  or upgraded right after a full pass, other than through Helm or a GitOps
+  chart reference (a change in those makes the next tick a full pass), is
+  reported as it was for at most 2 ticks (about 20 minutes at the default
+  interval), and a pass that is `--pod-pass-max-age` old is not reused; the
+  report, the ClusterReadiness status and
   `upgradescope_addon_evidence_age_seconds` say how old the evidence is.
   [The pod pass every Nth tick](#the-pod-pass-every-nth-tick-228) has the
   tables and the rules. The paragraphs below are the tick that lists every
@@ -54,8 +56,10 @@ quote them.
   about 14,000 pods and 1,000 Helm releases, makes 31 API requests** at the
   code of
   [#228](https://github.com/abd-ulbasit/upgradescope/issues/228) (`9810fb6`,
-  4 October 2026, 06:55 to 07:03 UTC), whose target of under 25 only the
-  pod pass reuse above meets, and reads 50.4 MiB of responses (3.1 MiB on the wire,
+  4 October 2026, 06:55 to 07:03 UTC), which misses #228's target of under
+  25: the ticks that reuse the pass (20, measured) and the mean of a cycle
+  of 3 (23.7, computed) are under it, the tick that lists every pod is
+  not. It reads 50.4 MiB of responses (3.1 MiB on the wire,
   compressed) in 3.7 s and 3.0 CPU-seconds. On main `735751d`, before
   #228, it made 53 requests and read 50 MiB (3.4 MiB on the wire) in 4.1 s
   and 3.0 CPU-seconds, with a peak live heap of 28 MiB and a peak RSS of
@@ -452,18 +456,42 @@ Flux charts, and IngressClasses. A full pass is forced when
 - the cache holds no complete pass: the agent has just started, or the last
   pass failed or read only some of its pages (a failed or partial pass is
   never kept, and drops the evidence of an earlier one);
-- the last full pass is `--pod-pass-max-age` old; and
+- the last full pass is `--pod-pass-max-age` old;
 - `versions` did not list the `kube-system` pods on this tick, because the
-  held pass does not hold them.
+  held pass does not hold them; and
+- the Helm releases or the Argo CD and Flux chart references that name a
+  registry add-on are not those the pass was taken with: a release or
+  chart that appeared, went away or changed its chart, chart version,
+  appVersion, revision or status. They are read on every tick anyway, so
+  this early trigger costs no request. Releases of no add-on (your own
+  applications) do not count, however often they are upgraded
+  (`TestPodPassHelmUpgradeForcesAFullPass`, `TestPodPassIgnoresReleasesOfNoAddOn`,
+  `TestPodPassGitOpsChartChangeForcesAFullPass`). Without it, a release
+  upgraded across a release line would be joined with the old pods and
+  reported as two installs for up to 2 ticks.
 
 **Worst-case staleness.** An add-on installed or upgraded right after a full
 pass began is reported as it was for the next `--pod-pass-every` minus 1
 ticks (2 at the default: about 20 minutes at the default 10-minute
-interval, with its jitter of up to 10%), and never for longer than
-`--pod-pass-max-age`, which bites first on a long interval (at 30 minutes
-the default hour allows about one reuse, and from an hour, none). An add-on
-removed or one whose last pod went away is likewise reported until the next
-full pass. Helm-installed add-ons and those in `kube-system` are never behind.
+interval, with its jitter of up to 10%), and a tick does not reuse a pass
+that is `--pod-pass-max-age` old or more, which bites first on a long
+interval (at 30 minutes the default hour allows about one reuse, and from
+an hour, none). The age is measured when the tick reuses the pass, and
+that tick's report and ClusterReadiness status stay up until the next
+one, so a viewer can see evidence up to about the maximum age plus one
+interval old. An add-on removed or one whose last pod went away is
+likewise reported until the next full pass.
+
+Which add-ons can be behind. Those in `kube-system` cannot: their pods are
+read on every tick. A change made through Helm (a new release, or a new
+revision of one, which an upgrade, a rollback and a values change all make)
+or to an Argo CD or Flux chart reference that names the add-on (a new
+`targetRevision`, chart or target namespace) forces a full pass on the next
+tick (the early trigger above), so those are reported as they are. What
+can be behind, for the 2 ticks: an add-on installed without Helm or a chart
+reference; an image changed in place (`kubectl set image`, a patched
+manifest); and an upgrade made by a GitOps tool through a version
+constraint (`4.*`), which leaves the resource untouched.
 The age of what a tick reused is `addOnEvidenceAgeSeconds` in the
 inventory and the report (absent when every pod was read), the same on the
 ClusterReadiness status, in the tick's log line and in
@@ -1017,7 +1045,7 @@ at all:
 | The same 1,000 GETs on the first tick after a start, and on every one-shot `scan` | Sequential, 36.1 to 36.7 s and 23.1 to 23.5 CPU-seconds here; at a 60 ms round trip the first tick reached the Helm step's deadline with 231 releases unread; as a pod at the old 200m default it reached it with 132 unread (measured, [above](#cpu-and-the-chart-limit)) | **Fixed** for the round trip ([#226](https://github.com/abd-ulbasit/upgradescope/issues/226)): 8 GETs in flight, decoded one at a time in order; 42.4 s here at `9810fb6`, on a host whose load rose to 15 (27.1 s at the draft `59d8561`, at a load of 7 to 12), and at 60 ms 30.4 s at `06cdf7a` and 29.6 s at `5da764e`, with every release read. Decoding (22 CPU-seconds) and the client's rate limit (14 s for 1,000) are the bounds now, so under a CPU quota #226 was not expected to help at 200m and saves at most the 13.4 s the GETs waited at 1 CPU (computed, [above](#cpu-and-the-chart-limit)); measured at 200m at `da90a86e` (with #226 and #228, 9 October 2026), the first tick still gave up at the Helm step's deadline, with 43 of 1,001 unread where `735751d` left 132 ([above](#the-tick-after-a-partial-helm-step-247)); the runs differ in more than #226 and in host load, so the share that is #226's is not known; the chart's default limit is now 1 CPU, at which main's first tick read all 1,000. `TestCollectHelmConcurrentMatchesSequential` |
 | `kube-system` pods are listed in full twice a tick: by the control-plane version check, then again by the all-pods list | 4,009 pods here; the second listing is not a separate 9 requests but 9 extra ones (those pods already fall inside the 29 pages of the all-pods list) and about 4,000 pods decoded twice; grows with nodes (every node adds a `kube-proxy` and a CNI pod) | **Fixed** ([#227](https://github.com/abd-ulbasit/upgradescope/issues/227), #232): the add-ons take them from the version check's list; 30 pod list requests a tick instead of 38 in the runs on `735751d` |
 | Argo CD Applications, Flux HelmReleases and the OCIRepositories their chartRefs name are listed whole (page size 50) every tick (#218; the OCIRepositories since #248, a GET each before) | **Measured** (`BENCH_GITOPS=1`, at 1,000 Applications and 1,000 HelmReleases with 500 chartRefs): at `da90a86e` 50 of the 81 requests of a steady tick (20 + 20 + 10 lists), 9.0 MiB of 59.8, every chart resolved ([above](#the-ocirepositories-listed-248)); on main `735751d`, before #248, 540 of 596, 500 of them sequential OCIRepository GETs, 12 MiB of 63, 8.7 more seconds and 3.2 more CPU-seconds, under host noise ([above](#re-measured-on-main-with-and-without-argo-cd-and-flux)) | Fixed by [#248](https://github.com/abd-ulbasit/upgradescope/issues/248): a list instead of a GET per OCIRepository, a GET by name only where the list is forbidden; the rest grows by one request per 50 objects |
-| The all-pods list is the steady tick's largest cost | 38 of 61 requests (30 of 53 after #232), 79% of the bytes; whole pod objects are needed for their images, and the agent keeps no watch | **Requests fixed** ([#228](https://github.com/abd-ulbasit/upgradescope/issues/228)): pod and node pages sized by their largest object (at most 1,000), discovery kept between ticks, the agent's object read once: 53 to 31 requests, short of the target of under 25. The bytes (50 MiB) and CPU (3 s) are unchanged, since every pod is still decoded every tick; reading pods less often (#228's option b) would cut those and the pod requests, and is not done |
+| The all-pods list is the steady tick's largest cost | 38 of 61 requests (30 of 53 after #232), 79% of the bytes; whole pod objects are needed for their images, and the agent keeps no watch | **Requests fixed** ([#228](https://github.com/abd-ulbasit/upgradescope/issues/228)): pod and node pages sized by their largest object (at most 1,000), discovery kept between ticks, the agent's object read once: 53 to 31 requests, short of the target of under 25. The bytes (50 MiB) and CPU (3 s) are unchanged on a tick that lists every pod; reading the pods less often (#228's option b, the default since, PF-18) makes the ticks that reuse the pass cost 20 requests, 27.8 MiB and 1.8 CPU-seconds (measured at `0b6fec28`, 10 October 2026), and a cycle of 3 averages 23.7 requests (computed), while the tick that lists every pod still makes 31 |
 
 ## The server
 
