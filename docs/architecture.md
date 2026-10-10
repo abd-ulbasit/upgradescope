@@ -199,14 +199,15 @@ cluster. The requests of one tick are:
   the objects it will hold, so a page's worst case is 1,000 times the
   largest object: small objects followed by large ones (pods are listed
   by namespace). 500 pods of 137 bytes followed by 1,000 of up to 41,685
-  bytes (39.4 MiB encoded) peaked at 124.5 to 125.5 MiB of live heap, and
-  a run of such pods, read 500 a page, at 63.2 to 63.7 MiB, as before
-  (`TestPodPagePeakHeapIsBounded`, which enforces 128 MiB, 2.5 to 3.5 MiB
-  above that worst case). That is one
-  example, not the bound: at its rate, about 3.2 bytes of live heap per
-  encoded byte, a page of 1,000 pods of about 70 KiB after a page of small
-  ones would pass the agent's `GOMEMLIMIT` (90% of 256Mi, about 230 MiB),
-  and pages of at most 500, before #228, at about 145 KiB (computed, not
+  bytes (39.4 MiB encoded) held 122.3 to 125.3 MiB of live heap on
+  GitHub's ubuntu-latest (linux/amd64) runner, and a run of such pods,
+  read 500 a page, 61.7 to 68.0 MiB, as before
+  (`TestPodPagePeakHeapIsBounded`, which enforces 144 MiB, 86.4 MiB under
+  the agent's `GOMEMLIMIT`). That is one example, not the bound: at its
+  rate, about 3.2 bytes of live heap per encoded byte, a page of 1,000 pods
+  of about 60 KiB after a page of small ones would pass the agent's
+  `GOMEMLIMIT` (90% of 256Mi, 230.4 MiB) beside the rest of the agent, and
+  pages of at most 500, before #228, at about 120 KiB (computed, not
   measured). So no page holds more than twice the objects a page held
   before #228, and the pod size at which one page fills the agent's memory
   is half what it was.

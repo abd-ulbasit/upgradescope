@@ -135,8 +135,11 @@ renovate-audit:
 
 # THIRD_PARTY_NOTICES: the license text of every Go module the binary links
 # (go-licenses, pinned in the script) and every npm package in the dashboard
-# bundle. `make notices` rewrites it (commit the result after a dependency
-# change); `make notices-check` (CI's notices job) runs the script's offline
+# bundle, named without versions, so a bump that keeps every license and its
+# text needs no regeneration. `make notices` rewrites it (commit the result
+# when a dependency is added or dropped, or a license or its text changes:
+# the check's failure prints the commands for a Dependabot PR's branch);
+# `make notices-check` (CI's notices job) runs the script's offline
 # tests, then fails on a stale file or on a dependency whose license is
 # missing or not on the allowlist (GPL, AGPL, SSPL and unknown never are).
 # Needs Go, jq, network, and Node when web/node_modules is incomplete.
@@ -261,6 +264,15 @@ pg-test:
 gen-kb:
 	cd tools/gen-kb && go generate ./...
 
+# kb-derived rewrites the committed files the embedded KB feeds (the
+# support-lifecycle doc's scan examples, the chart's KB RBAC rules) through
+# the tests that pin them (hack/kb-derived.sh); both kb-refresh.yml
+# jobs run it after changing the data (gen-kb, eol-sync), so each PR carries
+# the files its data feeds.
+.PHONY: kb-derived
+kb-derived:
+	./hack/kb-derived.sh
+
 .PHONY: eol-sync eol-check
 eol-sync:
 	cd tools/eol-sync && go run . -dir ../../registry/data
@@ -353,6 +365,7 @@ hack-test:
 	./hack/release-ci-permissions_test.sh
 	./hack/release-caches_test.sh
 	./hack/kb-refresh-ci_test.sh
+	./hack/kb-derived_test.sh
 	./hack/notices_test.sh
 	./hack/check-changelog_test.sh
 	./hack/check-asset-names_test.sh

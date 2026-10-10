@@ -87,13 +87,14 @@ quote them.
   request, which only informs scheduling. A pod page is bounded by its count
   only, at most 1,000 pods, so its worst case is 1,000 times the largest
   pod, whatever its size, reached when small pods are followed by large
-  ones. 1,000 pods of about 40 KiB after small ones measured 124.5 to 125.5
-  MiB of live heap in a test (`TestPodPagePeakHeapIsBounded`, which allows
-  128 MiB); at that rate, about 3.2 bytes of live heap per encoded byte,
-  pods of about 70 KiB after small ones would take one page past the agent's
-  `GOMEMLIMIT` (about 230 MiB) and likely past the limit, where the pages of
-  500 before #228 would have reached it at about 145 KiB (computed, not
-  measured; see [the steady tick](#the-tick-after-226-and-228)).
+  ones. 1,000 pods of about 40 KiB after small ones held 122.3 to 125.3 MiB
+  of live heap in a test on GitHub's ubuntu-latest runner
+  (`TestPodPagePeakHeapIsBounded`, which allows 144 MiB); at that rate,
+  about 3.2 bytes of live heap per encoded byte, pods of about 60 KiB after
+  small ones would take one page past the agent's `GOMEMLIMIT` (230.4 MiB)
+  beside what the rest of the agent holds, and likely past the limit, where
+  the pages of 500 before #228 would have reached it at about 120 KiB
+  (computed, not measured; see [the steady tick](#the-tick-after-226-and-228)).
 - **The chart's default CPU limit was too low for such a cluster, and is now
   1 CPU.** As a pod at the old 200m the first tick gave up at its Helm
   step's deadline with 132 of 1,001 releases unread, and a steady tick took
@@ -314,20 +315,35 @@ them without a watch (AG-01) and without reading pods less often:
   are seen, so nothing bounds its bytes but the count: its worst case is
   1,000 times the largest object, reached when small objects are followed by
   large ones (pods are listed by namespace). `TestPodPagePeakHeapIsBounded`
-  measures it: 500 pods of 137 bytes, then 1,000 of up to 41,685 bytes (39.4
-  MiB encoded), peaked at 124.5 to 125.5 MiB of live heap, under half the
-  chart's 256Mi but only 2.5 to 3.5 MiB under the test's own limit of 128
-  MiB, so a change that makes a page's decoding about 2 to 3% larger fails
-  it; a run of those pods, which stays at 500 a page as before, at 63.2 to
-  63.7 MiB; production-sized pods (about 8 KiB in protobuf, managedFields
-  included; about 990 a page) at 34.5 to 35.4 MiB (Apple M1 Pro, 4 October
-  2026). The 40 KiB pods are an example, not the bound: at the rate they
-  measured, about 3.2 bytes of live heap per encoded byte (125.5 MiB for
-  39.4 MiB), one page of 1,000 pods passes the agent's `GOMEMLIMIT` (90% of
-  256Mi, about 230 MiB) at pods of about 70 KiB after a page of small ones
-  (230 MiB / 3.2 / 1,000 is 74 KiB, less what the rest of the agent holds),
-  where pages of at most 500, before #228, would have reached it at about
-  145 KiB (230 MiB / 3.2 / 500 is 147 KiB; computed, not measured). Pods
+  measures it on GitHub's ubuntu-latest runner (linux/amd64), where users'
+  agents run (four CI runs at `23f8739` and `04c39fa`, runs 37950213827
+  and 37964795504, this change before its rebase onto `377fd77`; 9 October
+  2026): 500 pods of 137 bytes, then 1,000 of up to 41,685 bytes (39.4
+  MiB encoded), held between 122.3 and 125.3 MiB of live heap (its lower bounds 122.3 to
+  123.4, its upper bounds 125.0 to 125.3), under half the chart's 256Mi; a
+  run of those pods, which stays at 500 a page as before, 61.7 to 68.0 MiB;
+  production-sized pods (about 8 KiB in protobuf, managedFields included;
+  about 990 a page) 32.9 to 34.3 MiB. A single reading after a forced
+  collection can also count the garbage of reading the response, up to
+  153.8 MiB in those runs: #251's CI read 153.0 MiB and failed the 128 MiB
+  the test enforced then, 2.5 to 3.5 MiB above an Apple M1 Pro's readings.
+  So the test lists each case 10 times, passes on the lowest upper bound,
+  and enforces 144 MiB. Five dispatched runs of the final test, at
+  `443a542` (this change before its last rebase onto main; runs 37987299524, 37987318295, 37990925915, 37994320874 and
+  37996739083, 9 October 2026), all passed it: the worst case between 123.0
+  and 125.1 MiB (lower bounds 119.4 to 123.8, per attempt), a run of large
+  pods 62.4 to 63.5, production-sized pods 33.0 to 33.4 (lower bounds); 8 of
+  the 50 worst-case attempts read past 144 MiB, up to 153.7 (garbage), and
+  every run had at least 6 of its 10 under it. 144 MiB is 18.7 MiB (14.9%)
+  above the highest upper bound read, and 86.4 MiB under the agent's `GOMEMLIMIT` (90% of 256Mi, 230.4
+  MiB) for the rest of the agent and a collection's garbage. The 40 KiB
+  pods are an example, not the bound: at the rate they measured, about 3.2
+  bytes of live heap per encoded byte (125.3 MiB for 39.4 MiB), one page of
+  1,000 pods passes the agent's `GOMEMLIMIT` at pods of about 60 KiB after a
+  page of small ones, beside the 39.2 MiB the rest of the agent's heap
+  peaked at here ((230.4 − 39.2) MiB / 3.18 / 1,000 is 61.6 KiB; 74.2 KiB
+  with nothing else held), where pages of at most 500, before #228, would
+  have reached it at about 120 KiB (123.1 KiB; computed, not measured). Pods
   that large exist: Argo Workflows pods carry their template, for example.
   The drafts sized a page from the average object of the page before, up to
   2,000: 10 pod and 2 node requests, 24 in all, but they ask for 2,000 of
