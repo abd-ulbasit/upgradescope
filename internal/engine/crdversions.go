@@ -36,6 +36,7 @@ func evalCRDVersions(inv inventory.Inventory, target inventory.Version, b *budge
 	for _, s := range inv.Capabilities[inventory.CapCRDs].Skipped {
 		unchecked[s] = true
 	}
+	teams := newTeamLookup(inv.Namespaces)
 	independent := fmt.Sprintf(" CRD versions are set by the add-on that ships the CRD, independent of Kubernetes %s.", target)
 	var out []Finding
 	for _, c := range inv.CRDs {
@@ -81,7 +82,7 @@ func evalCRDVersions(inv inventory.Inventory, target inventory.Version, b *budge
 			case inUse:
 				f.Severity = SevWarning
 				f.Title += fmt.Sprintf(" (%s)", pluralObjects(u.Count))
-				f.Detail = crdUsage(&f, u, inv)
+				f.Detail = crdUsage(&f, u, inv, teams)
 			case unchecked[gv+" "+c.Kind]:
 				f.Detail = "Custom resources written through this version were not checked (see the crds gap)."
 			default:
@@ -121,7 +122,7 @@ func evalCRDVersions(inv inventory.Inventory, target inventory.Version, b *budge
 				Title:     fmt.Sprintf("%s %s is not served by its CRD (%s)", gv, c.Kind, pluralObjects(u.Count)),
 				Citations: []string{crdVersioningURL},
 			}
-			f.Detail = crdUsage(&f, u, inv)
+			f.Detail = crdUsage(&f, u, inv, teams)
 			if ok {
 				f.Detail += fmt.Sprintf(" CRD %s marks %s served: false (it serves %s), so the apiserver rejects these objects at %s.", name, u.Version, servedText, u.Version)
 			} else {
@@ -172,7 +173,7 @@ func evalCRDVersions(inv inventory.Inventory, target inventory.Version, b *budge
 // them (listedObjects): manifest objects (refs with a line), a cluster's
 // row the gate listed only manifests of, or live objects and the managers
 // writing them.
-func crdUsage(f *Finding, u inventory.APIUsage, inv inventory.Inventory) string {
+func crdUsage(f *Finding, u inventory.APIUsage, inv inventory.Inventory, teams teamLookup) string {
 	listed := listedObjects(inv.Source, u)
 	detail := "%d object(s) written through this version"
 	switch listed {
@@ -182,7 +183,7 @@ func crdUsage(f *Finding, u inventory.APIUsage, inv inventory.Inventory) string 
 		detail = "%d object(s) use this version"
 	}
 	nsDetail, nsNames := namespaceBreakdown(u.Namespaces, listed.emptyNamespace())
-	f.Teams, f.Namespaces = teamsFor(nsNames, inv.Namespaces), nsNames
+	f.Teams, f.Namespaces = teams.teamsFor(nsNames), nsNames
 	f.Objects, f.ObjectsOmitted = sortedObjects(u.Objects), u.ObjectsOmitted
 	if nsDetail == "" {
 		detail = fmt.Sprintf(detail+".", u.Count)

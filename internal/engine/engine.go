@@ -102,17 +102,27 @@ func namespaceBreakdown(counts map[string]int, emptyLabel string) (detail string
 	return detail, names
 }
 
-// teamsFor maps namespace names to teams via the inventory's namespace team
-// labels; result is deduped and sorted.
-func teamsFor(namespaces []string, nsInfo []inventory.NamespaceInfo) []string {
-	byName := make(map[string]string, len(nsInfo))
+// teamLookup maps namespace names to the team their label names, built
+// once per evaluation pass from the inventory's namespaces: a lookup that
+// rebuilt it per finding, Helm release or CRD cost their product with the
+// namespaces (#333).
+type teamLookup map[string]string
+
+func newTeamLookup(nsInfo []inventory.NamespaceInfo) teamLookup {
+	byName := make(teamLookup, len(nsInfo))
 	for _, n := range nsInfo {
 		byName[n.Name] = n.Team
 	}
+	return byName
+}
+
+// teamsFor maps namespace names to teams via the inventory's namespace team
+// labels; result is deduped and sorted.
+func (l teamLookup) teamsFor(namespaces []string) []string {
 	seen := map[string]bool{}
 	var teams []string
 	for _, ns := range namespaces {
-		if t := byName[ns]; t != "" && !seen[t] {
+		if t := l[ns]; t != "" && !seen[t] {
 			seen[t] = true
 			teams = append(teams, t)
 		}
@@ -148,6 +158,7 @@ func teamsFor(namespaces []string, nsInfo []inventory.NamespaceInfo) []string {
 //     ready. Other groups (CRDs, aggregated APIs) are never in the KB and
 //     produce nothing.
 func evalAPIUsage(inv inventory.Inventory, k kb.KB, target inventory.Version, b *budget) []Finding {
+	teams := newTeamLookup(inv.Namespaces)
 	idx := kb.NewIndex(k.APILifecycle)
 	builtin := map[string]bool{}
 	for _, e := range k.APILifecycle {
@@ -165,7 +176,7 @@ func evalAPIUsage(inv inventory.Inventory, k kb.KB, target inventory.Version, b 
 		listed := listedObjects(inv.Source, u)
 		nsDetail, nsNames := namespaceBreakdown(u.Namespaces, listed.emptyNamespace())
 		f := Finding{
-			Teams:          teamsFor(nsNames, inv.Namespaces),
+			Teams:          teams.teamsFor(nsNames),
 			Namespaces:     nsNames,
 			Citations:      []string{deprecationGuideURL},
 			Objects:        sortedObjects(u.Objects),
@@ -336,6 +347,7 @@ const authorshipUnknownKey = "authorship-unknown"
 // verdict nor score. An API the KB does not flag is skipped, whatever an
 // inventory says.
 func evalAuthorshipUnknown(inv inventory.Inventory, k kb.KB, b *budget) []Finding {
+	teams := newTeamLookup(inv.Namespaces)
 	idx := kb.NewIndex(k.APILifecycle)
 	var out []Finding
 	for _, u := range inv.APIAuthorshipUnknown {
@@ -349,7 +361,7 @@ func evalAuthorshipUnknown(inv inventory.Inventory, k kb.KB, b *budget) []Findin
 			Severity:       SevInfo,
 			Key:            string(CatDeprecatedAPI) + "/" + apiKey(u.Group, u.Version, u.Kind) + "/" + authorshipUnknownKey,
 			Title:          fmt.Sprintf("%s %s: authorship unknown (%s)", gv, u.Kind, pluralObjects(u.Count)),
-			Teams:          teamsFor(nsNames, inv.Namespaces),
+			Teams:          teams.teamsFor(nsNames),
 			Namespaces:     nsNames,
 			Citations:      []string{deprecationGuideURL},
 			Objects:        sortedObjects(u.Objects),
@@ -734,6 +746,7 @@ type addOnInstall struct {
 // the installs it is about; an ID absent from the registry produces
 // nothing.
 func evalAddOns(inv inventory.Inventory, k kb.KB, target inventory.Version, now time.Time) []Finding {
+	teams := newTeamLookup(inv.Namespaces)
 	byID := make(map[string]registry.AddOn, len(k.AddOns))
 	for _, a := range k.AddOns {
 		byID[a.ID] = a
@@ -757,7 +770,7 @@ func evalAddOns(inv inventory.Inventory, k kb.KB, target inventory.Version, now 
 		}
 		ns := slices.Sorted(slices.Values(inst.Namespaces))
 		installs[inst.ID] = append(installs[inst.ID], addOnInstall{
-			version: inst.Version, via: via, where: ns, teams: teamsFor(ns, inv.Namespaces),
+			version: inst.Version, via: via, where: ns, teams: teams.teamsFor(ns),
 		})
 	}
 	// An inventory from a collector that predates the stamp never took the
@@ -2064,6 +2077,7 @@ func helmReleaseRef(rel inventory.HelmRelease) string {
 //     the manifest's warning stays, so more evidence never lowers the
 //     severity.
 func evalHelmReleases(inv inventory.Inventory, k kb.KB, target inventory.Version, b *budget) []Finding {
+	teams := newTeamLookup(inv.Namespaces)
 	idx := kb.NewIndex(k.APILifecycle)
 	live := map[string][]inventory.ObjectRef{} // apiKey → live objects
 	for _, u := range inv.APIUsage {
@@ -2076,15 +2090,15 @@ func evalHelmReleases(inv inventory.Inventory, k kb.KB, target inventory.Version
 			continue
 		}
 		ns := []string{rel.Namespace}
-		teams := teamsFor(ns, inv.Namespaces)
+		relTeams := teams.teamsFor(ns)
 		if f, ok := evalChartKubeVersion(rel, target); ok {
-			f.Namespaces, f.Teams = ns, teams
+			f.Namespaces, f.Teams = ns, relTeams
 			if !b.add(&out, f) {
 				return out
 			}
 		}
 		for _, f := range evalHelmManifest(rel, idx, live, target, k.MaxKnownK8s) {
-			f.Namespaces, f.Teams = ns, teams
+			f.Namespaces, f.Teams = ns, relTeams
 			if !b.add(&out, f) {
 				return out
 			}
