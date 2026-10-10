@@ -18,6 +18,11 @@ const (
 	// resources that use one the CRD deprecates or does not serve.
 	// Inventories from collectors that predate it do not report it.
 	CapCRDs Capability = "crds"
+	// CapVolumes: the in-tree volume plugins pods, pod templates and
+	// PersistentVolume manifests name (Inventory.VolumePlugins, #351). It is
+	// optional, and inventories from collectors that predate it do not
+	// report it.
+	CapVolumes Capability = "volumes"
 )
 
 // SkippedNewerKB is the Skipped entry of api-usage, helm and addons that
@@ -203,6 +208,11 @@ type Inventory struct {
 	// snapshot was collected, not the cluster, so it is not part of a
 	// snapshot's identity: Canonical leaves it out, as it does the times.
 	AddOnEvidenceAgeSeconds int64 `json:"addOnEvidenceAgeSeconds,omitempty"`
+
+	// VolumePlugins are the in-tree volume plugins (kb.VolumePluginNames)
+	// the volumes capability found, one entry per plugin, sorted by Plugin;
+	// see VolumePluginUse.
+	VolumePlugins []VolumePluginUse `json:"volumePlugins,omitempty"`
 }
 
 // Canonical returns inv without what describes the collection and not the

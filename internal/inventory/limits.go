@@ -96,6 +96,9 @@ func (inv Inventory) ValidateLimits() error {
 		p := fmt.Sprintf("%d capabilities, over the %d this server takes", n, MaxCapabilities)
 		return &LimitError{Field: "capabilities", Problem: p, At: "capabilities", Limit: p}
 	}
+	if err := inv.validateVolumeLimits(); err != nil {
+		return err
+	}
 	var w stringWalker
 	return w.walk(reflect.ValueOf(inv), MaxStringBytes)
 }
@@ -173,6 +176,9 @@ func (inv *Inventory) CutFreeText() bool {
 	}
 	for i := range inv.CRDs {
 		refs(inv.CRDs[i].Usage)
+	}
+	for i := range inv.VolumePlugins { // the refs share the entry's array
+		refs([]APIUsage{{Objects: inv.VolumePlugins[i].Objects}})
 	}
 	return cut
 }

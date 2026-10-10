@@ -27,8 +27,8 @@ var goldenParams = map[string]struct{ target, now string }{
 	// naming the node; one with no node, or on a node not listed, is not
 	// paired.
 	"kube-proxy-node-skew": {"1.35", "2026-06-10T00:00:00Z"},
-	// Optional capabilities degraded, and no crds capability at all (a
-	// collector that predates it): gaps, none required.
+	// Optional capabilities degraded, and no crds or volumes capability at
+	// all (a collector that predates them): gaps, none required.
 	"degraded-capabilities": {"1.34", "2026-06-10T00:00:00Z"},
 	// verdict unknown: a required capability (api-usage) was not assessed.
 	"required-capability-missing": {"1.34", "2026-06-10T00:00:00Z"},
@@ -132,6 +132,18 @@ var goldenParams = map[string]struct{ target, now string }{
 	"support-aks-extended": {"1.35", "2026-12-15T00:00:00Z"},
 	"support-gke-warning":  {"1.35", "2026-12-15T00:00:00Z"},
 	"support-gke-extended": {"1.35", "2027-02-01T00:00:00Z"},
+	// #351 in-tree volume plugins, one manifest render at two targets. At
+	// 1.25: glusterfs (removed 1.26) is the warning one minor before; cephfs
+	// and gitRepo (removed later) and awsElasticBlockStore (CSI from 1.27)
+	// are info, and flexVolume (deprecated only) is info at any target. At
+	// 1.36: glusterfs, cephfs (1.31) and gitRepo (disabled 1.33) block, and
+	// awsElasticBlockStore warns naming ebs.csi.aws.com. A plugin the
+	// knowledge base does not list (photonPersistentDisk here) is not judged.
+	"volume-plugins-files-1.25": {"1.25", "2026-06-10T00:00:00Z"},
+	"volume-plugins-files-1.36": {"1.36", "2026-06-10T00:00:00Z"},
+	// Live pods by namespace, with teams: gitRepo warns at 1.32, the minor
+	// before it is disabled; glusterfs blocks; awsElasticBlockStore warns.
+	"volume-plugins-live": {"1.32", "2026-06-10T00:00:00Z"},
 }
 
 // canonical re-marshals JSON with sorted keys + fixed indent so byte

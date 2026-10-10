@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="upgradescope" tests="8" failures="0" errors="0" time="0">
+  <testsuite name="volume-plugin" tests="5" failures="0" errors="0" skipped="0" time="0">
+    <testcase name="volume-plugin/glusterfs" classname="upgradescope.volume-plugin" time="0">
+      <system-out>warning: In-tree volume plugin glusterfs removed in 1.26 (1 object).&#xA;1 object names it, in: shop (1). From 1.26 a pod that names it does not start.&#xA;Objects:&#xA;- shop/web (f.yaml:1)&#xA;Fix: migrate the volumes to another storage solution before the upgrade; there is no CSI migration for GlusterFS.&#xA;References:&#xA;- https://github.com/kubernetes/kubernetes/blob/master/CHANGELOG/CHANGELOG-1.26.md&#xA;- https://github.com/kubernetes/kubernetes/pull/112015&#xA;- https://github.com/kubernetes/kubernetes/pull/111485</system-out>
+    </testcase>
+    <testcase name="volume-plugin/awsElasticBlockStore" classname="upgradescope.volume-plugin" time="0">
+      <system-out>info: In-tree volume plugin awsElasticBlockStore needs CSI driver ebs.csi.aws.com from 1.27 (1 object).&#xA;1 object names it, in: shop (1). From 1.27 the ebs.csi.aws.com CSI driver serves every operation on these volumes: a cluster without it installed cannot mount them, one with it is fine.&#xA;Objects:&#xA;- shop/web (f.yaml:1)&#xA;Fix: install the ebs.csi.aws.com CSI driver (aws-ebs-csi-driver) before the upgrade.&#xA;References:&#xA;- https://github.com/kubernetes/kubernetes/blob/master/CHANGELOG/CHANGELOG-1.27.md&#xA;- https://github.com/kubernetes/kubernetes/pull/115838</system-out>
+    </testcase>
+    <testcase name="volume-plugin/cephfs" classname="upgradescope.volume-plugin" time="0">
+      <system-out>info: In-tree volume plugin cephfs deprecated since 1.28, removed in 1.31 (1 object).&#xA;1 object names it, in: namespace unset (1). From 1.31 a pod that names it does not start.&#xA;Objects:&#xA;- data (f.yaml:29)&#xA;Fix: redeploy the workload on a volume of the CephFS CSI driver (ceph-csi); there is no CSI migration for cephfs.&#xA;References:&#xA;- https://github.com/kubernetes/kubernetes/blob/master/CHANGELOG/CHANGELOG-1.31.md&#xA;- https://github.com/kubernetes/kubernetes/pull/124544&#xA;- https://github.com/kubernetes/kubernetes/pull/118143</system-out>
+    </testcase>
+    <testcase name="volume-plugin/flexVolume" classname="upgradescope.volume-plugin" time="0">
+      <system-out>info: In-tree volume plugin flexVolume deprecated since 1.23 (1 object).&#xA;1 object names it, in: namespace unset (1). It still works; upstream has not scheduled its removal.&#xA;Objects:&#xA;- flex (pv/flex.yaml:1)&#xA;Fix: move to a CSI driver for the same storage.&#xA;References:&#xA;- https://github.com/kubernetes/kubernetes/blob/master/CHANGELOG/CHANGELOG-1.23.md&#xA;- https://kubernetes.io/docs/concepts/storage/volumes/#flexvolume</system-out>
+    </testcase>
+    <testcase name="volume-plugin/gitRepo" classname="upgradescope.volume-plugin" time="0">
+      <system-out>info: In-tree volume plugin gitRepo deprecated since 1.11, removed in 1.33 (2 objects).&#xA;2 objects name it, in: namespace unset (1), shop (1). From 1.33 a pod that names it does not start. Upstream: disabled by default in 1.33, where the GitRepoVolumeDriver feature gate can still turn it back on, and locked off in 1.36.&#xA;Objects:&#xA;- shop/web (f.yaml:1)&#xA;- sync (f.yaml:16)&#xA;Fix: clone the repository into an emptyDir volume from an init container, and mount that emptyDir.&#xA;References:&#xA;- https://github.com/kubernetes/kubernetes/blob/master/CHANGELOG/CHANGELOG-1.33.md&#xA;- https://github.com/kubernetes/kubernetes/pull/129923&#xA;- https://github.com/kubernetes/kubernetes/pull/136400&#xA;- https://github.com/kubernetes/kubernetes/pull/63445</system-out>
+    </testcase>
+  </testsuite>
+  <testsuite name="not-assessed" tests="3" failures="0" errors="0" skipped="3" time="0">
+    <testcase name="deprecated-calls" classname="upgradescope.not-assessed" time="0">
+      <skipped message="not assessed: deprecated-calls: files mode"></skipped>
+    </testcase>
+    <testcase name="helm" classname="upgradescope.not-assessed" time="0">
+      <skipped message="not assessed: helm: files mode"></skipped>
+    </testcase>
+    <testcase name="versions" classname="upgradescope.not-assessed" time="0">
+      <skipped message="not assessed: versions: files mode"></skipped>
+    </testcase>
+  </testsuite>
+</testsuites>

@@ -88,9 +88,10 @@ func TestCollectNarrowRoleIsNeverReady(t *testing.T) {
 		got = append(got, gap{g.Capability, g.Partial, g.Required})
 	}
 	want := []gap{
-		{inventory.CapAddOns, true, true},   // pods denied: add-ons judged from Helm releases and IngressClasses only
-		{inventory.CapAPIUsage, true, true}, // ingresses denied: a removed API went unchecked
-		{inventory.CapHelm, false, false},   // Secrets denied
+		{inventory.CapAddOns, true, true},    // pods denied: add-ons judged from Helm releases and IngressClasses only
+		{inventory.CapAPIUsage, true, true},  // ingresses denied: a removed API went unchecked
+		{inventory.CapHelm, false, false},    // Secrets denied
+		{inventory.CapVolumes, false, false}, // pods denied: in-tree volume plugins not checked (optional)
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("narrow role gaps = %+v\nwant                %+v\n(%+v)", got, want, rep.NotAssessed)

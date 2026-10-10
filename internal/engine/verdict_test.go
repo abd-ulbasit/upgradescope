@@ -19,6 +19,7 @@ func allCaps() map[inventory.Capability]inventory.CapabilityStatus {
 		inventory.CapAddOns:          {Available: true},
 		inventory.CapVersions:        {Available: true},
 		inventory.CapCRDs:            {Available: true},
+		inventory.CapVolumes:         {Available: true},
 	}
 }
 
@@ -42,6 +43,7 @@ func filesInv() inventory.Inventory {
 			inventory.CapAddOns:          {Available: false, Reason: reason},
 			inventory.CapVersions:        {Available: false, Reason: reason},
 			inventory.CapCRDs:            {Available: true},
+			inventory.CapVolumes:         {Available: true},
 		},
 	}
 }
@@ -425,7 +427,9 @@ func TestEvaluateUnreportedRequiredCapabilities(t *testing.T) {
 		return CapabilityGap{Capability: c, Required: true,
 			Reason: "not reported in the inventory, so nothing it covers was assessed"}
 	}
-	all := []CapabilityGap{unreported(inventory.CapAddOns), unreported(inventory.CapAPIUsage), crds, unreported(inventory.CapVersions)}
+	// volumes, like crds, is optional and newer than these collectors.
+	vols := CapabilityGap{Capability: inventory.CapVolumes, Reason: volumesNotReported}
+	all := []CapabilityGap{unreported(inventory.CapAddOns), unreported(inventory.CapAPIUsage), crds, unreported(inventory.CapVersions), vols}
 	with := func(caps map[inventory.Capability]inventory.CapabilityStatus, source inventory.Source) inventory.Inventory {
 		return inventory.Inventory{Source: source, ServerVersion: "v1.34.2", Capabilities: caps}
 	}
@@ -450,7 +454,7 @@ func TestEvaluateUnreportedRequiredCapabilities(t *testing.T) {
 		{"empty capabilities map", with(map[inventory.Capability]inventory.CapabilityStatus{}, inventory.SourceCluster), withRegistry, VerdictUnknown, all},
 		{"empty source is a cluster", with(nil, ""), withRegistry, VerdictUnknown, all},
 		{"addons not required with an empty registry", with(nil, inventory.SourceCluster), testKB(), VerdictUnknown,
-			[]CapabilityGap{unreported(inventory.CapAPIUsage), crds, unreported(inventory.CapVersions)}},
+			[]CapabilityGap{unreported(inventory.CapAPIUsage), crds, unreported(inventory.CapVersions), vols}},
 		{"api-usage alone unreported", without(inventory.CapAPIUsage), withRegistry, VerdictUnknown,
 			[]CapabilityGap{unreported(inventory.CapAPIUsage)}},
 		{"versions alone unreported", without(inventory.CapVersions), withRegistry, VerdictUnknown,
@@ -460,10 +464,10 @@ func TestEvaluateUnreportedRequiredCapabilities(t *testing.T) {
 		// Files collectors since v0.1.0 report api-usage, which a files
 		// inventory is judged on as well; it needs no versions or add-ons.
 		{"files mode requires api-usage", with(nil, inventory.SourceFiles), withRegistry, VerdictUnknown,
-			[]CapabilityGap{unreported(inventory.CapAPIUsage), crds}},
+			[]CapabilityGap{unreported(inventory.CapAPIUsage), crds, vols}},
 		{"files mode reporting api-usage is judged as before",
 			with(map[inventory.Capability]inventory.CapabilityStatus{inventory.CapAPIUsage: {Available: true}}, inventory.SourceFiles),
-			withRegistry, VerdictReady, []CapabilityGap{crds}},
+			withRegistry, VerdictReady, []CapabilityGap{crds, vols}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

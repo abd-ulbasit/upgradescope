@@ -33,6 +33,7 @@ import (
 // CRDs flag), so it is not judged.
 func mergeManifests(proposed *inventory.Inventory, manifests inventory.Inventory) inventory.Inventory {
 	proposed.AddOns = upsertAddOns(proposed.AddOns, manifests.AddOns)
+	proposed.VolumePlugins = mergeVolumePlugins(proposed.VolumePlugins, manifests.VolumePlugins)
 	proposed.Capabilities = maps.Clone(proposed.Capabilities)
 
 	type groupKind struct{ group, kind string }

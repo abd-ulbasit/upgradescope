@@ -53,6 +53,7 @@ func collectedCaps() map[inventory.Capability]inventory.CapabilityStatus {
 		inventory.CapAddOns:          {Available: true},
 		inventory.CapVersions:        {Available: true},
 		inventory.CapCRDs:            {Available: true},
+		inventory.CapVolumes:         {Available: true},
 	}
 }
 
@@ -341,7 +342,7 @@ func TestIngestDuplicateCanonicalHash(t *testing.T) {
 	  "agentVersion": "v0.2.0-test",
 	  "kbVersion": "agent-kb",
 	  "inventory": {
-	    "capabilities": {"crds": {"available": true}, "versions": {"available": true}, "addons": {"available": true},
+	    "capabilities": {"crds": {"available": true}, "volumes": {"available": true}, "versions": {"available": true}, "addons": {"available": true},
 	      "helm": {"available": true}, "deprecated-calls": {"available": true}, "api-usage": {"available": true}},
 	    "serverVersion": "v1.34.2",
 	    "collectedAt": "2026-06-10T11:00:00Z",

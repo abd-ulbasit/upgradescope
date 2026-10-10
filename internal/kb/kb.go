@@ -39,6 +39,9 @@ type KB struct {
 	// (engine.HopTargets). Upstream has none, since the control plane is
 	// upgraded one minor at a time, and Load adds none.
 	UpgradeSteps []UpgradeStep
+	// VolumePlugins are the in-tree volume plugins that stop working, or
+	// need a CSI driver, at a minor (data/volumeplugins.json, #351).
+	VolumePlugins []VolumePlugin
 }
 
 // UpgradeStep is one control-plane upgrade from From straight to To,
@@ -115,6 +118,7 @@ func loadWith(lifecycle, migrations []byte, extra string) (KB, error) {
 		Providers:     providers,
 		Skew:          DefaultSkewPolicy(),
 		MaxKnownK8s:   maxKnown,
+		VolumePlugins: VolumePlugins(),
 	}, nil
 }
 

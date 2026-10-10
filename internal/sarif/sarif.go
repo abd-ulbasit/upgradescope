@@ -168,6 +168,8 @@ var categoryText = map[engine.Category][2]string{
 		"The cluster's Kubernetes minor is leaving, or has left, its managed provider's standard support."},
 	engine.CatCRDVersion: {"CustomResourceDefinition version",
 		"The custom resource uses a version its CRD does not serve (the apiserver rejects it) or deprecates (an add-on upgrade may stop serving it)."},
+	engine.CatVolumePlugin: {"In-tree volume plugin",
+		"The workload or PersistentVolume names an in-tree volume plugin the target Kubernetes version removed (pods naming it do not start), serves only through a CSI driver that must be installed, or deprecates."},
 }
 
 // Unanchored counts the findings Write leaves out because none of their
