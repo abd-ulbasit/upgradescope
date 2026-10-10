@@ -75,13 +75,6 @@ type helmCacheEntry struct {
 // of it. Its errors are text, reported as they always were, and a release
 // that fails to decode or parse still yields an entry.
 func decodeHelmEntry(data []byte, flagged map[gvk]bool) helmCacheEntry {
-	return decodeHelmEntryWith(data, flagged, false)
-}
-
-// decodeHelmEntryWith is decodeHelmEntry, optionally with every manifest
-// document parsed twice, as before #285: the reference the tests hold the
-// single parse to.
-func decodeHelmEntryWith(data []byte, flagged map[gvk]bool, reparse bool) helmCacheEntry {
 	doc, err := decodeHelmRelease(data)
 	if err != nil {
 		return helmCacheEntry{decodeErr: err.Error()}
@@ -97,7 +90,7 @@ func decodeHelmEntryWith(data []byte, flagged map[gvk]bool, reparse bool) helmCa
 			return helmCacheEntry{decodeErr: fmt.Sprintf("chart metadata has a value over %d bytes, which is not recorded", inventory.MaxStringBytes)}
 		}
 	}
-	apis, err := manifestAPIsWith(doc.Manifest, flagged, reparse)
+	apis, err := manifestAPIs(doc.Manifest, flagged)
 	e := helmCacheEntry{
 		chartName: doc.Chart.Metadata.Name, chartVersion: doc.Chart.Metadata.Version,
 		appVersion: doc.Chart.Metadata.AppVersion, kubeVersion: doc.Chart.Metadata.KubeVersion,

@@ -187,7 +187,7 @@ func TestDecoded_KubectlDecoderWins(t *testing.T) {
 		t.Fatal(err)
 	}
 	p := &streamParser{}
-	p.decoded(walked.Content[0], nil, text, 7, false, "chart/templates/ing.yaml")
+	p.decoded(walked.Content[0], nil, text, 7, false, "chart/templates/ing.yaml", false)
 	want := []manifestObject{{group: "extensions", version: "v1beta1", kind: "Ingress",
 		ref: inventory.ObjectRef{Name: "old", Namespace: "shop", Line: 7, RenderedFrom: "chart/templates/ing.yaml"}}}
 	if !reflect.DeepEqual(p.objs, want) {

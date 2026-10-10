@@ -15,14 +15,42 @@ import (
 	"testing"
 	"time"
 
+	"github.com/abd-ulbasit/upgradescope/internal/inventory"
 	"github.com/abd-ulbasit/upgradescope/internal/kb"
 )
 
 // These tests hold a manifest document parsed once (#285: the walk's tree
 // is reused for kubectl's decoder) to the same document parsed twice, as it
-// was before: the reference is parseManifestStreamWith / manifestAPIsWith /
-// decodeHelmEntryWith with reparse set, which runs kubectl's decoder on the
-// text of every document. Whatever the findings are, they must not change.
+// was before: the reference is the same code run with reparseDocuments set
+// (see reparsing), which runs kubectl's decoder on the text of every
+// document. Whatever the findings are, they must not change.
+
+// reparsing runs f with reparseDocuments set to reparse, then restores it.
+// Nothing in this package's tests runs in parallel, so the variable is safe.
+func reparsing[T any](reparse bool, f func() T) T {
+	old := reparseDocuments
+	reparseDocuments = reparse
+	defer func() { reparseDocuments = old }()
+	return f()
+}
+
+// manifestAPIsOf is manifestAPIs, parsed once or (reparse) twice.
+func manifestAPIsOf(manifest string, flagged map[gvk]bool, reparse bool) ([]inventory.APIUsage, error) {
+	type result struct {
+		rows []inventory.APIUsage
+		err  error
+	}
+	r := reparsing(reparse, func() result {
+		rows, err := manifestAPIs(manifest, flagged)
+		return result{rows, err}
+	})
+	return r.rows, r.err
+}
+
+// decodeHelmEntryOf is decodeHelmEntry, parsed once or (reparse) twice.
+func decodeHelmEntryOf(data []byte, flagged map[gvk]bool, reparse bool) helmCacheEntry {
+	return reparsing(reparse, func() helmCacheEntry { return decodeHelmEntry(data, flagged) })
+}
 
 // streamSnapshot is everything parseManifestStream returns, with its errors
 // as text so two runs compare.
@@ -41,7 +69,17 @@ type badSnapshot struct {
 
 func snapshotStream(t testing.TB, text string, reparse bool) streamSnapshot {
 	t.Helper()
-	objs, ev, bad, err := parseManifestStreamWith(strings.NewReader(text), reparse)
+	type result struct {
+		objs []manifestObject
+		ev   addOnEvidence
+		bad  []docError
+		err  error
+	}
+	r := reparsing(reparse, func() result {
+		objs, ev, bad, err := parseManifestStream(strings.NewReader(text))
+		return result{objs, ev, bad, err}
+	})
+	objs, ev, bad, err := r.objs, r.ev, r.bad, r.err
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -141,8 +179,7 @@ func flaggedAll(t testing.TB, texts ...string) map[gvk]bool {
 		}
 	}
 	for _, text := range texts {
-		objs, _, _, _ := parseManifestStreamWith(strings.NewReader(text), true)
-		for _, o := range objs {
+		for _, o := range snapshotStream(t, text, true).Objs {
 			flagged[gvk{o.group, o.version, o.kind}] = true
 		}
 	}
@@ -151,8 +188,8 @@ func flaggedAll(t testing.TB, texts ...string) map[gvk]bool {
 
 func requireSameAPIs(t testing.TB, name, manifest string, flagged map[gvk]bool) {
 	t.Helper()
-	onceRows, onceErr := manifestAPIsWith(manifest, flagged, false)
-	twiceRows, twiceErr := manifestAPIsWith(manifest, flagged, true)
+	onceRows, onceErr := manifestAPIsOf(manifest, flagged, false)
+	twiceRows, twiceErr := manifestAPIsOf(manifest, flagged, true)
 	if !reflect.DeepEqual(onceRows, twiceRows) || fmt.Sprint(onceErr) != fmt.Sprint(twiceErr) {
 		t.Fatalf("%s: the findings differ between one parse and two\n once  %+v (%v)\n twice %+v (%v)\nfor:\n%.2000s", name, onceRows, onceErr, twiceRows, twiceErr, manifest)
 	}
@@ -196,7 +233,7 @@ func TestParseOnce_ReleasesHaveTheSameFindings(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			requireSameAPIs(t, tc.name, tc.manifest, flagged)
-			rows, _ := manifestAPIsWith(tc.manifest, flagged, false)
+			rows, _ := manifestAPIsOf(tc.manifest, flagged, false)
 			if tc.want == nil {
 				return
 			}
@@ -254,7 +291,7 @@ func TestParseOnce_BoundsAreUnchanged(t *testing.T) {
 		"over the nodes": manifestOf(helmDocs[1], nodes, helmDocs[1]),
 	} {
 		requireSameAPIs(t, name, m, flagged)
-		rows, err := manifestAPIsWith(m, flagged, false)
+		rows, err := manifestAPIsOf(m, flagged, false)
 		if err == nil || len(rows) != 1 || rows[0].Count != 2 {
 			t.Errorf("%s: rows %+v, err %v; want the two Ingresses and the error", name, rows, err)
 		}
@@ -265,7 +302,7 @@ func TestParseOnce_BoundsAreUnchanged(t *testing.T) {
 // converter made JSON of, and how many it left to kubectl's decoder.
 func answerRate(streams ...string) (answered, declined int) {
 	for _, text := range streams {
-		p := readStream([]byte(text), false)
+		p := readStream([]byte(text))
 		answered += p.toJSON.answered
 		declined += p.toJSON.declined
 	}
@@ -307,7 +344,7 @@ func TestParseOnce_PayloadsDecodeToTheSameEntries(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s/%s: %v", p[0], p[1], err)
 		}
-		once, twice := decodeHelmEntryWith(b, flagged, false), decodeHelmEntryWith(b, flagged, true)
+		once, twice := decodeHelmEntryOf(b, flagged, false), decodeHelmEntryOf(b, flagged, true)
 		if !reflect.DeepEqual(once, twice) {
 			t.Fatalf("%s/%s: entries differ\n once  %+v\n twice %+v", p[0], p[1], once, twice)
 		}
@@ -338,9 +375,12 @@ const parseCPUReps = 3
 // parseCPU is the mean CPU one reading of data takes, as a whole stream.
 func parseCPU(data []byte, reparse bool) time.Duration {
 	before := processCPU()
-	for range parseCPUReps {
-		readStream(data, reparse)
-	}
+	reparsing(reparse, func() struct{} {
+		for range parseCPUReps {
+			readStream(data)
+		}
+		return struct{}{}
+	})
 	return (processCPU() - before) / parseCPUReps
 }
 
@@ -368,4 +408,173 @@ func TestParseOnce_FilesMatchTwoParses(t *testing.T) {
 		onceTotal, twiceTotal = onceTotal+once, twiceTotal+twice
 	}
 	t.Logf("in all: %d documents answered, %d left to kubectl's decoder; CPU to parse them %v once, %v twice (the mean of %d runs each)", answered, declined, onceTotal.Round(time.Millisecond), twiceTotal.Round(time.Millisecond), parseCPUReps)
+}
+
+// The shortcut is wired in: a stream of the documents Helm renders is
+// answered from the walk's tree, none left to kubectl's decoder, and with
+// the reference path it is not used. (Without this a refactor could drop
+// the saving and every equivalence test above would still pass, as they
+// pass for a stream parsed twice.)
+func TestParseOnce_ShortcutIsWired(t *testing.T) {
+	for _, i := range []int{0, 1, 2, 3, 4, 8} {
+		text := helmDocs[i]
+		p := readStream([]byte(text))
+		if p.toJSON.answered != 1 || p.toJSON.declined != 0 {
+			t.Errorf("document %d: answered %d, left %d to kubectl's decoder; want 1 and 0", i, p.toJSON.answered, p.toJSON.declined)
+		}
+		ref := reparsing(true, func() *streamParser { return readStream([]byte(text)) })
+		if ref.toJSON.answered != 0 || ref.toJSON.declined != 0 {
+			t.Errorf("document %d: the reference path used the shortcut (answered %d, declined %d)", i, ref.toJSON.answered, ref.toJSON.declined)
+		}
+	}
+	// A whole manifest of them, as a release stores it.
+	a, d := answerRate(manifestOf(helmDocs[0], helmDocs[1], helmDocs[2], helmDocs[3], helmDocs[4], helmDocs[8]))
+	if a != 6 || d != 0 {
+		t.Errorf("a manifest of six rendered documents: answered %d, left %d; want 6 and 0", a, d)
+	}
+}
+
+// numberDenseStream is a stream of about size bytes whose documents are
+// full of distinct plain scalars that start like numbers (decimals, dotted
+// versions, hex and underscored integers, exponents), the worst case for a
+// converter that has to type each one: the cost #285's review measured as
+// 1.5 to 2.6 times the old path when each was put to kubectl's decoder.
+func numberDenseStream(size int) []byte {
+	var b strings.Builder
+	n := 0
+	for b.Len() < size {
+		b.WriteString("apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: dense\ndata:\n")
+		for range 300 {
+			n++
+			switch n % 6 {
+			case 0:
+				fmt.Fprintf(&b, "  k%d: %d.%d\n", n, n%97, n)
+			case 1:
+				fmt.Fprintf(&b, "  k%d: %d.%d.%d\n", n, n%9, n%97, n)
+			case 2:
+				fmt.Fprintf(&b, "  k%d: 0x%X\n", n, n)
+			case 3:
+				fmt.Fprintf(&b, "  k%d: %d_%03d\n", n, n, n%1000)
+			case 4:
+				fmt.Fprintf(&b, "  k%d: %de3\n", n, n)
+			default:
+				fmt.Fprintf(&b, "  k%d: -0.%d\n", n, n)
+			}
+		}
+		b.WriteString("---\n")
+	}
+	return []byte(b.String())
+}
+
+// A stream dense in distinct number-like scalars costs less parsed once than
+// twice, and none of it is left to kubectl's decoder. CPU time is noisy on a
+// loaded machine, so the bar is generous: the saving measured is about half.
+func TestParseOnce_NumberDenseStreamIsNotSlower(t *testing.T) {
+	if testing.Short() || processCPU() == 0 {
+		t.Skip("a CPU timing test")
+	}
+	data := numberDenseStream(256 << 10)
+	if a, d := answerRate(string(data)); a == 0 || d != 0 {
+		t.Fatalf("the number-dense stream: answered %d, left %d to kubectl's decoder; want all answered", a, d)
+	}
+	var once, twice time.Duration
+	for range 3 { // alternated, so a change in load hits both
+		once += parseCPU(data, false)
+		twice += parseCPU(data, true)
+	}
+	t.Logf("number-dense stream, %d KiB: CPU %v parsed once, %v twice (sums of 3 alternating means)", len(data)>>10, once.Round(time.Millisecond), twice.Round(time.Millisecond))
+	if once*10 > twice*8 {
+		t.Errorf("parsed once took %v, parsed twice %v: not under 0.8 of it", once, twice)
+	}
+}
+
+// numberDocs builds a manifest of at least size bytes whose documents are
+// each doc(n) for a counter n, so that the scalars differ from document to
+// document, as they do in real releases.
+func numberDocs(size int, doc func(n int) string) string {
+	var docs []string
+	total := 0
+	for n := 0; total < size; n++ {
+		d := doc(n)
+		docs = append(docs, d)
+		total += len(d) + 4
+	}
+	return manifestOf(docs...)
+}
+
+// ingressWith is an old Ingress whose spec holds the scalars that count
+// yields, one per line: the documents of the worst-case measurement below.
+func ingressWith(n, count int, scalar func(n, i int) string) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "apiVersion: extensions/v1beta1\nkind: Ingress\nmetadata:\n  name: dense%d\nspec:\n  extra:\n", n)
+	for i := range count {
+		fmt.Fprintf(&b, "    k%d: %s\n", i, scalar(n, i))
+	}
+	return b.String()
+}
+
+// With UPGRADESCOPE_PARSE_ONCE_WORST set, the CPU of one 1 MiB manifest
+// (through manifestAPIs, as a Helm release's is) parsed once and parsed
+// twice, for manifests dense in distinct scalars that start like numbers
+// (#285's review): the worst cases of the shortcut, the figures of the
+// scale guide. The two are alternated, three runs each.
+func TestParseOnce_WorstCaseCost(t *testing.T) {
+	if os.Getenv("UPGRADESCOPE_PARSE_ONCE_WORST") == "" {
+		t.Skip("diagnostic: set UPGRADESCOPE_PARSE_ONCE_WORST=1 (CPU figures for scale.md)")
+	}
+	float := func(n, i int) string { return fmt.Sprintf("%d.%d", n%1000+1, i+1) }
+	version := func(n, i int) string { return fmt.Sprintf("%d.%d.%d", n%9+1, i+1, n) }
+	exotic := func(n, i int) string {
+		switch i % 4 {
+		case 0:
+			return fmt.Sprintf("0x%X", n*1000+i)
+		case 1:
+			return fmt.Sprintf("%d_%03d", n+1, i)
+		case 2:
+			return fmt.Sprintf("%de3", n*1000+i)
+		}
+		return fmt.Sprintf("-0.%d%d", n, i)
+	}
+	// deployment is a rendered Deployment (helmDocs[0]) with count dotted
+	// versions among its annotations.
+	deployment := func(count int) func(int) string {
+		return func(n int) string {
+			var b strings.Builder
+			b.WriteString("  annotations:\n")
+			for i := range count {
+				fmt.Fprintf(&b, "    v%d: %s\n", i, version(n, i))
+			}
+			doc := strings.Replace(helmDocs[0], "spec:\n  replicas: 3", b.String()+"spec:\n  replicas: 3", 1)
+			return strings.Replace(doc, "name: web\n  namespace", fmt.Sprintf("name: web%d\n  namespace", n), 1)
+		}
+	}
+	for _, tc := range []struct {
+		name string
+		doc  func(n int) string
+	}{
+		{"300 distinct floats per document", func(n int) string { return ingressWith(n, 300, float) }},
+		{"250 distinct floats per document", func(n int) string { return ingressWith(n, 250, float) }},
+		{"16 distinct floats per document", func(n int) string { return ingressWith(n, 16, float) }},
+		{"300 distinct dotted versions per document", func(n int) string { return ingressWith(n, 300, version) }},
+		{"300 hex, underscored, exponent and negative scalars per document", func(n int) string { return ingressWith(n, 300, exotic) }},
+		{"a Deployment and 0 distinct dotted versions", deployment(0)},
+		{"a Deployment and 16 distinct dotted versions", deployment(16)},
+		{"a Deployment and 64 distinct dotted versions", deployment(64)},
+	} {
+		manifest := numberDocs(1<<20, tc.doc)
+		flagged := flaggedAll(t, manifest)
+		requireSameAPIs(t, tc.name, manifest, flagged)
+		var once, twice time.Duration
+		const reps = 3
+		for range reps {
+			start := processCPU()
+			manifestAPIsOf(manifest, flagged, false)
+			once += processCPU() - start
+			start = processCPU()
+			manifestAPIsOf(manifest, flagged, true)
+			twice += processCPU() - start
+		}
+		a, d := answerRate(manifest)
+		t.Logf("%-70s %4d KiB: CPU %4d ms once, %4d ms twice (mean of %d); %d documents answered, %d left", tc.name, len(manifest)>>10, (once / reps).Milliseconds(), (twice / reps).Milliseconds(), reps, a, d)
+	}
 }

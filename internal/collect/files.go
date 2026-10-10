@@ -111,25 +111,23 @@ const jsonPeek = 4096
 // it is still counted, although kubectl drops it with the rest). err is
 // only ever a read error from r.
 func parseManifestStream(r io.Reader) (objs []manifestObject, ev addOnEvidence, bad []docError, err error) {
-	return parseManifestStreamWith(r, false)
-}
-
-// parseManifestStreamWith is parseManifestStream, optionally with kubectl's
-// decoder run on every document's text, as it was before a document was
-// parsed once (#285): the reference the tests compare the shortcut with.
-func parseManifestStreamWith(r io.Reader, reparse bool) (objs []manifestObject, ev addOnEvidence, bad []docError, err error) {
 	data, err := io.ReadAll(r)
 	if err != nil {
 		return nil, addOnEvidence{}, nil, err
 	}
-	p := readStream(data, reparse)
+	p := readStream(data)
 	return p.objs, p.ev, p.bad, nil
 }
 
+// reparseDocuments is set by tests only: kubectl's decoder then reads every
+// document's text itself, as it did before a document was parsed once
+// (#285), which is the reference the tests hold the single parse to.
+var reparseDocuments = false
+
 // readStream decodes one stream (see parseManifestStream) and returns the
 // parser that holds what it found.
-func readStream(data []byte, reparse bool) *streamParser {
-	p := &streamParser{data: data, reparse: reparse}
+func readStream(data []byte) *streamParser {
+	p := &streamParser{data: data, reparse: reparseDocuments}
 	yamlFrom := 0
 	if utilyaml.IsJSONBuffer(data[:min(len(data), jsonPeek)]) {
 		yamlFrom = p.jsonStream()
@@ -149,9 +147,10 @@ type streamParser struct {
 	objs              []manifestObject
 	ev                addOnEvidence
 	bad               []docError
-	// reparse makes kubectl's decoder read every document's text itself
-	// (see kubectlFor); unset, it is given the JSON made of the tree the
-	// walk has already read, where that is certain to be the same.
+	// reparse (reparseDocuments, for tests) makes kubectl's decoder read
+	// every document's text itself (see kubectlFor); unset, it is given
+	// the JSON made of the tree the walk has already read, where that is
+	// certain to be the same.
 	reparse bool
 	toJSON  treeJSONConverter
 }
@@ -304,7 +303,7 @@ func (p *streamParser) document(start, end int, isJSON bool) {
 			root = n.Content[0]
 			last = lastLine(root)
 		}
-		p.decodedFrom(root, err, text, first, isJSON, renderedFrom, true)
+		p.decoded(root, err, text, first, isJSON, renderedFrom, true)
 		if err != nil {
 			return
 		}
@@ -328,14 +327,11 @@ func (p *streamParser) document(start, end int, isJSON bool) {
 //   - When the walk refuses the document (an unrendered template, items
 //     through an alias), or neither can read it, it is not assessed; what
 //     kubectl's decoder found in it is named with its text.
-func (p *streamParser) decoded(root *yaml.Node, yerr error, text []byte, first int, isJSON bool, renderedFrom string) {
-	p.decodedFrom(root, yerr, text, first, isJSON, renderedFrom, false)
-}
-
-// decodedFrom is decoded; sameDocument says root is the first node of text
-// itself, so kubectl's decoder can be given the JSON made of root rather
-// than parse text again (see kubectlFor).
-func (p *streamParser) decodedFrom(root *yaml.Node, yerr error, text []byte, first int, isJSON bool, renderedFrom string, sameDocument bool) {
+//
+// sameDocument says root is the first node of text itself, so kubectl's
+// decoder can be given the JSON made of root rather than parse text again
+// (see kubectlFor).
+func (p *streamParser) decoded(root *yaml.Node, yerr error, text []byte, first int, isJSON bool, renderedFrom string, sameDocument bool) {
 	var kubectl []manifestObject
 	var kerr error
 	if sameDocument {
