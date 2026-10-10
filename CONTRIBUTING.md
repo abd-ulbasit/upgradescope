@@ -89,10 +89,12 @@ hack/                  the scripts behind every CI job (see "What CI runs"), plu
 ```sh
 make test                              # what CI's test job runs: gofmt, go vet and
                                        # go test -race -count=1, tools/ modules included
+                                       # (CI runs it as two shards: make test TEST_SHARD=1/2)
 make test-heap                         # CI's test-heap job: the heap-bound tests, which
                                        # skip under -race and in a plain go test ./...
                                        # (UPGRADESCOPE_HEAP=1 runs them), run without
-                                       # -race (~12 min)
+                                       # -race (~12 min; CI runs four shards: make test-heap
+                                       # TEST_HEAP_SHARD=1/4)
 go test -race ./internal/agent/...     # while iterating: just the packages you touched
 ```
 
@@ -205,22 +207,53 @@ kubectl and kubeconform are also checked against their upstream sha256
 
 | Job | Runs on | Reproduce with | What it checks |
 |---|---|---|---|
-| `test` | PR, push | `make test check-toolchain hack-test` | gofmt, `go vet`, `go test -race -count=1` for the main and `tools/` modules; the Dockerfile's golang tag equals `go.mod`'s `go` directive and GoReleaser is one pinned version; offline self-tests of the `hack/` scripts, and that no tag run can share a concurrency group with main or another tag |
-| `test-heap` | PR, push | `make test-heap` | the heap-bound tests, without the race detector (under it they skip or shrink, so `make test` never runs them in full): every test that reads `raceEnabled`, found by `hack/test-heap.sh`, which sets `UPGRADESCOPE_HEAP=1` (without it a plain `go test` skips the server's, which take ~10 min, and the Helm manifest test, whose reading a busy machine inflates) and fails on a skip. These are the proofs of the server's and the Helm collector's memory bounds that `docs/claims.md` and the operations guide cite |
+| `test` (2 shards) | PRs touching code or the docs its tests read, push | `make test` (`TEST_SHARD=1/2`, `2/2` for one shard) | gofmt, `go vet`, `go test -race -count=1` for the main and `tools/` modules, each package in exactly one of the two shards (`hack/test.sh --shard`, balanced by `hack/test-durations.txt`). A PR that changes docs, Markdown or `mkdocs.yml` and no code runs only the packages whose tests read them (`TEST_SCOPE=docs`: `hack/test-docs-readers.txt`) |
+| `repo-checks` | every PR, push | `make check-toolchain hack-test claims-check` | the Dockerfile's golang tag equals `go.mod`'s `go` directive and GoReleaser is one pinned version; offline self-tests of the `hack/` scripts (the path gates, `ci-ok`, the shards, that no tag run can share a concurrency group with main or another tag); every test the claims ledger names exists |
+| `test-heap` (4 shards) | PRs touching code, push | `make test-heap` (`TEST_HEAP_SHARD=1/4` … `4/4` for one shard) | the heap-bound tests, without the race detector (under it they skip or shrink, so `make test` never runs them in full): every test that reads `raceEnabled`, found by `hack/test-heap.sh`, which sets `UPGRADESCOPE_HEAP=1` (without it a plain `go test` skips the server's, which take ~10 min, and the Helm manifest test, whose reading a busy machine inflates) and fails on a skip. These are the proofs of the server's and the Helm collector's memory bounds that `docs/claims.md` and the operations guide cite. `--shard i/n` gives each test to exactly one shard, balanced by `hack/test-heap-durations.txt`; a test missing from that table counts 30 s |
 | `lint` | PR, push | `make lint` | `go vet` and pinned staticcheck |
-| `build` | PR, push | `make build` | the binary builds |
-| `vuln` | PR, push, weekly | `make vuln-test vuln` | govulncheck in binary mode on the linux/amd64 build; fails closed, and accepts a reachable advisory only through an expiring, per-ID entry in `hack/vuln-allowlist.txt` |
+| `build` | PRs touching code, push | `make build dashboard-smoke go-install-check` | the binary builds, serves the dashboard and every asset it references, and the README's `go install` path works |
+| `cross-build` (linux, darwin, windows) | PRs touching a Go file, module file, GoReleaser config or the Makefile; push | `make cross-build` (`CROSS_BUILD_PLATFORMS="darwin/amd64 darwin/arm64"` for one leg) | every package, tests included, compiles and vets for the six platforms the release ships, so a platform-only break fails its PR, not a tag |
+| `vuln` | PRs touching code, push, weekly | `make vuln-test vuln` | govulncheck in binary mode on the linux/amd64 build; fails closed, and accepts a reachable advisory only through an expiring, per-ID entry in `hack/vuln-allowlist.txt` |
 | `web` | PR, push (Node 22, 24) | `make web-test` | `npm ci`, vitest, typecheck + build, production advisories, committed `internal/server/webdist` equals the fresh build |
 | `helm` | PR, push | `make helm-test` | `helm lint --strict`, the values render matrix, kubeconform (strict) on every render against Kubernetes 1.29 and 1.37, `hack/test-chart.sh` contract |
-| `images` | PR, push | `make images` | `Dockerfile` and `Dockerfile.release` build for linux/amd64 and linux/arm64 (nothing pushed) |
-| `pg-conformance` | PR, push (Postgres 17); weekly (14–18) | `make pg-test` (`PG_VERSION=14`, …) | the store conformance suite against a real Postgres |
+| `images` | PRs touching code, push | `make images` | `Dockerfile` and `Dockerfile.release` build for linux/amd64 and linux/arm64 (nothing pushed) |
+| `pg-conformance` | PRs touching code, push (Postgres 17); weekly (14–18) | `make pg-test` (`PG_VERSION=14`, …) | the store conformance suite against a real Postgres |
 | `release-check` | PRs touching release inputs, dispatch, release | `make release-check` (no Docker: `GORELEASER_SKIP=publish,sign,sbom,docker`) | `goreleaser check` and a snapshot with the pinned GoReleaser, archive names match what `action/run.sh` downloads, every `checksums.txt` name is one GitHub serves unchanged and no package carries the build host's name (a generic host name such as `localhost` or `ubuntu` can match package text and fail it: set a distinctive host name or run it in CI), `checksums.txt` covers the `api/` contracts, the sizes the README and Install page state are within 2% of the build, the binary serves the dashboard, and every flag, default or usage line the CLI lost or changed since the last release tag is named under CHANGELOG.md's Changed (`make flags-diff`) |
-| `kube` | PR, push (Kubernetes 1.31, 1.37); weekly (1.29–1.37) | `make e2e E2E_MINOR=1.31` | see below |
-| `envtest` | PRs touching more than docs, push, weekly, dispatch, release (Kubernetes 1.24 and 1.28 on a PR, push and release; every minor 1.24–1.28 weekly and on dispatch) | `make envtest` (`ENVTEST_MINOR=1.24` for one minor) | the live collector and engine against a real kube-apiserver and etcd, for the minors kind has no node images for: GA-only objects give no removed-API finding or blocker, a second scan of an unchanged cluster is identical, an object written through a still-served beta API blocks at its removal minor, and unavailable or partial capabilities are reported as not assessed; see below |
+| `kube` | PRs touching code, push except after a docs-only change (Kubernetes 1.31, 1.37); weekly (1.29–1.37) | `make e2e E2E_MINOR=1.31` | see below |
+| `envtest` | PRs touching code, push except after a docs-only change, weekly, dispatch, release (Kubernetes 1.24 and 1.28 on a PR, push and release; every minor 1.24–1.28 weekly and on dispatch) | `make envtest` (`ENVTEST_MINOR=1.24` for one minor) | the live collector and engine against a real kube-apiserver and etcd, for the minors kind has no node images for: GA-only objects give no removed-API finding or blocker, a second scan of an unchanged cluster is identical, an object written through a still-served beta API blocks at its removal minor, and unavailable or partial capabilities are reported as not assessed; see below |
 | `action` | PRs touching the action or anything the binary is built from (`cmd/`, `internal/`, `registry/`, `go.mod`/`go.sum`); weekly (Linux, macOS) | `make action-test` (offline); the rest needs a published release | `action/run.sh` offline (input validation, checksum-verified install, outputs, annotations, step summary, an injection payload); then both `action.yml` paths for real: the latest release archive, this tree's binary on removed and clean fixtures, with an ignore rule (`config`) and against a baseline (`baseline`, `write-baseline`) |
 | `registry` | PRs touching `registry/` | `go test ./registry/ && make eol-check` | registry entries are valid and in sync with endoflife.date |
 | `kb-freshness` | PR, push, weekly | `make gen-kb && git status` | the generated KB matches `tools/gen-kb`'s pinned `k8s.io/api` |
-| `ci-ok` | always | (aggregates the rest) | every other job passed or was skipped for this event; the one stable check to require on `main` |
+| `ci-ok` | always | `hack/ci-ok.sh` (aggregates the rest) | every other job passed, or was skipped for a reason that holds: its own `if` for the event, or the `changes` job ran and said a gated job is not needed (below); the one stable check to require on `main` |
+
+**Which jobs a pull request runs.** The `changes` job reads the files a pull
+request changes and `hack/ci-changes.sh` turns that into four answers: `go`
+(Go code, and every other file a Go-heavy job reads: the embedded data and
+dashboard, the chart, the examples, the Dockerfiles, the scripts those jobs
+call), `cross` (a Go file, module file, GoReleaser config or the Makefile),
+`test-scope` (`all`, `docs` or `none`) and `e2e`. `test-heap`, `build`,
+`examples`, `images`, `vuln`, `pg-conformance`, `kube` and `envtest` run on a
+pull request only when `go` (the last two also when the one docs page the
+e2e runs changes) says so, `cross-build` when `cross` does, and `test` for
+`test-scope` `all` or `docs`. So a pull request that changes only docs or
+Markdown skips all of that and runs `lint`, `repo-checks`, `web`, `helm`,
+`notices`, `kb-freshness`, `registry`, the `action` and `release-check` jobs
+when their own filters match, and the unit tests of the packages that read
+docs. A push to `main`, the weekly schedule, a dispatch and a release run what
+they always did: the gates are for pull requests only (a push keeps the old
+docs-only skip of `kube` and `envtest`).
+
+`ci-ok` accepts a gated job's skip only when the `changes` job **ran and
+succeeded** and said the job is not needed. A `changes` job that failed, was
+cancelled or was skipped on a pull request fails `ci-ok`, and so does a gated
+job skipped while `changes` said it is needed. `hack/ci-gates_test.sh` (`make
+hack-test`) holds the filters to the tree: every tracked file is matched by
+`go` or `docs`, or is on its short list of files no gated job reads, and every
+`hack/` script a gated job reaches is matched; it evaluates each gated job's
+`if` for every kind of run and combination of filter results.
+`hack/ci-ok_test.sh` runs the verdict through each scenario. A new
+directory, workflow or script therefore has to be decided on: add it to the
+`go` filter in `ci.yml`, or to the test's list with the reason.
 
 `pr-lint.yml` is a separate workflow, not a `ci.yml` job: on every PR, and again when its title or description is edited, `hack/check-breaking.sh` fails a title, description or commit with a `BREAKING CHANGE:` footer whose subject has no `!` (see [Commit conventions](#commit-conventions)). It is not part of `ci-ok`; the repository ruleset decides whether it blocks a merge.
 
