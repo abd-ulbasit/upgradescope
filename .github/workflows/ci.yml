@@ -322,8 +322,9 @@ jobs:
   # reads every tracked file), so a change to a workflow, an issue template
   # or a script can fail them and cannot skip them. That costs a
   # documentation or CI-only pull request the weight of its slowest shard
-  # (hack/test-durations.txt: 336 s of -race package weight, a relative
-  # figure, not measured wall time) instead of nothing: the price of never
+  # (computed by hack/shard.sh from hack/test-durations.txt: 338 s of -race
+  # package weight, a relative figure, not measured wall time) instead of
+  # nothing: the price of never
   # passing ci-ok with a needed test not run. A failed changes job runs
   # everything.
   test:
@@ -1294,11 +1295,12 @@ jobs:
   #     36 s, build 12 m 17 s, release-check 11 m 22 s.
   #   before, run 38031481959 (docs and a Go test file): 22 m 11 s wall;
   #     test-heap 22 m 1 s, test 8 m 34 s, build 12 m 14 s.
-  #   after: expected from the duration tables, NOT measured. A code PR:
-  #     test-heap shards about 305 s of tests each, the test shards about half
-  #     of 562 s, so about 7 to 10 minutes. A PR that changes no Go code
-  #     (documentation, CI, scripts): the test job in readers scope, whose
-  #     slowest shard carries 336 s of -race package weight (a relative
+  #   after: computed by hack/shard.sh from the duration tables, NOT
+  #     measured. A code PR: test-heap shards of 307 to 308 s of tests each,
+  #     test shards of 560 s and 559 s of -race package weight, so about 7 to
+  #     10 minutes. A PR that changes no Go code (documentation, CI, scripts):
+  #     the test job in readers scope, whose slowest shard carries 338 s of
+  #     -race package weight (a relative
   #     figure: the packages ran in parallel on one runner), plus checkout,
   #     setup and compile, so the 4 to 6 minutes first hoped for is unproven
   #     and may be exceeded. The unit tests of those packages are not skipped
