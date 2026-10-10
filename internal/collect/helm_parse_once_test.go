@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/abd-ulbasit/upgradescope/internal/kb"
 )
@@ -260,8 +261,20 @@ func TestParseOnce_BoundsAreUnchanged(t *testing.T) {
 	}
 }
 
+// answerRate says how many of the documents of the YAML streams the
+// converter made JSON of, and how many it left to kubectl's decoder.
+func answerRate(streams ...string) (answered, declined int) {
+	for _, text := range streams {
+		p := readStream([]byte(text), false)
+		answered += p.toJSON.answered
+		declined += p.toJSON.declined
+	}
+	return answered, declined
+}
+
 // With UPGRADESCOPE_HELM_PAYLOADS (see TestHelmDecodeCostByRelease), every
-// release of the file decodes to the same entry parsed once or twice.
+// release of the file decodes to the same entry parsed once or twice, and
+// the test says how many of the manifests' documents the shortcut answered.
 func TestParseOnce_PayloadsDecodeToTheSameEntries(t *testing.T) {
 	path := os.Getenv("UPGRADESCOPE_HELM_PAYLOADS")
 	if path == "" {
@@ -284,7 +297,7 @@ func TestParseOnce_PayloadsDecodeToTheSameEntries(t *testing.T) {
 	}
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 1<<20), 1<<26)
-	n, withAPIs := 0, 0
+	n, withAPIs, answered, declined := 0, 0, 0, 0
 	for sc.Scan() {
 		p := strings.Split(sc.Text(), "\t")
 		if len(p) != 3 {
@@ -302,9 +315,57 @@ func TestParseOnce_PayloadsDecodeToTheSameEntries(t *testing.T) {
 		if len(once.apis) > 0 {
 			withAPIs++
 		}
+		doc, err := decodeHelmRelease(b)
+		if err != nil {
+			continue
+		}
+		splitManifest(doc.Manifest, func(text string, _ int, whole bool) {
+			if whole {
+				a, d := answerRate(text)
+				answered, declined = answered+a, declined+d
+			}
+		})
 	}
 	if err := sc.Err(); err != nil {
 		t.Fatal(err)
 	}
-	t.Logf("%d releases decode to the same entries, %d of them with flagged APIs", n, withAPIs)
+	t.Logf("%d releases decode to the same entries, %d of them with flagged APIs; of %d manifest documents the shortcut answered %d and left %d to kubectl's decoder", n, withAPIs, answered+declined, answered, declined)
+}
+
+// parseCPUReps is how many times parseCPU reads a stream.
+const parseCPUReps = 3
+
+// parseCPU is the mean CPU one reading of data takes, as a whole stream.
+func parseCPU(data []byte, reparse bool) time.Duration {
+	before := processCPU()
+	for range parseCPUReps {
+		readStream(data, reparse)
+	}
+	return (processCPU() - before) / parseCPUReps
+}
+
+// With UPGRADESCOPE_PARSE_ONCE_FILES, a list of manifest files (separated
+// as a PATH is), each parses to the same objects and problems once or
+// twice, and the test says how many of its YAML documents the shortcut
+// answered: a way to read the rate on manifests of real charts.
+func TestParseOnce_FilesMatchTwoParses(t *testing.T) {
+	list := os.Getenv("UPGRADESCOPE_PARSE_ONCE_FILES")
+	if list == "" {
+		t.Skip("diagnostic: set UPGRADESCOPE_PARSE_ONCE_FILES to manifest files separated like a PATH")
+	}
+	var answered, declined int
+	var onceTotal, twiceTotal time.Duration
+	for _, path := range filepath.SplitList(list) {
+		b, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		requireSameStream(t, path, string(b))
+		a, d := answerRate(string(b))
+		once, twice := parseCPU(b, false), parseCPU(b, true)
+		t.Logf("%s: %d KiB, %d documents answered, %d left to kubectl's decoder; CPU to parse it %v once, %v twice", path, len(b)>>10, a, d, once.Round(time.Millisecond), twice.Round(time.Millisecond))
+		answered, declined = answered+a, declined+d
+		onceTotal, twiceTotal = onceTotal+once, twiceTotal+twice
+	}
+	t.Logf("in all: %d documents answered, %d left to kubectl's decoder; CPU to parse them %v once, %v twice (the mean of %d runs each)", answered, declined, onceTotal.Round(time.Millisecond), twiceTotal.Round(time.Millisecond), parseCPUReps)
 }

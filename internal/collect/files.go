@@ -122,6 +122,13 @@ func parseManifestStreamWith(r io.Reader, reparse bool) (objs []manifestObject, 
 	if err != nil {
 		return nil, addOnEvidence{}, nil, err
 	}
+	p := readStream(data, reparse)
+	return p.objs, p.ev, p.bad, nil
+}
+
+// readStream decodes one stream (see parseManifestStream) and returns the
+// parser that holds what it found.
+func readStream(data []byte, reparse bool) *streamParser {
 	p := &streamParser{data: data, reparse: reparse}
 	yamlFrom := 0
 	if utilyaml.IsJSONBuffer(data[:min(len(data), jsonPeek)]) {
@@ -130,7 +137,7 @@ func parseManifestStreamWith(r io.Reader, reparse bool) (objs []manifestObject, 
 	if yamlFrom >= 0 {
 		p.yamlStream(yamlFrom)
 	}
-	return p.objs, p.ev, p.bad, nil
+	return p
 }
 
 // streamParser holds one stream being decoded and what was found in it.

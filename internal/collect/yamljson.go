@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"strconv"
+	"strings"
 
 	yaml "go.yaml.in/yaml/v3"
 	sigsyaml "sigs.k8s.io/yaml"
@@ -40,6 +41,10 @@ type treeJSONConverter struct {
 	// asked counts the questions put to kubectl's decoder for the
 	// document in hand.
 	asked int
+	// answered and declined count the documents the converter made JSON of
+	// and left to kubectl's decoder: what a test reads to say how often
+	// the shortcut applies.
+	answered, declined int
 }
 
 // oracleAnswer is the JSON kubectl's decoder makes of one plain scalar.
@@ -59,6 +64,16 @@ const maxOracleEntries = 4096
 
 // json returns the JSON of the document text, whose first node is root.
 func (c *treeJSONConverter) json(root *yaml.Node, text []byte) ([]byte, bool) {
+	raw, ok := c.convert(root, text)
+	if ok {
+		c.answered++
+	} else {
+		c.declined++
+	}
+	return raw, ok
+}
+
+func (c *treeJSONConverter) convert(root *yaml.Node, text []byte) ([]byte, bool) {
 	if !readsTheSame(text) {
 		return nil, false
 	}
@@ -87,8 +102,8 @@ func (c *treeJSONConverter) json(root *yaml.Node, text []byte) ([]byte, bool) {
 //     text from the walk's own splitting never holds.
 //   - An explicit tag shows in the tree, but the bare "!" (a non-specific
 //     tag, which makes a plain scalar a string for v2) does not: v3 reads
-//     "! 12" as the integer. So text with a "!" that starts a word, where
-//     YAML puts a tag, is left to it too.
+//     "! 12" as the integer. So text with a "!" where YAML puts a tag, at
+//     the start of a node, is left to it too.
 func readsTheSame(text []byte) bool {
 	if len(text) == 0 || text[len(text)-1] != '\n' || bytes.IndexByte(text, '\r') >= 0 ||
 		bytes.HasPrefix(text, []byte("---")) || bytes.Contains(text, []byte("\n---")) {
@@ -101,11 +116,14 @@ func readsTheSame(text []byte) bool {
 		if text[i] != '!' {
 			continue
 		}
-		if i == 0 {
-			return false
+		// A tag starts a node: what comes before it on its line is
+		// nothing, or an indicator (: - ? [ { ,). Anywhere else the "!" is
+		// text, as in a CEL rule's "a && !b".
+		j := i - 1
+		for j >= 0 && (text[j] == ' ' || text[j] == '\t') {
+			j--
 		}
-		switch text[i-1] {
-		case ' ', '\t', '\n', '[', '{', ',':
+		if j < 0 || text[j] == '\n' || strings.IndexByte(":-?[{,", text[j]) >= 0 {
 			return false
 		}
 	}
@@ -204,8 +222,12 @@ func (c *treeJSONConverter) scalar(n *yaml.Node) (any, bool) {
 // quote's opposite, anything non-ASCII) makes a string. y, n, t, f, o and ~
 // start the words YAML 1.1 reads as booleans and null (v2's resolveMap).
 // + - . and the digits start the numbers, which v2 reads many ways (base
-// 2/8/16, underscores, floats, timestamps that stay strings): a decimal
-// integer is read here, anything else is put to kubectl's own decoder.
+// 2/8/16, underscores, floats, timestamps that stay strings). A scalar with
+// a byte other than a letter, a digit or one of _ . + - cannot be any of
+// them (v2 tries ParseInt, ParseUint, a float pattern, ParseFloat and a
+// timestamp that stays a string, and none accepts such a byte), so it is a
+// string. A decimal integer is read here, and anything else is put to
+// kubectl's own decoder.
 func (c *treeJSONConverter) v2Scalar(s string) (any, bool) {
 	if s == "" {
 		return nil, true
@@ -222,6 +244,9 @@ func (c *treeJSONConverter) v2Scalar(s string) (any, bool) {
 		}
 		return s, true
 	case '+', '-', '.', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9':
+		if !numberChars(s) {
+			return s, true
+		}
 		if v, ok := decimalInt(s); ok {
 			return v, true
 		}
@@ -252,14 +277,13 @@ func decimalInt(s string) (int64, bool) {
 
 // ask puts a plain scalar that starts like a number to kubectl's own
 // decoder, as a document of its own, and returns what it made of it: a
-// number as raw JSON, a string as a string. A scalar of characters that
-// could not stand alone as a plain scalar, an answer that is neither (null,
-// a boolean, an error), or a string that is not the text itself, is not
-// answered.
+// number as raw JSON, a string as a string. An answer that is neither
+// (null, a boolean, an error) or a string that is not the text itself is
+// not answered.
 func (c *treeJSONConverter) ask(s string) (any, bool) {
 	a, seen := c.oracle[s]
 	if !seen {
-		if c.asked++; c.asked > maxOracleQuestions || !askable(s) {
+		if c.asked++; c.asked > maxOracleQuestions {
 			return nil, false
 		}
 		a = askKubectl(s)
@@ -282,20 +306,18 @@ func (c *treeJSONConverter) ask(s string) (any, bool) {
 	return json.RawMessage(a.json), true
 }
 
-// askable reports whether s, a plain scalar's text, reads the same as a
-// document by itself: letters, digits and the punctuation of versions,
-// units, ratios, ports and CIDRs, with no break, quote, comment or
-// indicator.
-func askable(s string) bool {
+// numberChars reports whether s has only letters, digits and _ . + -: the
+// bytes of everything go-yaml v2 reads as a number.
+func numberChars(s string) bool {
 	for i := 0; i < len(s); i++ {
 		switch c := s[i]; {
 		case c >= '0' && c <= '9', c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z':
-		case c == '.', c == '+', c == '-', c == '_', c == ':', c == '/', c == '%', c == ',', c == ' ':
+		case c == '.', c == '+', c == '-', c == '_':
 		default:
 			return false
 		}
 	}
-	return s[len(s)-1] != ' '
+	return true
 }
 
 // askKubectl returns the JSON sigs.k8s.io/yaml makes of s alone, which is
