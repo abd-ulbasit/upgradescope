@@ -2,8 +2,11 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
@@ -159,5 +162,88 @@ func TestMergeManifestsVolumePlugins(t *testing.T) {
 	}
 	if len(cluster.VolumePlugins) != 1 || cluster.VolumePlugins[0].Count != 2 || len(cluster.VolumePlugins[0].Namespaces) != 1 {
 		t.Error("the cluster's inventory must not be modified")
+	}
+}
+
+// #362: a cluster row that names its PersistentVolumes and StorageClasses
+// keeps them, first, beside the posted manifests' located objects, so the
+// engine reads the row as mixed (cluster-scoped or no namespace set).
+func TestMergeManifestsVolumePluginsWithClusterObjects(t *testing.T) {
+	cluster := testInventory()
+	cluster.VolumePlugins = []inventory.VolumePluginUse{{Plugin: "rbd", Count: 2, Namespaces: map[string]int{"data": 1, "": 1},
+		Objects: []inventory.ObjectRef{{Name: "pv-rbd"}, {Name: "sc-rbd"}}}}
+	manifests := inventory.Inventory{
+		Capabilities:  map[inventory.Capability]inventory.CapabilityStatus{inventory.CapVolumes: {Available: true}},
+		VolumePlugins: []inventory.VolumePluginUse{{Plugin: "rbd", Count: 1, Namespaces: map[string]int{"": 1}, Objects: []inventory.ObjectRef{{Name: "pv-new", File: "pv.yaml", Line: 1}}}},
+	}
+	proposed := cluster
+	mergeManifests(&proposed, manifests)
+	want := []inventory.ObjectRef{{Name: "pv-rbd"}, {Name: "sc-rbd"}, {Name: "pv-new", File: "pv.yaml", Line: 1}}
+	if len(proposed.VolumePlugins) != 1 || proposed.VolumePlugins[0].Count != 3 || proposed.VolumePlugins[0].Namespaces[""] != 2 ||
+		fmt.Sprint(proposed.VolumePlugins[0].Objects) != fmt.Sprint(want) {
+		t.Fatalf("VolumePlugins = %+v, want rbd counted 3, 2 with no namespace, objects %+v", proposed.VolumePlugins, want)
+	}
+	if len(cluster.VolumePlugins[0].Objects) != 2 {
+		t.Error("the cluster's inventory must not be modified")
+	}
+}
+
+// glusterPod is a posted pod naming glusterfs inline, accepted by its own
+// ignore annotation.
+const glusterPod = `apiVersion: v1
+kind: Pod
+metadata:
+  name: web
+  namespace: payments-prod
+  annotations:
+    upgradescope.basit.engineer/ignore: volume-plugin/glusterfs
+    upgradescope.basit.engineer/ignore-reason: moved to CSI in this PR
+spec:
+  containers: [{name: web, image: nginx}]
+  volumes:
+    - name: data
+      glusterfs: {endpoints: gluster, path: vol}
+`
+
+// #362 review: the gate's proposed state adds the PR's located objects to
+// the cluster's volume plugin row, whose pods are never listed. The PR's
+// object accepted by its annotation leaves the cluster's glusterfs pods
+// blocking the proposed state (clusterVerdict), the finding standing with
+// them counted omitted, and the PR passes, the remainder being the
+// cluster's: one annotation in a PR does not hide the cluster's blocker.
+func TestGateAcceptedManifestVolumeKeepsClusterPods(t *testing.T) {
+	ts := httptest.NewServer(newTestServer(t, newFakeStore(), func(c *Config) { c.KB = volumesKB() }).Handler())
+	defer ts.Close()
+	if resp, out := postSnapshot(t, ts, "ingest-tok", pushReqBody(t, glusterInventory()), false); resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("seed push = %d %v", resp.StatusCode, out)
+	}
+	resp, raw := postGate(t, ts, "?target=1.35&cluster=prod-eu-1&path=deploy/pod.yaml", "", glusterPod, "application/x-yaml")
+	var b struct {
+		Verdict        string `json:"verdict"`
+		ClusterVerdict string `json:"clusterVerdict"`
+		Findings       []struct {
+			Key            string `json:"key"`
+			Severity       string `json:"severity"`
+			ObjectsOmitted int    `json:"objectsOmitted"`
+		} `json:"findings"`
+		Suppressed []struct {
+			Key string `json:"key"`
+		} `json:"suppressed"`
+	}
+	if err := json.Unmarshal(raw, &b); err != nil {
+		t.Fatalf("gate body: %v\n%s", err, raw)
+	}
+	kept := slices.IndexFunc(b.Findings, func(f struct {
+		Key            string `json:"key"`
+		Severity       string `json:"severity"`
+		ObjectsOmitted int    `json:"objectsOmitted"`
+	}) bool {
+		return f.Key == "volume-plugin/glusterfs"
+	})
+	if resp.StatusCode != http.StatusOK || b.Verdict != "ready" || b.ClusterVerdict != "blocked" || kept < 0 ||
+		b.Findings[kept].Severity != "blocker" || b.Findings[kept].ObjectsOmitted != 2 ||
+		len(b.Suppressed) != 1 || b.Suppressed[0].Key != "volume-plugin/glusterfs" {
+		t.Errorf("gate = %d, clusterVerdict %q: want 200 ready (the remainder is the cluster's), the glusterfs blocker kept with the cluster's 2 pods omitted, cluster blocked, and the PR's pod suppressed\n%s",
+			resp.StatusCode, b.ClusterVerdict, raw)
 	}
 }

@@ -6,8 +6,10 @@ import (
 	_ "embed"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net/url"
 	"slices"
+	"strings"
 
 	"github.com/abd-ulbasit/upgradescope/internal/inventory"
 )
@@ -43,10 +45,16 @@ type VolumePlugin struct {
 	Deprecated     *inventory.Version `json:"deprecated,omitempty"`
 	// Removed is the minor whose release stopped the plugin (removed),
 	// or from which it works only through CSIDriver (csi-migration).
-	Removed     *inventory.Version `json:"removed,omitempty"`
-	CSIDriver   string             `json:"csiDriver,omitempty"`
-	Note        string             `json:"note,omitempty"`
-	Replacement string             `json:"replacement"`
+	Removed   *inventory.Version `json:"removed,omitempty"`
+	CSIDriver string             `json:"csiDriver,omitempty"`
+	// Provisioner is the in-tree provisioner a StorageClass names for the
+	// plugin ("kubernetes.io/rbd"), and ProvisionerCitation the upstream
+	// source that names it (#362). Empty for a plugin with no in-tree
+	// provisioner (cephfs, gitRepo, flexVolume).
+	Provisioner         string `json:"provisioner,omitempty"`
+	ProvisionerCitation string `json:"provisionerCitation,omitempty"`
+	Note                string `json:"note,omitempty"`
+	Replacement         string `json:"replacement"`
 	// Citations are the release notes and pull requests every minor
 	// above is taken from; never empty.
 	Citations []string `json:"citations"`
@@ -66,6 +74,22 @@ var volumePlugins = mustParseVolumePlugins(volumePluginsJSON)
 // VolumePlugins returns a copy of the embedded in-tree volume plugin
 // dataset, sorted by plugin.
 func VolumePlugins() []VolumePlugin { return slices.Clone(volumePlugins) }
+
+// volumeProvisioners maps each in-tree provisioner to its plugin.
+var volumeProvisioners = func() map[string]string {
+	m := map[string]string{}
+	for _, p := range volumePlugins {
+		if p.Provisioner != "" {
+			m[p.Provisioner] = p.Plugin
+		}
+	}
+	return m
+}()
+
+// VolumePluginProvisioners returns a copy of the in-tree StorageClass
+// provisioners the dataset maps, each to its plugin: what the live
+// collector looks for in StorageClasses (#362).
+func VolumePluginProvisioners() map[string]string { return maps.Clone(volumeProvisioners) }
 
 // VolumePluginNames lists the plugins' field names, sorted: what the
 // collectors look for in pod volumes and PersistentVolumes.
@@ -89,7 +113,8 @@ func mustParseVolumePlugins(raw []byte) []VolumePlugin {
 // refused, each plugin once, a known classification, a removal minor for
 // removed and csi-migration (and none for deprecated, which needs a
 // deprecation minor), a CSI driver exactly for csi-migration, a
-// replacement, and at least one https citation.
+// replacement, at least one https citation, and a provisioner only as
+// kubernetes.io/<name>, each once, with an https citation of its own.
 func parseVolumePlugins(raw []byte) ([]VolumePlugin, error) {
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
@@ -100,7 +125,7 @@ func parseVolumePlugins(raw []byte) ([]VolumePlugin, error) {
 	if len(f.Plugins) == 0 {
 		return nil, fmt.Errorf("kb: volumeplugins.json lists no plugins")
 	}
-	seen := map[string]bool{}
+	seen, provisioners := map[string]bool{}, map[string]bool{}
 	for _, p := range f.Plugins {
 		bad := func(why string) error { return fmt.Errorf("kb: volumeplugins.json: plugin %q: %s", p.Plugin, why) }
 		switch {
@@ -133,11 +158,28 @@ func parseVolumePlugins(raw []byte) ([]VolumePlugin, error) {
 			return nil, bad("deprecated after it was removed")
 		}
 		for _, c := range p.Citations {
-			if u, err := url.Parse(c); err != nil || u.Scheme != "https" || u.Host == "" {
+			if !httpsURL(c) {
 				return nil, bad(fmt.Sprintf("citation %q is not an https URL", c))
 			}
 		}
+		switch {
+		case p.Provisioner == "" && p.ProvisionerCitation != "":
+			return nil, bad("a provisioner citation without a provisioner")
+		case p.Provisioner == "":
+		case !strings.HasPrefix(p.Provisioner, "kubernetes.io/") || len(p.Provisioner) == len("kubernetes.io/"):
+			return nil, bad(fmt.Sprintf("provisioner %q is not an in-tree one (kubernetes.io/<name>)", p.Provisioner))
+		case provisioners[p.Provisioner]:
+			return nil, bad(fmt.Sprintf("provisioner %q is another plugin's too", p.Provisioner))
+		case !httpsURL(p.ProvisionerCitation):
+			return nil, bad(fmt.Sprintf("provisioner %q needs an https citation", p.Provisioner))
+		}
+		provisioners[p.Provisioner] = true
 	}
 	slices.SortFunc(f.Plugins, func(a, b VolumePlugin) int { return cmp.Compare(a.Plugin, b.Plugin) })
 	return f.Plugins, nil
+}
+
+func httpsURL(s string) bool {
+	u, err := url.Parse(s)
+	return err == nil && u.Scheme == "https" && u.Host != ""
 }

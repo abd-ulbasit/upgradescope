@@ -42,6 +42,12 @@ quote them.
   [#228](https://github.com/abd-ulbasit/upgradescope/issues/228)'s option
   b), a steady agent tick at 2,001 nodes, about 14,000 pods and 1,000 Helm
   releases makes 20 API requests on 2 ticks of 3, and 31 on the third.**
+  Since [#362](https://github.com/abd-ulbasit/upgradescope/issues/362)
+  every collection, a tick that reuses the pod pass included, makes 2 more
+  paged lists, of the PersistentVolumes and of the StorageClasses (one page
+  each up to 500 of either, more above), so 22 and 33 at this fill:
+  computed from the code, not measured; every figure below was measured
+  before it.
   `--pod-pass-every` (3 by default) and `--pod-pass-max-age` (1h) make the
   agent list the pods outside `kube-system` once per 3 ticks, or sooner when
   that pass is an hour old, and detect add-ons from its images and labels in

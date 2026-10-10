@@ -435,7 +435,10 @@ func suppressedMessage(s engine.SuppressedFinding) string {
 
 // unlistedMessage counts the n affected objects of an anchored finding
 // that are not results: refs without a file, and refs beyond the
-// inventory.MaxObjectRefs that are recorded per finding.
+// inventory.MaxObjectRefs that are recorded per finding. The cap is given
+// as the reason only when the finding reached it: below it, the omitted
+// objects are ones the finding never names (a cluster's pods beside its
+// PersistentVolumes, #362).
 func unlistedMessage(f engine.Finding, n int) string {
 	var loose []inventory.ObjectRef
 	for _, o := range f.Objects {
@@ -446,7 +449,7 @@ func unlistedMessage(f engine.Finding, n int) string {
 	msg := fmt.Sprintf("%s: %d more affected object(s) are not listed as results", f.Title, n)
 	if len(loose) > 0 {
 		msg += ": " + objectList(loose, f.ObjectsOmitted)
-	} else {
+	} else if len(f.Objects) >= inventory.MaxObjectRefs {
 		msg += fmt.Sprintf(" (at most %d objects are recorded per finding)", inventory.MaxObjectRefs)
 	}
 	return msg + "."

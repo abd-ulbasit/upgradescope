@@ -107,9 +107,12 @@ func Write(w io.Writer, r engine.Report) error {
 			add(check, sev, findingMessage(f), VirtualPrefix+check, 1)
 		case len(loose)+f.ObjectsOmitted > 0:
 			msg := fmt.Sprintf("%s: %d more affected object(s) are not listed with a file and line", f.Title, len(loose)+f.ObjectsOmitted)
+			// The cap is the reason only when the finding reached it;
+			// below it the omitted objects are ones it never names (a
+			// cluster's pods beside its PersistentVolumes, #362).
 			if len(loose) > 0 {
 				msg += ": " + objectList(loose, f.ObjectsOmitted)
-			} else {
+			} else if len(f.Objects) >= inventory.MaxObjectRefs {
 				msg += fmt.Sprintf(" (at most %d objects are recorded per finding)", inventory.MaxObjectRefs)
 			}
 			add(check, sev, msg+".", VirtualPrefix+check, 1)

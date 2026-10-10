@@ -110,7 +110,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: server
-          image: ghcr.io/abd-ulbasit/upgradescope:v0.2.0-rc.2
+          image: ghcr.io/abd-ulbasit/upgradescope:v0.2.0-rc.3
           args:
             - serve
             # Loopback only: nothing outside the pod reaches serve except

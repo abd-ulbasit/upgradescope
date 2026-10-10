@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -295,6 +296,10 @@ func collectorCalls(t *testing.T) []rbacv1.PolicyRule {
 		// granted (no wildcards): the agent reports crds partial for CRDs
 		// with a deprecated or unserved version.
 		res("apiextensions.k8s.io", "customresourcedefinitions", "list"),
+		// volumes: PersistentVolumes and StorageClasses (#362), each one
+		// paged list a collection.
+		res("", "persistentvolumes", "list"),
+		res("storage.k8s.io", "storageclasses", "list"),
 		res("upgradescope.basit.engineer", "clusterreadinesses", "get", "create"),
 		named(res("upgradescope.basit.engineer", "clusterreadinesses", "update", "patch"), "cluster"), // spec.targets, and the status-error annotation
 		named(res("upgradescope.basit.engineer", "clusterreadinesses/status", "get", "update"), "cluster"),
@@ -318,6 +323,9 @@ var neverAllowed = []rbacv1.PolicyRule{
 	res("", "serviceaccounts/token", "create"),
 	res("", "configmaps", "create", "update", "patch", "delete", "watch"),
 	res("", "pods", "watch", "create", "delete", "patch"),
+	res("", "persistentvolumes", "watch", "create", "update", "patch", "delete", "deletecollection"),
+	res("", "persistentvolumeclaims", "get", "list", "watch"),
+	res("storage.k8s.io", "storageclasses", "watch", "create", "update", "patch", "delete", "deletecollection"),
 	res("apiextensions.k8s.io", "customresourcedefinitions", "create", "delete"),
 	named(res("apiextensions.k8s.io", "customresourcedefinitions", "update", "patch"), "certificates.cert-manager.io"),
 	named(res("upgradescope.basit.engineer", "clusterreadinesses", "update", "patch", "delete"), "someone-else"),
@@ -476,9 +484,10 @@ var (
 // mention must be negated by one of the two words before it, or be in a
 // clause ending "are denied"), a CRD grant "not restricted by
 // resourceNames" (both CRD write rules are), no mention of the
-// cluster-wide ConfigMaps read that rbac.helmSecrets adds, or none of
+// cluster-wide ConfigMaps read that rbac.helmSecrets adds, none of
 // rbac.helmSecretsNamespaces, which replaces it with a Role per namespace
-// (#344). A --watch flag (`kubectl get ... --watch`) is not a grant.
+// (#344), or none of the persistentvolumes and storageclasses lists the
+// volumes capability reads (#362). A --watch flag (`kubectl get ... --watch`) is not a grant.
 func rbacDocProblems(doc string) []string {
 	var out []string
 	for _, clause := range clauseEnd.Split(watchFlag.ReplaceAllString(doc, ""), -1) {
@@ -502,11 +511,16 @@ func rbacDocProblems(doc string) []string {
 	if !strings.Contains(flat, "helmsecretsnamespaces") {
 		out = append(out, "does not describe rbac.helmSecretsNamespaces, which grants Secrets and ConfigMaps per namespace instead (#344)")
 	}
+	for _, r := range []string{"persistentvolumes", "storageclasses"} {
+		if !strings.Contains(flat, r) {
+			out = append(out, fmt.Sprintf("does not name the %s list the volumes capability reads (#362)", r))
+		}
+	}
 	return out
 }
 
 func TestRBACDocProblems(t *testing.T) {
-	const cm = " Helm needs ConfigMaps, or a Role per namespace with rbac.helmSecretsNamespaces."
+	const cm = " Helm needs ConfigMaps, or a Role per namespace with rbac.helmSecretsNamespaces. Volumes list persistentvolumes and storageclasses."
 	for _, tc := range []struct {
 		name, doc string
 		bad       bool
@@ -523,7 +537,9 @@ func TestRBACDocProblems(t *testing.T) {
 		{"watch then a negation", "It can `watch` pods, but not nodes." + cm, true},
 		{"not restricted", "CRD create/update/patch, not restricted by `resourceNames`." + cm, true},
 		{"not restricted across lines", "CRD writes, not\n    restricted by `resourceNames`." + cm, true},
-		{"no configmaps", "It reads with `get` and `list`, never `watch`, and Secrets. See rbac.helmSecretsNamespaces.", true},
+		{"no configmaps", "It reads with `get` and `list`, never `watch`, and Secrets. See rbac.helmSecretsNamespaces. Volumes list persistentvolumes and storageclasses.", true},
+		{"no volume reads", "It reads with `get` and `list`, never `watch`, and ConfigMaps. See rbac.helmSecretsNamespaces.", true},
+		{"no storageclasses", "It reads with `get` and `list`, never `watch`, and ConfigMaps. See rbac.helmSecretsNamespaces. It lists PersistentVolumes.", true},
 		{"no namespaced mode", "It reads with `get` and `list`, never `watch`, and Secrets and ConfigMaps.", true},
 		// kubectl's --watch flag is the reader's, not a grant to the agent.
 		{"kubectl --watch", "Follow it with `kubectl get clusterreadiness cluster --watch`." + cm, false},
@@ -718,5 +734,38 @@ func TestSchemaHelmSecretsNamespaces(t *testing.T) {
 	}
 	if renderErr(t, "rbac.helmSecretsNamespaces={apps,apps}") == "" {
 		t.Error("a namespace listed twice rendered, want a schema error")
+	}
+}
+
+// #362: the volumes capability's reads are two rules of their own, get and
+// list only: persistentvolumes in the core group and storageclasses in
+// storage.k8s.io (which the KB rules also grant, pinned here so a KB change
+// cannot drop it), neither watched nor written.
+func TestRenderedRBACVolumes(t *testing.T) {
+	for _, sets := range [][]string{nil, {"rbac.helmSecrets=false"}, {"rbac.helmSecretsNamespaces={apps}"}} {
+		rules := renderClusterRole(t, sets...)
+		want := map[string]rbacv1.PolicyRule{
+			"persistentvolumes": res("", "persistentvolumes", "get", "list"),
+			"storageclasses":    res("storage.k8s.io", "storageclasses", "get", "list"),
+		}
+		found := map[string]int{}
+		for _, r := range rules {
+			for name, w := range want {
+				if reflect.DeepEqual(r, w) {
+					found[name]++
+				}
+			}
+			if slices.Contains(r.Resources, "persistentvolumes") && !reflect.DeepEqual(r, want["persistentvolumes"]) {
+				t.Errorf("%v: rule %s names persistentvolumes, want only get and list in its own rule", sets, ruleString(r))
+			}
+		}
+		for name := range want {
+			if found[name] != 1 {
+				t.Errorf("%v: %d rules of exactly get and list on %s, want 1", sets, found[name], name)
+			}
+		}
+		assertDenied(t, rules,
+			res("", "persistentvolumes", "watch", "create", "update", "patch", "delete", "deletecollection"),
+			res("storage.k8s.io", "storageclasses", "watch", "create", "update", "patch", "delete", "deletecollection"))
 	}
 }

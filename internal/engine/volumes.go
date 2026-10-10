@@ -2,6 +2,8 @@ package engine
 
 import (
 	"fmt"
+	"math"
+	"slices"
 	"strings"
 
 	"github.com/abd-ulbasit/upgradescope/internal/inventory"
@@ -9,7 +11,8 @@ import (
 )
 
 // CatVolumePlugin: an in-tree volume plugin that pods, pod templates or
-// PersistentVolumes name (#351), judged by the knowledge base's
+// PersistentVolumes name (#351), or StorageClasses name the in-tree
+// provisioner of (#362), judged by the knowledge base's
 // kb.VolumePlugins: removed with no migration path (blocker at or after
 // the removal, warning the minor before it, info earlier), served only
 // through a named CSI driver (warning at or after the minor the in-tree
@@ -34,7 +37,9 @@ func volumesGap(inv inventory.Inventory) []CapabilityGap {
 // evalVolumePlugins judges inv.VolumePlugins against k.VolumePlugins at
 // target, one finding per plugin in use, keyed volume-plugin/<plugin>. A
 // plugin the knowledge base does not list is not judged. Live counts are
-// pods, manifest counts objects (workloads, pods, PersistentVolumes).
+// pods, and the PersistentVolumes and StorageClasses the row names;
+// manifest counts objects (workloads, pods, PersistentVolumes,
+// StorageClasses).
 func evalVolumePlugins(inv inventory.Inventory, k kb.KB, target inventory.Version, b *budget) []Finding {
 	byName := make(map[string]kb.VolumePlugin, len(k.VolumePlugins))
 	for _, p := range k.VolumePlugins {
@@ -47,22 +52,52 @@ func evalVolumePlugins(inv inventory.Inventory, k kb.KB, target inventory.Versio
 		if !ok || u.Count <= 0 {
 			continue
 		}
-		listed := storedObjects
-		if inv.Source == inventory.SourceFiles || len(u.Objects) > 0 {
-			listed = manifestObjects
+		listed := volumeObjectsListed(inv.Source, u.Objects)
+		// refs saturates at math.MaxInt: the gate saturates ObjectsOmitted
+		// there (#361), and a wrapped sum would read the row as naming
+		// nothing.
+		refs := len(u.Objects) + min(max(u.ObjectsOmitted, 0), math.MaxInt-len(u.Objects))
+		named := refs > 0
+		// unlisted is what the row counts but names no object of: a
+		// cluster's pods (its refs are its PersistentVolumes and
+		// StorageClasses), with, in the gate's proposed state, the
+		// manifests' objects beside them (mergeVolumePlugins). A row
+		// naming objects counts the rest omitted, so that Count is
+		// len(Objects) + ObjectsOmitted as suppression assumes: accepting
+		// every listed PersistentVolume or StorageClass then leaves the
+		// finding to the pods (applyFinding takes a finding whole only
+		// when it has nothing omitted). A row naming none stays
+		// objectless.
+		unlisted := 0
+		if named {
+			unlisted = max(0, u.Count-refs)
 		}
 		count := pluralObjects(u.Count)
-		if listed == storedObjects {
+		subject, total := count, u.Count
+		switch {
+		case listed == storedObjects && !named:
 			count = strings.Replace(count, "object", "pod", 1)
+			subject = count
+		case listed == storedObjects:
+			// A cluster's row naming objects: its PersistentVolumes and
+			// StorageClasses, beside the pods it counts.
+			subject = pluralVolumeObjects(refs)
+			if unlisted > 0 {
+				subject = strings.Replace(pluralObjects(unlisted), "object", "pod", 1) + " and " + subject
+			}
+			total = unlisted + refs
 		}
 		f := Finding{Category: CatVolumePlugin, Key: string(CatVolumePlugin) + "/" + u.Plugin,
 			Remediation: p.Replacement, Citations: p.Citations,
-			Objects: sortedObjects(u.Objects), ObjectsOmitted: u.ObjectsOmitted}
+			Objects: sortedObjects(u.Objects), ObjectsOmitted: u.ObjectsOmitted + unlisted}
 		var consequence string
 		switch p.Classification {
 		case kb.VolumeRemoved:
 			f.Title = fmt.Sprintf("In-tree volume plugin %s removed in %s (%s)", u.Plugin, p.Removed, count)
-			consequence = fmt.Sprintf("From %s a pod that names it does not start.", p.Removed)
+			consequence = fmt.Sprintf("From %s a pod that names it, or that mounts a claim bound to a PersistentVolume that does, does not start.", p.Removed)
+			if p.Provisioner != "" && named {
+				consequence += fmt.Sprintf(" A StorageClass with provisioner %s has its new claims provisioned by the in-tree plugin, so from %s they are not provisioned.", p.Provisioner, p.Removed)
+			}
 			switch {
 			case p.Removed.Compare(target) <= 0:
 				f.Severity = SevBlocker
@@ -77,6 +112,9 @@ func evalVolumePlugins(inv inventory.Inventory, k kb.KB, target inventory.Versio
 		case kb.VolumeCSIMigration:
 			f.Title = fmt.Sprintf("In-tree volume plugin %s needs CSI driver %s from %s (%s)", u.Plugin, p.CSIDriver, p.Removed, count)
 			consequence = fmt.Sprintf("From %s the %s CSI driver serves every operation on these volumes: a cluster without it installed cannot mount them, one with it is fine.", p.Removed, p.CSIDriver)
+			if p.Provisioner != "" && named {
+				consequence += fmt.Sprintf(" A StorageClass with provisioner %s has its new claims provisioned by the in-tree plugin, so from %s by that CSI driver.", p.Provisioner, p.Removed)
+			}
 			f.Severity = SevInfo
 			if p.Removed.Compare(target) <= 0 {
 				f.Severity = SevWarning
@@ -88,10 +126,10 @@ func evalVolumePlugins(inv inventory.Inventory, k kb.KB, target inventory.Versio
 		}
 		where, names := namespaceBreakdown(u.Namespaces, listed.emptyNamespace())
 		verb := "name"
-		if u.Count == 1 {
+		if total == 1 {
 			verb = "names"
 		}
-		f.Detail = fmt.Sprintf("%s %s it, in: %s. %s", count, verb, where, consequence)
+		f.Detail = fmt.Sprintf("%s %s it, in: %s. %s", subject, verb, where, consequence)
 		if p.Note != "" {
 			f.Detail += " Upstream: " + p.Note + "."
 		}
@@ -101,6 +139,36 @@ func evalVolumePlugins(inv inventory.Inventory, k kb.KB, target inventory.Versio
 		}
 	}
 	return out
+}
+
+// pluralVolumeObjects counts a cluster's PersistentVolumes and
+// StorageClasses: "1 PersistentVolume or StorageClass", "2 PersistentVolumes
+// or StorageClasses".
+func pluralVolumeObjects(n int) string {
+	if n == 1 {
+		return "1 PersistentVolume or StorageClass"
+	}
+	return fmt.Sprintf("%d PersistentVolumes or StorageClasses", n)
+}
+
+// volumeObjectsListed says what a volume plugin row's objects are: a
+// files inventory's are manifests'; a cluster's are its PersistentVolumes
+// and StorageClasses (no line), where an empty namespace is a
+// cluster-scoped object; and the gate's proposed state lists the
+// cluster's before the manifests' (mergeVolumePlugins), which are
+// manifests' alone when the first has a line, and mixed otherwise.
+func volumeObjectsListed(src inventory.Source, refs []inventory.ObjectRef) objectsListed {
+	switch {
+	case src == inventory.SourceFiles:
+		return manifestObjects
+	case len(refs) == 0:
+		return storedObjects
+	case refs[0].Line > 0:
+		return manifestObjects
+	case slices.ContainsFunc(refs, func(r inventory.ObjectRef) bool { return r.Line > 0 }):
+		return mixedObjects
+	}
+	return storedObjects
 }
 
 // deprecatedWhen says when a plugin was deprecated relative to target:

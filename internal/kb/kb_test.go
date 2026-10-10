@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 
@@ -212,5 +213,19 @@ func TestDatasetVersion(t *testing.T) {
 		if v == base {
 			t.Errorf("changing the %s did not change the label %q", name, base)
 		}
+	}
+
+	// A StorageClass provisioner of a volume plugin (#362) is part of the
+	// label: the same plugins with one provisioner edited label otherwise.
+	vols := VolumePlugins()
+	withVols, _ := datasetVersion(from, entries(), nil, vols, addons(), providers())
+	edited := VolumePlugins()
+	i := slices.IndexFunc(edited, func(p VolumePlugin) bool { return p.Provisioner != "" })
+	if i < 0 {
+		t.Fatal("no volume plugin has a provisioner")
+	}
+	edited[i].Provisioner += "-edited"
+	if v, _ := datasetVersion(from, entries(), nil, edited, addons(), providers()); v == withVols {
+		t.Errorf("changing a volume plugin's provisioner did not change the label %q", withVols)
 	}
 }

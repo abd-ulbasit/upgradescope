@@ -1,10 +1,12 @@
 {
-  "_comment": "Hand-authored, not generated: the in-tree volume plugins whose PodSpec volumes[] or PersistentVolumeSpec field stops working, or needs a CSI driver, at a Kubernetes minor. Every minor is from the upstream release notes (CHANGELOG-1.x.md, the GA release section) and the pull request that made the change; the classification follows the k8s.io/api core/v1 field comments ('no longer supported' or 'redirected to the <driver> CSI driver'). See docs/concepts/volume-plugins.md.",
+  "_comment": "Hand-authored, not generated: the in-tree volume plugins whose PodSpec volumes[] or PersistentVolumeSpec field stops working, or needs a CSI driver, at a Kubernetes minor. Every minor is from the upstream release notes (CHANGELOG-1.x.md, the GA release section) and the pull request that made the change; the classification follows the k8s.io/api core/v1 field comments ('no longer supported' or 'redirected to the <driver> CSI driver'). A provisioner is the in-tree StorageClass provisioner of the plugin, cited to the upstream source that names it (pkg/volume of the last release that had the plugin, or k8s.io/csi-translation-lib for a CSI-migrated one). See docs/concepts/volume-plugins.md.",
   "plugins": [
     {
       "plugin": "scaleIO",
       "classification": "removed",
       "removed": "1.22",
+      "provisioner": "kubernetes.io/scaleio",
+      "provisionerCitation": "https://github.com/kubernetes/kubernetes/blob/release-1.21/pkg/volume/scaleio/sio_plugin.go",
       "replacement": "move the data to a volume of a CSI driver for your storage (Dell PowerFlex has one)",
       "citations": [
         "https://github.com/kubernetes/kubernetes/blob/master/CHANGELOG/CHANGELOG-1.22.md",
@@ -16,6 +18,8 @@
       "classification": "removed",
       "deprecated": "1.22",
       "removed": "1.25",
+      "provisioner": "kubernetes.io/flocker",
+      "provisionerCitation": "https://github.com/kubernetes/kubernetes/blob/release-1.24/pkg/volume/flocker/flocker.go",
       "replacement": "move the data to a volume of a CSI driver for your storage",
       "citations": [
         "https://github.com/kubernetes/kubernetes/blob/master/CHANGELOG/CHANGELOG-1.25.md",
@@ -28,6 +32,8 @@
       "classification": "removed",
       "deprecated": "1.22",
       "removed": "1.25",
+      "provisioner": "kubernetes.io/quobyte",
+      "provisionerCitation": "https://github.com/kubernetes/kubernetes/blob/release-1.24/pkg/volume/quobyte/quobyte.go",
       "replacement": "move the data to a volume of a CSI driver for your storage",
       "citations": [
         "https://github.com/kubernetes/kubernetes/blob/master/CHANGELOG/CHANGELOG-1.25.md",
@@ -40,6 +46,8 @@
       "classification": "removed",
       "deprecated": "1.22",
       "removed": "1.25",
+      "provisioner": "kubernetes.io/storageos",
+      "provisionerCitation": "https://github.com/kubernetes/kubernetes/blob/release-1.24/pkg/volume/storageos/storageos.go",
       "replacement": "move the data to a volume of a CSI driver for your storage",
       "citations": [
         "https://github.com/kubernetes/kubernetes/blob/master/CHANGELOG/CHANGELOG-1.25.md",
@@ -52,6 +60,8 @@
       "classification": "removed",
       "deprecated": "1.25",
       "removed": "1.26",
+      "provisioner": "kubernetes.io/glusterfs",
+      "provisionerCitation": "https://github.com/kubernetes/kubernetes/blob/release-1.25/pkg/volume/glusterfs/glusterfs.go",
       "replacement": "migrate the volumes to another storage solution before the upgrade; there is no CSI migration for GlusterFS",
       "citations": [
         "https://github.com/kubernetes/kubernetes/blob/master/CHANGELOG/CHANGELOG-1.26.md",
@@ -76,6 +86,8 @@
       "classification": "removed",
       "deprecated": "1.28",
       "removed": "1.31",
+      "provisioner": "kubernetes.io/rbd",
+      "provisionerCitation": "https://github.com/kubernetes/kubernetes/blob/release-1.30/pkg/volume/rbd/rbd.go",
       "replacement": "redeploy the workload on a volume of the RBD CSI driver (ceph-csi); its CSI migration support was removed with the plugin",
       "citations": [
         "https://github.com/kubernetes/kubernetes/blob/master/CHANGELOG/CHANGELOG-1.31.md",
@@ -102,6 +114,8 @@
       "classification": "csi-migration",
       "removed": "1.26",
       "csiDriver": "cinder.csi.openstack.org",
+      "provisioner": "kubernetes.io/cinder",
+      "provisionerCitation": "https://github.com/kubernetes/kubernetes/blob/master/staging/src/k8s.io/csi-translation-lib/plugins/openstack_cinder.go",
       "replacement": "install the cinder.csi.openstack.org CSI driver (cloud-provider-openstack) before the upgrade",
       "citations": [
         "https://github.com/kubernetes/kubernetes/blob/master/CHANGELOG/CHANGELOG-1.26.md",
@@ -113,6 +127,8 @@
       "classification": "csi-migration",
       "removed": "1.27",
       "csiDriver": "ebs.csi.aws.com",
+      "provisioner": "kubernetes.io/aws-ebs",
+      "provisionerCitation": "https://github.com/kubernetes/kubernetes/blob/master/staging/src/k8s.io/csi-translation-lib/plugins/aws_ebs.go",
       "replacement": "install the ebs.csi.aws.com CSI driver (aws-ebs-csi-driver) before the upgrade",
       "citations": [
         "https://github.com/kubernetes/kubernetes/blob/master/CHANGELOG/CHANGELOG-1.27.md",
@@ -124,6 +140,8 @@
       "classification": "csi-migration",
       "removed": "1.27",
       "csiDriver": "disk.csi.azure.com",
+      "provisioner": "kubernetes.io/azure-disk",
+      "provisionerCitation": "https://github.com/kubernetes/kubernetes/blob/master/staging/src/k8s.io/csi-translation-lib/plugins/azure_disk.go",
       "replacement": "install the disk.csi.azure.com CSI driver (azuredisk-csi-driver) before the upgrade",
       "citations": [
         "https://github.com/kubernetes/kubernetes/blob/master/CHANGELOG/CHANGELOG-1.27.md",
@@ -136,6 +154,8 @@
       "deprecated": "1.17",
       "removed": "1.28",
       "csiDriver": "pd.csi.storage.gke.io",
+      "provisioner": "kubernetes.io/gce-pd",
+      "provisionerCitation": "https://github.com/kubernetes/kubernetes/blob/master/staging/src/k8s.io/csi-translation-lib/plugins/gce_pd.go",
       "replacement": "install the pd.csi.storage.gke.io CSI driver (gcp-compute-persistent-disk-csi-driver) before the upgrade",
       "citations": [
         "https://github.com/kubernetes/kubernetes/blob/master/CHANGELOG/CHANGELOG-1.28.md",
@@ -149,6 +169,8 @@
       "removed": "1.29",
       "note": "CSI migration became unconditional in 1.29, when its GA feature gate was removed",
       "csiDriver": "csi.vsphere.vmware.com",
+      "provisioner": "kubernetes.io/vsphere-volume",
+      "provisionerCitation": "https://github.com/kubernetes/kubernetes/blob/master/staging/src/k8s.io/csi-translation-lib/plugins/vsphere_volume.go",
       "replacement": "install the csi.vsphere.vmware.com CSI driver (vsphere-csi-driver) before the upgrade",
       "citations": [
         "https://github.com/kubernetes/kubernetes/blob/master/CHANGELOG/CHANGELOG-1.29.md",
@@ -161,6 +183,8 @@
       "removed": "1.30",
       "note": "a removal merged for 1.28 was reverted before release (kubernetes/kubernetes#118388)",
       "csiDriver": "file.csi.azure.com",
+      "provisioner": "kubernetes.io/azure-file",
+      "provisionerCitation": "https://github.com/kubernetes/kubernetes/blob/master/staging/src/k8s.io/csi-translation-lib/plugins/azure_file.go",
       "replacement": "install the file.csi.azure.com CSI driver (azurefile-csi-driver) before the upgrade",
       "citations": [
         "https://github.com/kubernetes/kubernetes/blob/master/CHANGELOG/CHANGELOG-1.30.md",
@@ -174,6 +198,8 @@
       "deprecated": "1.25",
       "removed": "1.36",
       "csiDriver": "pxd.portworx.com",
+      "provisioner": "kubernetes.io/portworx-volume",
+      "provisionerCitation": "https://github.com/kubernetes/kubernetes/blob/master/staging/src/k8s.io/csi-translation-lib/plugins/portworx.go",
       "replacement": "install the pxd.portworx.com CSI driver before the upgrade",
       "citations": [
         "https://github.com/kubernetes/kubernetes/blob/master/CHANGELOG/CHANGELOG-1.36.md",
