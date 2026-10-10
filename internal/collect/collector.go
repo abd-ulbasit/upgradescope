@@ -270,6 +270,7 @@ func steps(c Clients, k kb.KB, opts Options) []step {
 		}},
 		{cap: inventory.CapAddOns, run: func(ctx context.Context, inv *inventory.Inventory) error { // after helm: consumes inv.HelmReleases
 			if c.Kube == nil {
+				inv.Capabilities[inventory.CapVolumes] = inventory.CapabilityStatus{Reason: "kubernetes client not configured"} // read from the same pods
 				return errors.New("kubernetes client not configured")
 			}
 			return collectAddOnsFrom(ctx, c.Kube, k.AddOns, inv, &kubeSystem, opts.PodPass)

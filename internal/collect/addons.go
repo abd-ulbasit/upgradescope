@@ -61,6 +61,7 @@ type addOnEvidence struct {
 	releases           []inventory.HelmRelease
 	gitops             []inventory.GitOpsChart // charts Argo CD and Flux deploy
 	ingressControllers []string                // IngressClass spec.controller values
+	volumes            volumeTally             // in-tree volume plugins of live pods (#351)
 }
 
 // addPod adds one pod's (or pod template's) images, and the pod to
@@ -131,10 +132,12 @@ func collectAddOnsFrom(ctx context.Context, kube kubernetes.Interface, addons []
 	ev := addOnEvidence{releases: inv.HelmReleases, gitops: inv.GitOpsCharts}
 	var failures, skipped []string
 	var podErr error
+	podsRead := false // a page of the pod list was read
 	classesRead := false
 	opts := metav1.ListOptions{Limit: listPageSize} // then sized by pageLimit
 	if sysPods.read {
 		ev.images, ev.labelled = sysPods.ev.images, sysPods.ev.labelled
+		ev.volumes.merge(sysPods.ev.volumes)
 		opts.FieldSelector = "metadata.namespace!=" + metav1.NamespaceSystem
 	}
 	// The pods outside kube-system are listed only every few collections,
@@ -146,6 +149,7 @@ func collectAddOnsFrom(ctx context.Context, kube kubernetes.Interface, addons []
 	if sysPods.read {
 		if images, labelled, age, ok := pass.reuse(sig); ok {
 			ev.images, ev.labelled = slices.Concat(ev.images, images), slices.Concat(ev.labelled, labelled)
+			ev.volumes.merge(pass.volumes)
 			inv.AddOnEvidenceAgeSeconds = age
 			listPods = false
 		}
@@ -169,7 +173,7 @@ func collectAddOnsFrom(ctx context.Context, kube kubernetes.Interface, addons []
 		if err != nil {
 			podErr = err
 			if opts.Continue == "" {
-				ev.images, ev.labelled = nil, nil // no pod was read, kube-system's included
+				ev.images, ev.labelled, ev.volumes = nil, nil, volumeTally{} // no pod was read, kube-system's included
 			}
 			failures = append(failures, fmt.Sprintf("list pods: %v", err))
 			skipped = append(skipped, inventory.SkippedPods)
@@ -185,7 +189,9 @@ func collectAddOnsFrom(ctx context.Context, kube kubernetes.Interface, addons []
 				continue // already counted from versions' list
 			}
 			ev.addPod(p.Namespace, p.Labels, podContainerImages(p))
+			ev.volumes.addPod(p.Namespace, p.Spec.Volumes)
 		}
+		podsRead = true
 		if pods.Continue == "" {
 			break
 		}
@@ -223,6 +229,7 @@ func collectAddOnsFrom(ctx context.Context, kube kubernetes.Interface, addons []
 	var unrec []string
 	inv.AddOns, unrec = matchAddOns(ev, addons)
 	setUnrecognized(inv, unrec)
+	setLiveVolumes(inv, ev.volumes, podErr, podsRead)
 	if podErr != nil && len(ev.releases) == 0 && len(ev.gitops) == 0 && !classesRead {
 		return fmt.Errorf("list pods: %w", podErr) // nothing was read: not assessed, not partial
 	}

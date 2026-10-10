@@ -47,6 +47,9 @@ type manifestObject struct {
 	// defines, set on every such object counted (see attachCRDs); an
 	// unreadable one is empty.
 	crd *inventory.CRD
+	// volumes are the in-tree volume plugins it names (manifestVolumePlugins),
+	// set on kubectl's objects and copied onto the walk's (attachVolumes).
+	volumes []string
 }
 
 // podTemplate is what add-on detection reads of a pod template: its
@@ -382,6 +385,7 @@ func (p *streamParser) settle(root *yaml.Node, yerr error, text []byte, first in
 	}
 	p.bad = append(p.bad, warnings...)
 	attachCRDs(objs, kubectl)
+	attachVolumes(objs, kubectl)
 	p.objs = append(p.objs, objs...)
 	p.addEvidence(kubectl)
 }
@@ -466,6 +470,7 @@ func kubectlSends(raw []byte) ([]manifestObject, error) {
 		}
 		if u, ok := o.(*unstructured.Unstructured); ok {
 			mo.template = podTemplateOf(k.GroupKind(), u.Object)
+			mo.volumes = manifestVolumePlugins(k.GroupKind(), u.Object)
 			if k.GroupKind() == (schema.GroupKind{Group: "networking.k8s.io", Kind: "IngressClass"}) {
 				mo.ingressController, _, _ = unstructured.NestedString(u.Object, "spec", "controller")
 			}
@@ -1034,6 +1039,9 @@ func CollectManifests(r io.Reader, addons []registry.AddOn) (inventory.Inventory
 	inv := manifestInventory("manifests", "manifests mode", counts)
 	assessAddOns(&inv, ev, addons)
 	assessCRDs(&inv, crdsOf(objs))
+	var vols volumeTally
+	vols.addObjects(objs)
+	assessVolumes(&inv, vols, 0)
 	return inv, nil
 }
 
@@ -1134,6 +1142,8 @@ func CollectFiles(root string, k kb.KB) (inventory.Inventory, FilesSummary, erro
 	slices.SortFunc(removed, compareGVK)
 	var hiding []string // "file:line (group/version Kind)" per unassessed part naming a removed API
 	var crds []inventory.CRD
+	var vols volumeTally
+	unassessed := 0 // documents not decoded, whose volumes went unchecked
 	counts := map[gvk]*inventory.APIUsage{}
 	var ev addOnEvidence
 	var sum FilesSummary
@@ -1193,6 +1203,9 @@ func CollectFiles(root string, k kb.KB) (inventory.Inventory, FilesSummary, erro
 		}
 		for _, b := range bad {
 			sum.Warnings = append(sum.Warnings, FileWarning{File: rel, Line: b.line, Err: b.err, Unassessed: b.unassessed != nil})
+			if b.unassessed != nil {
+				unassessed++
+			}
 			if g, ok := b.names(removed); ok {
 				hiding = append(hiding, fmt.Sprintf("%s:%d (%s)", rel, b.line, g))
 			}
@@ -1206,6 +1219,7 @@ func CollectFiles(root string, k kb.KB) (inventory.Inventory, FilesSummary, erro
 		}
 		sum.Objects += len(objs)
 		accumulate(counts, objs)
+		vols.addObjects(objs)
 		crds = append(crds, crdsOf(objs)...)
 		ev.images = append(ev.images, fileEv.images...)
 		ev.labelled = append(ev.labelled, fileEv.labelled...)
@@ -1218,6 +1232,7 @@ func CollectFiles(root string, k kb.KB) (inventory.Inventory, FilesSummary, erro
 	inv := manifestInventory("files", "files mode", counts)
 	assessAddOns(&inv, ev, k.AddOns)
 	assessCRDs(&inv, crds)
+	assessVolumes(&inv, vols, unassessed)
 	if len(hiding) > 0 {
 		listed := hiding[:min(len(hiding), 5)]
 		more := ""
