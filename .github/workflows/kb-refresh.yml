@@ -57,6 +57,14 @@ name: kb-refresh
 # release assets, or write main's cache. hack/kb-refresh-ci_test.sh and
 # hack/kb-refresh-scope_test.sh pin this.
 #
+# Re-running. Each -run job fixes the name it gave its build run
+# (github.run_id and run_attempt at that time) and hands it on as an output,
+# so "Re-run failed jobs" on a failed <p>-verify checks the run that was
+# dispatched, not a run named for the later attempt number. A failed <p>-run
+# job cannot be re-run alone: cleanup has deleted the staging branch and
+# stage, which succeeded, is not re-run; and the build run's artifacts are
+# kept one day. In both cases use "Re-run all jobs".
+#
 # How the bot PRs get CI without a PAT or App secret (#11).
 # create-pull-request pushes the bot branch and opens the PR with this run's
 # GITHUB_TOKEN, so the PR comes from github-actions[bot]. GitHub does create
@@ -122,8 +130,16 @@ jobs:
           # is fail-soft) at an older main could otherwise be refused when
           # moving it onto a commit that changed .github/workflows, which a
           # GITHUB_TOKEN may not do without the workflows permission.
-          if gh api "repos/$GH_REPO/git/ref/$ref" >/dev/null 2>&1; then
+          # Only a 404 means the branch is absent; any other error (a 5xx, a
+          # rate limit) stops here instead of being read as "absent" and
+          # failing later on the create with "Reference already exists".
+          if err=$(gh api "repos/$GH_REPO/git/ref/$ref" 2>&1 >/dev/null); then
             gh api -X DELETE "repos/$GH_REPO/git/refs/$ref" >/dev/null
+          elif grep -q 'HTTP 404' <<<"$err"; then
+            echo "$BUILD_BRANCH does not exist yet"
+          else
+            echo "::error::could not look up $BUILD_BRANCH: $err"
+            exit 1
           fi
           gh api -X POST "repos/$GH_REPO/git/refs" -f ref="refs/$ref" -f sha="$SHA" >/dev/null
           echo "$BUILD_BRANCH is at $SHA"
@@ -139,6 +155,7 @@ jobs:
       actions: write # dispatch kb-refresh-build.yml; cancel the run if it hangs
       contents: read
     outputs:
+      request: ${{ steps.run.outputs.request }} # the name the verify job looks for, fixed here so a re-run of that job checks this dispatch
       run-id: ${{ steps.run.outputs.run-id }}
     env:
       GH_TOKEN: ${{ github.token }}
@@ -152,6 +169,10 @@ jobs:
         id: run
         run: |
           set -euo pipefail
+          # Computed here only: the verify job reads it from this job's outputs,
+          # so re-running the verify job alone (a later attempt number) still
+          # looks for the run that was dispatched.
+          echo "request=$REQUEST" >>"$GITHUB_OUTPUT"
           # A workflow_dispatch run takes its workflow from the ref it is
           # dispatched on, and its cache and artifacts belong to that ref and
           # run, not to main. This pipeline gets a run of its own, so its
@@ -211,7 +232,7 @@ jobs:
       GH_REPO: ${{ github.repository }}
       SHA: ${{ github.sha }}
       PIPELINE: api-lifecycle
-      REQUEST: ${{ github.run_id }}-${{ github.run_attempt }}
+      REQUEST: ${{ needs.api-lifecycle-run.outputs.request }}
       BUILD_BRANCH: bot/kb-refresh-build
       RUN_ID: ${{ needs.api-lifecycle-run.outputs.run-id }}
     steps:
@@ -222,6 +243,7 @@ jobs:
         run: |
           set -euo pipefail
           api() { gh api "repos/$GH_REPO/$1"; }
+          [ -n "$REQUEST" ] || { echo "::error::refusing run $RUN_ID: the run job handed on no request name"; exit 1; }
           run=$(api "actions/runs/$RUN_ID")
           problems=$(jq -r --arg id "$RUN_ID" --arg repo "$GH_REPO" --arg branch "$BUILD_BRANCH" --arg sha "$SHA" \
             --arg title "kb-refresh-build $PIPELINE $REQUEST" '
@@ -260,7 +282,15 @@ jobs:
           # runs no repository code): one line, for this pipeline.
           seal=$(jq -r '[ .jobs[] | select(.name == "seal") | .id ] | first // empty' <<<"$jobs")
           [ -n "$seal" ] || { echo "::error::refusing run $RUN_ID: no seal job"; exit 1; }
-          lines=$(api "actions/jobs/$seal/logs" | tr -d '\r' | grep -E "^[0-9T:.Z-]+ kb-refresh-patch-sha256 $PIPELINE [0-9a-f]{64}$" || true)
+          # A log that is not ready yet is fetched again; a fetch that keeps
+          # failing is reported as that, not as a missing digest.
+          logs=''
+          for attempt in 1 2 3; do
+            [ "$attempt" = 1 ] || sleep 10
+            logs=$(api "actions/jobs/$seal/logs") && break || logs=''
+          done
+          [ -n "$logs" ] || { echo "::error::refusing run $RUN_ID: could not fetch the seal job's log (job $seal)"; exit 1; }
+          lines=$(tr -d '\r' <<<"$logs" | grep -E "^[0-9T:.Z-]+ kb-refresh-patch-sha256 $PIPELINE [0-9a-f]{64}$" || true)
           [ "$(wc -l <<<"$lines" | tr -d ' ')" = 1 ] && [ -n "$lines" ] || { echo "::error::refusing run $RUN_ID: the seal job's log does not hold exactly one digest line for $PIPELINE"; exit 1; }
           echo "sha256=${lines##* }" >>"$GITHUB_OUTPUT"
           echo "run $RUN_ID is the $PIPELINE build of $SHA on $BUILD_BRANCH; digest ${lines##* }"
@@ -441,6 +471,7 @@ jobs:
       actions: write # dispatch kb-refresh-build.yml; cancel the run if it hangs
       contents: read
     outputs:
+      request: ${{ steps.run.outputs.request }} # the name the verify job looks for, fixed here so a re-run of that job checks this dispatch
       run-id: ${{ steps.run.outputs.run-id }}
     env:
       GH_TOKEN: ${{ github.token }}
@@ -454,6 +485,10 @@ jobs:
         id: run
         run: |
           set -euo pipefail
+          # Computed here only: the verify job reads it from this job's outputs,
+          # so re-running the verify job alone (a later attempt number) still
+          # looks for the run that was dispatched.
+          echo "request=$REQUEST" >>"$GITHUB_OUTPUT"
           # A workflow_dispatch run takes its workflow from the ref it is
           # dispatched on, and its cache and artifacts belong to that ref and
           # run, not to main. This pipeline gets a run of its own, so its
@@ -513,7 +548,7 @@ jobs:
       GH_REPO: ${{ github.repository }}
       SHA: ${{ github.sha }}
       PIPELINE: registry
-      REQUEST: ${{ github.run_id }}-${{ github.run_attempt }}
+      REQUEST: ${{ needs.registry-run.outputs.request }}
       BUILD_BRANCH: bot/kb-refresh-build
       RUN_ID: ${{ needs.registry-run.outputs.run-id }}
     steps:
@@ -524,6 +559,7 @@ jobs:
         run: |
           set -euo pipefail
           api() { gh api "repos/$GH_REPO/$1"; }
+          [ -n "$REQUEST" ] || { echo "::error::refusing run $RUN_ID: the run job handed on no request name"; exit 1; }
           run=$(api "actions/runs/$RUN_ID")
           problems=$(jq -r --arg id "$RUN_ID" --arg repo "$GH_REPO" --arg branch "$BUILD_BRANCH" --arg sha "$SHA" \
             --arg title "kb-refresh-build $PIPELINE $REQUEST" '
@@ -562,7 +598,15 @@ jobs:
           # runs no repository code): one line, for this pipeline.
           seal=$(jq -r '[ .jobs[] | select(.name == "seal") | .id ] | first // empty' <<<"$jobs")
           [ -n "$seal" ] || { echo "::error::refusing run $RUN_ID: no seal job"; exit 1; }
-          lines=$(api "actions/jobs/$seal/logs" | tr -d '\r' | grep -E "^[0-9T:.Z-]+ kb-refresh-patch-sha256 $PIPELINE [0-9a-f]{64}$" || true)
+          # A log that is not ready yet is fetched again; a fetch that keeps
+          # failing is reported as that, not as a missing digest.
+          logs=''
+          for attempt in 1 2 3; do
+            [ "$attempt" = 1 ] || sleep 10
+            logs=$(api "actions/jobs/$seal/logs") && break || logs=''
+          done
+          [ -n "$logs" ] || { echo "::error::refusing run $RUN_ID: could not fetch the seal job's log (job $seal)"; exit 1; }
+          lines=$(tr -d '\r' <<<"$logs" | grep -E "^[0-9T:.Z-]+ kb-refresh-patch-sha256 $PIPELINE [0-9a-f]{64}$" || true)
           [ "$(wc -l <<<"$lines" | tr -d ' ')" = 1 ] && [ -n "$lines" ] || { echo "::error::refusing run $RUN_ID: the seal job's log does not hold exactly one digest line for $PIPELINE"; exit 1; }
           echo "sha256=${lines##* }" >>"$GITHUB_OUTPUT"
           echo "run $RUN_ID is the $PIPELINE build of $SHA on $BUILD_BRANCH; digest ${lines##* }"

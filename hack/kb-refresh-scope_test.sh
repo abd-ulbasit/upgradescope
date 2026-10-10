@@ -198,6 +198,7 @@ audit() {
   # ---- the entry workflow (main) builds nothing.
   for j in $(job_ids "$e"); do
     body=$(job "$e" "$j")
+    case $j in *-run) ;; *) strip_comments "$body" | grep -q 'github.run_attempt' && echo "rerun: $e: job $j uses github.run_attempt (a re-run of this job alone would see a later attempt than the job that dispatched)" ;; esac
     if runs_code "$body"; then echo "entry-runs-code: $e: job $j runs go, make or setup-go on the ref the schedule runs on"; fi
     if grep -q 'uses: actions/upload-artifact@' <<<"$body"; then
       case $j in *-verify) ;; *) echo "entry-artifact: $e: job $j uploads an artifact" ;; esac
@@ -218,6 +219,7 @@ audit() {
     grep -qF -- '-X DELETE "repos/$GH_REPO/git/refs/$ref"' <<<"$body" || echo "stage: $e: stage does not delete a leftover branch before creating it"
     grep -qF -- '-X PATCH' <<<"$body" && echo "stage: $e: stage moves a leftover branch (a ref update that moves workflow files can be refused)"
     [ "$(field 6 BUILD_BRANCH <<<"$body")" = "$branch" ] || echo "stage: $e: BUILD_BRANCH is not $branch (the build workflow's guard)"
+    grep -qF "grep -q 'HTTP 404'" <<<"$body" || echo "stage: $e: stage does not tell a missing branch (404) from other lookup errors"
   fi
   body=$(job "$e" cleanup)
   [ "$(perms_of "$body")" = "contents: write" ] || echo "cleanup: $e: cleanup has permissions '$(perms_of "$body")', want contents: write only"
@@ -240,6 +242,9 @@ audit() {
       grep -qF 'select(.displayTitle == "kb-refresh-build " + env.PIPELINE + " " + env.REQUEST and .headSha == env.SHA)' <<<"$body" ||
         echo "run-job: $e: $p-run does not find its run by pipeline, request and commit"
       grep -qF '[ "$conclusion" = success ]' <<<"$body" || echo "run-job: $e: $p-run does not fail on a run that did not succeed"
+      # The name the verify job looks for is fixed here, once.
+      grep -qF 'request: ${{ steps.run.outputs.request }}' <<<"$body" || echo "rerun: $e: $p-run does not hand on the request name as a job output"
+      grep -qF 'echo "request=$REQUEST" >>"$GITHUB_OUTPUT"' <<<"$body" || echo "rerun: $e: $p-run does not write the request name to its step output"
     fi
 
     # -- the verify job: a read-only token, the run checked BEFORE the
@@ -253,6 +258,12 @@ audit() {
       grep -qE 'uses: actions/checkout@' <<<"$body" && echo "verify: $e: $p-verify checks out the repository"
       [ "$(field 6 PIPELINE <<<"$body")" = "$p" ] || echo "verify: $e: $p-verify's PIPELINE is not $p"
       grep -qF 'RUN_ID: ${{ needs.'"$p"'-run.outputs.run-id }}' <<<"$body" || echo "verify: $e: $p-verify does not check the run $p-run dispatched"
+      # "Re-run failed jobs" on this job alone runs it at attempt 2 while the
+      # build run is still named for the dispatch: the name must come from
+      # the run job's outputs, never from this job's own run_attempt.
+      rq=$(field 6 REQUEST <<<"$body")
+      [ "$rq" = '${{ needs.'"$p"'-run.outputs.request }}' ] || echo "rerun: $e: $p-verify's REQUEST is '$rq', want the $p-run job's request output"
+      expr_bad "$rq" 55-1 "{\"github\":{\"run_id\":55,\"run_attempt\":2},\"needs\":{\"$p-run\":{\"outputs\":{\"request\":\"55-1\"}}}}" | tag "rerun: $e: $p-verify re-run at attempt 2: "
       chk=$(step "Check the run and read the patch's digest" <<<"$body")
       for need in \
         '.id | tostring) != $id' \
@@ -264,7 +275,8 @@ audit() {
         'select(.name == $p or .name == "seal")' 'select(.conclusion == "success")' \
         '.name != $p and .name != "seal" and .conclusion != "skipped"' \
         '= "kb-refresh-$PIPELINE" ]' '.expired' \
-        'kb-refresh-patch-sha256 $PIPELINE [0-9a-f]{64}$'; do
+        'kb-refresh-patch-sha256 $PIPELINE [0-9a-f]{64}$' \
+        "could not fetch the seal job's log" 'for attempt in 1 2 3'; do
         grep -qF -- "$need" <<<"$chk" || echo "verify-run: $e: $p-verify does not check '$need' before it downloads"
       done
       grep -qF 'echo "sha256=${lines##* }" >>"$GITHUB_OUTPUT"' <<<"$chk" || echo "verify-run: $e: $p-verify does not hand on the sealed digest"
@@ -450,6 +462,14 @@ mutant "the stage job checks out the repository" stage 's/(  stage:\n(?:.*\n)*? 
 mutant "the stage job holds more than it needs" stage 's/(  stage:\n(?:.*\n)*?      contents: write[^\n]*\n)/$1      actions: write\n/' -
 mutant "the stage job stages main on another branch" stage 's/(  stage:\n(?:.*\n)*?      BUILD_BRANCH: )bot\/kb-refresh-build/${1}bot\/other/' -
 mutant "the cleanup job holds more than it needs" cleanup 's/(  cleanup:\n(?:.*\n)*?      contents: write[^\n]*\n)/$1      actions: write\n/' -
+# Re-running.
+mutant "the verify job derives the request name from its own run attempt" rerun 's/(  registry-verify:\n(?:.*\n)*?      REQUEST: )\$\{\{ needs\.registry-run\.outputs\.request \}\}/$1\${{ github.run_id }}-\${{ github.run_attempt }}/' -
+mutant "the api-lifecycle verify job derives the request name from its own run attempt" rerun 's/(  api-lifecycle-verify:\n(?:.*\n)*?      REQUEST: )\$\{\{ needs\.api-lifecycle-run\.outputs\.request \}\}/$1\${{ github.run_id }}-\${{ github.run_attempt }}/' -
+mutant "a run job that hands on no request name" rerun 's/(  registry-run:\n(?:.*\n)*?    outputs:\n)      request: [^\n]*\n/$1/' -
+mutant "a PR job that derives a name from the run attempt" rerun 's/(  registry-pr:\n(?:.*\n)*?    runs-on: ubuntu-latest\n)/$1    env:\n      N: \${{ github.run_attempt }}\n/' -
+mutant "the verify job reports a failed log fetch as a missing digest" verify-run 's/could not fetch the seal job.s log/the seal job log is odd/g' -
+mutant "the verify job does not fetch the log again" verify-run 's/for attempt in 1 2 3/for attempt in 1/g' -
+mutant "the stage job reads every lookup error as an absent branch" stage 's/elif grep -q .HTTP 404. <<<"\$err"; then/elif true; then/' -
 mutant "a PR job that runs whatever its verify did" pr-job 's/^    if: needs\.registry-verify\.result == .success.\n//m' -
 mutant "a PR job that runs whatever the other pipeline did" pr-job 's/needs\.api-lifecycle-verify\.result == .success./needs.registry-verify.result == \x27success\x27/' -
 mutant "an action not pinned by SHA" pin 's/actions\/download-artifact\@[0-9a-f]{40}/actions\/download-artifact\@v8/' -
@@ -464,10 +484,10 @@ wait
 
 mkdir -p "$work/bin"
 # gh: logs each call. Answers from files in $STUB: ref-exists (present: the
-# staging branch exists), list.json (gh run list's JSON), status.N (the n-th
+# staging branch exists; ref-error: looking it up fails with a 500), list.json (gh run list's JSON), status.N (the n-th
 # run reading of the build run, "<status> <conclusion>", the last once they
 # run out), run.json / jobs.json / artifacts.json / logs.txt (the build run as
-# the verify job reads it). `gh api` / `gh run list` apply --jq with jq, as gh
+# the verify job reads it; logs-fail holds the number of log fetches that fail first). `gh api` / `gh run list` apply --jq with jq, as gh
 # does.
 cat >"$work/bin/gh" <<'STUB'
 #!/usr/bin/env bash
@@ -475,6 +495,7 @@ echo "gh $*" >>"$GH_LOG"
 jqf() { local f=; while [ $# -gt 0 ]; do [ "$1" = --jq ] && f=$2; shift; done; jq -r "${f:-.}"; }
 case "$1 $2" in
   "api repos/o/r/git/ref/heads/bot/kb-refresh-build")
+    [ ! -e "$STUB/ref-error" ] || { echo 'gh: Internal Server Error (HTTP 500)' >&2; exit 1; }
     [ -e "$STUB/ref-exists" ] || { echo 'gh: Not Found (HTTP 404)' >&2; exit 1; }
     echo '{}' ;;
   "api -X")
@@ -494,7 +515,12 @@ case "$1 $2" in
     fi ;;
   "api repos/o/r/actions/runs/777/jobs?per_page=100") jqf "$@" <"$STUB/jobs.json" ;;
   "api repos/o/r/actions/runs/777/artifacts?per_page=100") jqf "$@" <"$STUB/artifacts.json" ;;
-  "api repos/o/r/actions/jobs/13/logs") cat "$STUB/logs.txt" ;;
+  "api repos/o/r/actions/jobs/13/logs")
+    if [ -e "$STUB/logs-fail" ]; then
+      n=$(($(cat "$STUB/logs.n" 2>/dev/null || echo 0) + 1)); echo "$n" >"$STUB/logs.n"
+      if [ "$n" -le "$(cat "$STUB/logs-fail")" ]; then echo 'gh: Bad Gateway (HTTP 502)' >&2; exit 1; fi
+    fi
+    cat "$STUB/logs.txt" ;;
   *) echo "stub gh: unexpected call: $*" >&2; exit 2 ;;
 esac
 STUB
@@ -514,6 +540,7 @@ stage_case() { # exists|absent
   export STUB=$work/stub
   rm -rf "$STUB"; mkdir -p "$STUB"
   [ "$1" = exists ] && touch "$STUB/ref-exists"
+  [ "$1" = error ] && touch "$STUB/ref-error"
   : >"$work/st.gh"; SC_RC=0
   PATH="$work/bin:$PATH" GH_LOG="$work/st.gh" GH_REPO=o/r SHA=$sha BUILD_BRANCH=$branch GH_TOKEN=stub \
     bash --noprofile --norc -e "$work/stage.sh" >"$work/st.log" 2>&1 || SC_RC=$?
@@ -522,6 +549,10 @@ stage_case absent
 if [ "$SC_RC" = 0 ] && grep -q "api -X POST repos/o/r/git/refs -f ref=refs/heads/$branch -f sha=$sha" "$work/st.gh" && ! grep -qE -- '-X (PATCH|DELETE)' "$work/st.gh"; then
   ok "stage: creates the staging branch at the commit"
 else fail "stage: new branch: rc $SC_RC: $(cat "$work/st.gh")"; fi
+stage_case error
+if [ "$SC_RC" != 0 ] && ! grep -qE -- '-X (POST|PATCH|DELETE)' "$work/st.gh" && grep -q '::error::could not look up' "$work/st.log"; then
+  ok "stage: a lookup error that is not a 404 stops, naming the error, instead of reading as an absent branch"
+else fail "stage: lookup error: rc $SC_RC: $(cat "$work/st.gh") $(cat "$work/st.log")"; fi
 stage_case exists
 if [ "$SC_RC" = 0 ] && ! grep -q -- '-X PATCH' "$work/st.gh" &&
   [ "$(grep -n -- '-X DELETE' "$work/st.gh" | head -1 | cut -d: -f1)" -lt "$(grep -n -- '-X POST' "$work/st.gh" | head -1 | cut -d: -f1)" ]; then
@@ -553,7 +584,7 @@ for p in api-lifecycle registry; do
   list_ok="[{\"databaseId\":776,\"displayTitle\":\"$(title_of "$p")\",\"headSha\":\"2222222222222222222222222222222222222222\"},{\"databaseId\":775,\"displayTitle\":\"kb-refresh-build $p 54-1\",\"headSha\":\"$sha\"},{\"databaseId\":778,\"displayTitle\":\"$(title_of "$o")\",\"headSha\":\"$sha\"},{\"databaseId\":777,\"displayTitle\":\"$(title_of "$p")\",\"headSha\":\"$sha\"}]"
   run_case "$p" "$list_ok" "queued none" "in_progress none" "completed success"
   if [ "$BC_RC" = 0 ] && grep -qxF "gh workflow run kb-refresh-build.yml --ref $branch -f pipeline=$p -f request=55-1" "$work/bc.gh" &&
-    [ "$(out)" = "run-id=777" ]; then
+    [ "$(out)" = "request=55-1 run-id=777" ]; then
     ok "$p-run: dispatches for its own pipeline, finds its run by pipeline, request and commit (not the lookalikes or the other pipeline's), waits for success"
   else fail "$p-run: success: rc $BC_RC, outputs '$(out)': $(cat "$work/bc.gh") $(tail -5 "$work/bc.log")"; fi
 
@@ -651,13 +682,14 @@ v_case() {
   local label=$1 p=$2 want=$3 file filter
   shift 3
   v_reset "$p"
+  [ -z "${V_LOGS_FAIL:-}" ] || echo "$V_LOGS_FAIL" >"$STUB/logs-fail"
   while [ $# -ge 2 ]; do
     file=$1 filter=$2; shift 2
     jq -c "$filter" "$STUB/$file" >"$STUB/tmp" && mv "$STUB/tmp" "$STUB/$file"
   done
   vstep "$p"
   : >"$work/v.gh"; : >"$work/v.out"; V_RC=0
-  PATH="$work/bin:$PATH" GH_LOG="$work/v.gh" GITHUB_OUTPUT="$work/v.out" GH_REPO=o/r SHA=$sha PIPELINE=$p REQUEST=55-1 \
+  PATH="$work/bin:$PATH" GH_LOG="$work/v.gh" SLEEP_LOG=/dev/null GITHUB_OUTPUT="$work/v.out" GH_REPO=o/r SHA=$sha PIPELINE=$p REQUEST=${V_REQUEST:-55-1} \
     BUILD_BRANCH=$branch RUN_ID=777 GH_TOKEN=stub bash --noprofile --norc -e "$work/verify-$p.sh" >"$work/v.log" 2>&1 || V_RC=$?
   case $want in
     pass) [ "$V_RC" = 0 ] && [ "$(cat "$work/v.out")" = "sha256=$good_digest" ] ;;
@@ -693,6 +725,20 @@ for p in api-lifecycle registry; do
   v_case "a run with no artifact is refused" "$p" refuse artifacts.json '.artifacts = []'
   v_case "a run whose artifact expired is refused, telling the maintainer to re-run the workflow" "$p" refuse artifacts.json '.artifacts[0].expired = true'
 done
+# Re-running the verify job alone ("Re-run failed jobs") runs it at attempt 2;
+# the build run is still named for the dispatch, and the job takes that name
+# from the run job's outputs.
+for p in api-lifecycle registry; do
+  rq_expr=$(field 6 REQUEST <<<"$(job "$entry" "$p-verify")")
+  rq=$(expr "$rq_expr" "{\"github\":{\"run_id\":55,\"run_attempt\":2},\"needs\":{\"$p-run\":{\"outputs\":{\"request\":\"55-1\"}}}}" 2>/dev/null) || rq=''
+  V_REQUEST=$rq v_case "a re-run at attempt 2 checks the run that was dispatched (named 55-1) and accepts it" "$p" pass
+  V_REQUEST=55-2 v_case "a name derived from the later attempt (55-2) is refused: the old derivation could never match" "$p" refuse
+  # The seal log's fetch can fail now and then: retried, then reported as a fetch failure.
+  V_LOGS_FAIL=2 v_case "a seal log that fails to fetch twice is fetched again and read" "$p" pass
+  V_LOGS_FAIL=9 v_case "a seal log that never fetches is refused as a fetch failure" "$p" refuse
+  grep -q "could not fetch the seal job's log" "$work/v.log" && ok "verify($p): a log fetch failure is reported as one, not as a missing digest" ||
+    fail "verify($p): a log fetch failure is not reported as one: $(tail -3 "$work/v.log")"
+done
 # The log cases edit logs.txt (not JSON), so they are written out.
 l_case() { # label pipeline want <log lines...>
   local label=$1 p=$2 want=$3
@@ -701,7 +747,7 @@ l_case() { # label pipeline want <log lines...>
   printf '%s\n' "$@" >"$STUB/logs.txt"
   vstep "$p"
   : >"$work/v.out"; V_RC=0
-  PATH="$work/bin:$PATH" GH_LOG="$work/v.gh" GITHUB_OUTPUT="$work/v.out" GH_REPO=o/r SHA=$sha PIPELINE=$p REQUEST=55-1 \
+  PATH="$work/bin:$PATH" GH_LOG="$work/v.gh" SLEEP_LOG=/dev/null GITHUB_OUTPUT="$work/v.out" GH_REPO=o/r SHA=$sha PIPELINE=$p REQUEST=${V_REQUEST:-55-1} \
     BUILD_BRANCH=$branch RUN_ID=777 GH_TOKEN=stub bash --noprofile --norc -e "$work/verify-$p.sh" >"$work/v.log" 2>&1 || V_RC=$?
   case $want in
     pass) [ "$V_RC" = 0 ] && [ "$(cat "$work/v.out")" = "sha256=$good_digest" ] ;;
@@ -731,7 +777,7 @@ for p in api-lifecycle registry; do
   { echo "2026-10-12T06:20:00.1Z ##[group]Run echo"; echo "2026-10-12T06:20:00.2Z $(cat "$work/seal.out")"; } >"$STUB/logs.txt"
   vstep "$p"
   : >"$work/v.out"; V_RC=0
-  PATH="$work/bin:$PATH" GH_LOG="$work/v.gh" GITHUB_OUTPUT="$work/v.out" GH_REPO=o/r SHA=$sha PIPELINE=$p REQUEST=55-1 \
+  PATH="$work/bin:$PATH" GH_LOG="$work/v.gh" SLEEP_LOG=/dev/null GITHUB_OUTPUT="$work/v.out" GH_REPO=o/r SHA=$sha PIPELINE=$p REQUEST=${V_REQUEST:-55-1} \
     BUILD_BRANCH=$branch RUN_ID=777 GH_TOKEN=stub bash --noprofile --norc -e "$work/verify-$p.sh" >"$work/v.log" 2>&1 || V_RC=$?
   digest=$(sed -n 's/^sha256=//p' "$work/v.out")
   step 'Check the patch against the digest' < <(job "$entry" "$p-verify") | run_block >"$work/cmp-$p.sh"

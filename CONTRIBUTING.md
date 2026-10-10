@@ -282,8 +282,13 @@ own run. The `*-pr` job that holds the write permissions downloads that copy,
 names no run id and no token, checks the patch touches only its PR's paths,
 and applies it. `hack/kb-refresh-scope_test.sh` checks all of this against
 the workflow files, mutants of them and a stubbed API (IR-23). The artifacts
-are kept one day: if a `*-pr` or `-verify` job is re-run later and reports the
-artifact missing or expired, re-run the whole workflow. A manual dry run after
+are kept one day. Each `-run` job fixes the name it gave its build run and
+hands it on as an output, so "Re-run failed jobs" on a failed `-verify` or
+`-pr` job (within the day) checks and uses the run that was dispatched. A
+failed `-run` job cannot be re-run alone, because `cleanup` has deleted the
+staging branch and `stage` is not re-run; and anything older than a day has
+lost its artifacts. In both cases use "Re-run all jobs", never "Re-run failed
+jobs". A manual dry run after
 a change to either file: `gh workflow run kb-refresh.yml` (it opens the real
 bot PRs if anything changed; the dispatched runs show up under
 `gh run list --workflow kb-refresh-build.yml`, on the ref
