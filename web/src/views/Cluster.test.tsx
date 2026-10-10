@@ -393,3 +393,138 @@ describe("Cluster view", () => {
     expect(screen.queryByText("owned by the real team")).toBeNull();
   });
 });
+
+describe("Cluster findings in the URL", () => {
+  const many = report("1.35", {
+    findings: [
+      finding({ key: "a", category: "removed-api", severity: "blocker", title: "flowcontrol v1beta3 removed", detail: "uses the old API", namespaces: ["kube-system"], teams: ["payments"] }),
+      finding({ key: "b", category: "removed-api", severity: "blocker", title: "Ingress extensions/v1beta1", detail: "an ingress object", namespaces: ["web"] }),
+      finding({ key: "c", category: "eol-addon", severity: "warning", title: "ingress-nginx is EOL", detail: "past end of life", namespaces: ["ingress-nginx"], teams: ["platform"] }),
+      finding({ key: "d", category: "eol-addon", severity: "warning", title: "cert-manager old", detail: "needs upgrade", namespaces: ["certs"] }),
+      finding({ key: "e", category: "skew", severity: "info", title: "kubelet skew", detail: "one minor behind" }),
+    ],
+  });
+  const extra = { "api/v1/clusters/1/report?target=1.35": many };
+
+  const titles = () => Array.from(document.querySelectorAll(".finding-title")).map((e) => e.textContent!.replace(/\s*#$/, ""));
+  const groupCounts = () =>
+    Array.from(document.querySelectorAll(".sev-group h3")).map((h) => h.textContent!.replace(/\s+/g, " ").trim());
+
+  it("restores category, severity and search from the URL after a reload", async () => {
+    await openCluster("#/cluster/1?target=1.35&category=removed-api&severity=blocker&q=ingress", extra);
+    expect((screen.getByLabelText("Category") as HTMLSelectElement).value).toBe("removed-api");
+    expect((screen.getByLabelText("Severity") as HTMLSelectElement).value).toBe("blocker");
+    expect((screen.getByLabelText("Search") as HTMLInputElement).value).toBe("ingress");
+    expect(titles()).toEqual(["removed-api Ingress extensions/v1beta1"]);
+  });
+
+  it("writes every filter to the hash, so a copied URL restores the view", async () => {
+    await openCluster("#/cluster/1?target=1.35", extra);
+    fireEvent.change(screen.getByLabelText("Category"), { target: { value: "eol-addon" } });
+    fireEvent.change(screen.getByLabelText("Severity"), { target: { value: "warning" } });
+    fireEvent.change(screen.getByLabelText("Team"), { target: { value: "platform" } });
+    fireEvent.change(screen.getByLabelText("Search"), { target: { value: "ingress" } });
+    const hash = window.location.hash;
+    expect(Object.fromEntries(new URLSearchParams(hash.slice(hash.indexOf("?") + 1)))).toEqual({
+      target: "1.35",
+      category: "eol-addon",
+      severity: "warning",
+      team: "platform",
+      q: "ingress",
+    });
+    const shown = titles();
+    expect(shown).toEqual(["eol-addon ingress-nginx is EOL"]);
+
+    cleanup();
+    render(<App />);
+    await screen.findByText(/readiness for/);
+    expect(titles()).toEqual(shown);
+    expect((screen.getByLabelText("Search") as HTMLInputElement).value).toBe("ingress");
+  });
+
+  it("narrows the list and the severity counts by search", async () => {
+    await openCluster("#/cluster/1?target=1.35", extra);
+    expect(groupCounts()).toEqual(["blocker 2", "warning 2", "info 1"]);
+    fireEvent.change(screen.getByLabelText("Search"), { target: { value: "INGRESS" } });
+    // The Ingress object (title and detail), and ingress-nginx (title and namespace chip).
+    expect(groupCounts()).toEqual(["blocker 1", "warning 1"]);
+  });
+
+  it("searches detail, namespace chips and team chips too", async () => {
+    await openCluster("#/cluster/1?target=1.35&q=kube-system", extra);
+    expect(titles()).toEqual(["removed-api flowcontrol v1beta3 removed"]);
+    fireEvent.change(screen.getByLabelText("Search"), { target: { value: "past end" } });
+    expect(titles()).toEqual(["eol-addon ingress-nginx is EOL"]);
+    fireEvent.change(screen.getByLabelText("Search"), { target: { value: "payments" } });
+    expect(titles()).toEqual(["removed-api flowcontrol v1beta3 removed"]);
+  });
+
+  it("keeps a category from the URL selectable though this target has none", async () => {
+    await openCluster("#/cluster/1?target=1.35&category=no-such", extra);
+    expect((screen.getByLabelText("Category") as HTMLSelectElement).value).toBe("no-such");
+    expect(screen.getByText("No findings match the current filters")).toBeTruthy();
+  });
+
+  it("links one finding, scrolling to and highlighting it", async () => {
+    const scrollIntoView = vi.fn();
+    Element.prototype.scrollIntoView = scrollIntoView;
+    await openCluster("#/cluster/1?target=1.35&finding=c", extra);
+    const target = document.querySelector('[data-finding-key="c"]') as HTMLElement;
+    expect(target.className).toMatch(/finding-target/);
+    expect(target.getAttribute("aria-current")).toBe("location");
+    expect(scrollIntoView).toHaveBeenCalledTimes(1);
+    expect(scrollIntoView.mock.contexts[0]).toBe(target);
+    expect(document.querySelectorAll(".finding-target")).toHaveLength(1);
+
+    // Each finding offers its own link: the target plus finding=<key>.
+    const link = within(document.querySelector('[data-finding-key="d"]') as HTMLElement).getByRole("link", {
+      name: /Link to this finding/,
+    });
+    expect(link.getAttribute("href")).toBe("#/cluster/1?target=1.35&finding=d");
+    navigate("#/cluster/1?target=1.35&finding=d");
+    await waitFor(() =>
+      expect(document.querySelector(".finding-target")?.getAttribute("data-finding-key")).toBe("d"),
+    );
+    expect(scrollIntoView).toHaveBeenCalledTimes(2);
+  });
+
+  it("encodes a finding key that has special characters", async () => {
+    const odd = report("1.35", {
+      findings: [finding({ key: "removed-api/apps v1&x=1?", title: "odd key" })],
+    });
+    await openCluster("#/cluster/1?target=1.35", { "api/v1/clusters/1/report?target=1.35": odd });
+    const link = screen.getByRole("link", { name: /Link to this finding/ });
+    expect(link.getAttribute("href")).toBe(
+      `#/cluster/1?target=1.35&finding=${encodeURIComponent("removed-api/apps v1&x=1?")}`,
+    );
+    navigate(link.getAttribute("href")!);
+    await waitFor(() => expect(document.querySelector(".finding-target")).toBeTruthy());
+  });
+
+  it("refreshes in place: findings stay on screen while the report is refetched", async () => {
+    let calls = 0;
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const fetchMock = mockApi(routes());
+    const routed = globalThis.fetch;
+    vi.stubGlobal("fetch", async (...args: Parameters<typeof fetch>) => {
+      if (String(args[0]).includes("/report")) {
+        calls++;
+        if (calls > 1) await gate;
+      }
+      return routed(...args);
+    });
+    navigate("#/cluster/1?target=1.35");
+    render(<App />);
+    await screen.findByText(/readiness for/);
+    expect(fetchedUrls(fetchMock).filter((u) => u.includes("/report"))).toHaveLength(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    await screen.findByRole("status", { name: "Refreshing" });
+    expect(screen.queryByText("Evaluating…")).toBeNull();
+    expect(screen.queryByText("Loading cluster…")).toBeNull();
+    expect(screen.getByText("ingress-nginx is EOL")).toBeTruthy();
+    release();
+    await waitFor(() => expect(screen.queryByRole("status", { name: "Refreshing" })).toBeNull());
+  });
+});

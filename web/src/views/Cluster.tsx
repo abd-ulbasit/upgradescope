@@ -1,7 +1,7 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { fetchExport, getCluster, getHistory, getReport, saveBlob } from "../api";
 import type { ExportFormat } from "../api";
-import { useAsync } from "../hooks";
+import { setRouteQuery, useAsync, useRouteQuery } from "../hooks";
 import { Sparkline } from "../Sparkline";
 import { UnrecognizedImages } from "../UnrecognizedImages";
 import type {
@@ -17,6 +17,7 @@ import {
   Empty,
   ErrorState,
   formatTime,
+  Freshness,
   Loading,
   nextMinors,
   ScoreBadge,
@@ -34,28 +35,28 @@ const SEVERITIES: Severity[] = ["blocker", "warning", "info"];
 // "unattributed" stays a separate row and a separate filter choice (#243).
 const UNATTRIBUTED = "(unattributed)";
 
-// Cluster drill-down: verdict + score + trend + findings (category/team
-// filters) + per-team table for one (cluster, target). target === undefined
-// lets the server pick the cluster's default next-minor target; a target
-// with no stored evaluation comes back as a what-if. App keys this
-// component by route, so filters start fresh for every target.
-export function Cluster({
-  id,
-  target,
-  team: initialTeam,
-}: {
-  id: number;
-  target?: string;
-  team?: string;
-}) {
+// Cluster drill-down: verdict + score + trend + findings + per-team table
+// for one (cluster, target). target === undefined lets the server pick the
+// cluster's default next-minor target; a target with no stored evaluation
+// comes back as a what-if. The findings filters live in the hash query next
+// to the target (#/cluster/3?target=1.37&category=removed-api&severity=
+// blocker&team=payments&q=ingress), so a reload or a pasted link restores
+// them; finding=<key> scrolls to and highlights one finding. App keys this
+// component by cluster and target: a new target starts without filters.
+export function Cluster({ id, target }: { id: number; target?: string }) {
+  const query = useRouteQuery();
+  const category = query.get("category") ?? "";
+  const team = query.get("team") ?? "";
+  const q = query.get("q") ?? "";
+  const finding = query.get("finding") ?? "";
+  const severityParam = query.get("severity") ?? "";
+  const severity = SEVERITIES.find((s) => s === severityParam) ?? "";
+
   const detail = useAsync(() => getCluster(id), [id]);
   const evaluation = useAsync(
     () => Promise.all([getReport(id, target), getHistory(id, target)]),
     [id, target],
   );
-
-  const [category, setCategory] = useState("");
-  const [team, setTeam] = useState(initialTeam ?? "");
 
   const findings = evaluation.data?.[0].findings;
   const categories = useMemo(
@@ -68,19 +69,41 @@ export function Cluster({
     () =>
       uniqueSorted([
         ...(findings ?? []).flatMap(findingTeams),
-        ...(initialTeam ? [initialTeam] : []),
+        ...(team ? [team] : []),
       ]),
-    [findings, initialTeam],
+    [findings, team],
+  );
+  const categoryChoices = useMemo(
+    () => uniqueSorted([...categories, ...(category ? [category] : [])]),
+    [categories, category],
   );
 
+  // A linked finding is scrolled to once it is on the page; later refreshes
+  // do not move the view again.
+  const scrolled = useRef("");
+  const ready = detail.data !== undefined && evaluation.data !== undefined;
+  useEffect(() => {
+    if (!finding || !ready || scrolled.current === finding) return;
+    const el = Array.from(
+      document.querySelectorAll<HTMLElement>("[data-finding-key]"),
+    ).find((e) => e.dataset.findingKey === finding);
+    if (!el) return;
+    scrolled.current = finding;
+    if (typeof el.scrollIntoView === "function") el.scrollIntoView({ block: "center" });
+  }, [finding, ready, category, severity, team, q]);
+
   if (detail.loading) return <Loading label="Loading cluster…" />;
-  if (detail.error) return <ErrorState error={detail.error} onRetry={detail.reload} />;
+  if (detail.error && !detail.data) return <ErrorState error={detail.error} onRetry={detail.reload} />;
   const c = detail.data!;
 
   const suggestions = uniqueSortedVersions([
     ...c.evaluations.map((e) => e.target),
     ...nextMinors(c.serverVersion, 3),
   ]);
+  const refresh = () => {
+    detail.reload();
+    evaluation.reload();
+  };
   const setTarget = (t: string | undefined) => {
     window.location.hash = t ? `#/cluster/${id}?target=${t}` : `#/cluster/${id}`;
   };
@@ -101,6 +124,12 @@ export function Cluster({
               </>
             )}
           </h1>
+          <Freshness
+            updatedAt={evaluation.updatedAt ?? detail.updatedAt}
+            refreshing={detail.refreshing || evaluation.refreshing}
+            error={detail.error ?? (evaluation.data ? evaluation.error : undefined)}
+            onRefresh={refresh}
+          />
           <TargetPicker
             value={target}
             suggestions={suggestions}
@@ -117,7 +146,7 @@ export function Cluster({
       </header>
 
       {evaluation.loading && <Loading label="Evaluating…" />}
-      {evaluation.error && (
+      {evaluation.error && !evaluation.data && (
         <ErrorState error={evaluation.error} onRetry={evaluation.reload} />
       )}
       {evaluation.data &&
@@ -126,7 +155,9 @@ export function Cluster({
           const visible = report.findings.filter(
             (f) =>
               (category === "" || f.category === category) &&
-              (team === "" || findingTeams(f).includes(team)),
+              (severity === "" || f.severity === severity) &&
+              (team === "" || findingTeams(f).includes(team)) &&
+              matchesQuery(f, q),
           );
           const verdict = verdictOf(report);
           const whatIf = report.source === "what-if";
@@ -216,13 +247,22 @@ export function Cluster({
                   <h2>Findings</h2>
                   <div className="filters">
                     <label>
+                      Search
+                      <input
+                        type="search"
+                        placeholder="Title, detail, namespace…"
+                        value={q}
+                        onChange={(e) => setRouteQuery({ q: e.target.value })}
+                      />
+                    </label>
+                    <label>
                       Category
                       <select
                         value={category}
-                        onChange={(e) => setCategory(e.target.value)}
+                        onChange={(e) => setRouteQuery({ category: e.target.value })}
                       >
                         <option value="">all</option>
-                        {categories.map((cat) => (
+                        {categoryChoices.map((cat) => (
                           <option key={cat} value={cat}>
                             {cat}
                           </option>
@@ -230,8 +270,25 @@ export function Cluster({
                       </select>
                     </label>
                     <label>
+                      Severity
+                      <select
+                        value={severity}
+                        onChange={(e) => setRouteQuery({ severity: e.target.value })}
+                      >
+                        <option value="">all</option>
+                        {SEVERITIES.map((sev) => (
+                          <option key={sev} value={sev}>
+                            {sev}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label>
                       Team
-                      <select value={team} onChange={(e) => setTeam(e.target.value)}>
+                      <select
+                        value={team}
+                        onChange={(e) => setRouteQuery({ team: e.target.value })}
+                      >
                         <option value="">all</option>
                         {teams.map((t) => (
                           <option key={t} value={t}>
@@ -265,7 +322,12 @@ export function Cluster({
                         </h3>
                         <ul className="findings">
                           {group.map((f) => (
-                            <FindingItem key={f.key ?? f.title} f={f} />
+                            <FindingItem
+                              key={f.key ?? f.title}
+                              f={f}
+                              href={`#/cluster/${id}?target=${encodeURIComponent(report.target)}&finding=${encodeURIComponent(findingKey(f))}`}
+                              highlighted={finding !== "" && findingKey(f) === finding}
+                            />
                           ))}
                         </ul>
                       </div>
@@ -411,11 +473,31 @@ function NotAssessed({ gaps }: { gaps: CapabilityGap[] }) {
   );
 }
 
-function FindingItem({ f }: { f: Finding }) {
+function FindingItem({
+  f,
+  href,
+  highlighted,
+}: {
+  f: Finding;
+  href: string;
+  highlighted: boolean;
+}) {
   return (
-    <li className="finding">
+    <li
+      className={highlighted ? "finding finding-target" : "finding"}
+      data-finding-key={findingKey(f)}
+      aria-current={highlighted ? "location" : undefined}
+    >
       <p className="finding-title">
-        <span className="cat">{f.category}</span> {f.title}
+        <span className="cat">{f.category}</span> {f.title}{" "}
+        <a
+          className="finding-link"
+          href={href}
+          aria-label={`Link to this finding: ${f.title}`}
+          title="Link to this finding"
+        >
+          #
+        </a>
       </p>
       <p className="finding-detail">{f.detail}</p>
       {(f.namespaces?.length || f.teams?.length) ? (
@@ -500,6 +582,22 @@ function TeamsTable({
         </table>
       </div>
     </div>
+  );
+}
+
+// findingKey identifies a finding in a link: the server's stable key, or
+// the title for a server that sends none.
+function findingKey(f: Finding): string {
+  return f.key ?? f.title;
+}
+
+// matchesQuery: a case-insensitive substring of what the finding shows —
+// title, detail, and the team and namespace chips.
+function matchesQuery(f: Finding, q: string): boolean {
+  const needle = q.trim().toLowerCase();
+  if (needle === "") return true;
+  return [f.title, f.detail, ...(f.teams ?? []), ...(f.namespaces ?? [])].some((t) =>
+    t.toLowerCase().includes(needle),
   );
 }
 

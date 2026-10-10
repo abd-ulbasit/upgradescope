@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { getRegistry } from "../api";
 import { useAsync } from "../hooks";
 import type { AddOn } from "../types";
-import { Citations, Empty, ErrorState, Loading } from "../ui";
+import { Citations, Empty, ErrorState, Freshness, Loading } from "../ui";
 
 // Registry: browse the add-on EOL/compat dataset embedded in this server
 // binary (GET /api/v1/registry) — exactly what evaluations run against.
@@ -23,13 +23,19 @@ export function Registry() {
   }, [addons, q]);
 
   if (reg.loading) return <Loading label="Loading registry…" />;
-  if (reg.error) return <ErrorState error={reg.error} onRetry={reg.reload} />;
+  if (reg.error && !reg.data) return <ErrorState error={reg.error} onRetry={reg.reload} />;
 
   return (
     <section>
       <header className="page-head">
         <div className="head-row">
           <h1>Add-on registry</h1>
+          <Freshness
+            updatedAt={reg.updatedAt}
+            refreshing={reg.refreshing}
+            error={reg.error}
+            onRefresh={reg.reload}
+          />
           <input
             type="search"
             placeholder="Filter add-ons…"

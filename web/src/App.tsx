@@ -7,18 +7,22 @@ import { Fleet } from "./views/Fleet";
 import { Registry } from "./views/Registry";
 import { Teams } from "./views/Teams";
 
-// Hash routes: #/ (fleet) · #/teams[?target=1.38] ·
-// #/cluster/{id}[?target=1.38][&team=payments] · #/registry.
+// Hash routes: #/ (fleet)[?q=&filter=&sort=&target=] · #/teams[?target=1.38] ·
+// #/cluster/{id}[?target=1.38][&team=&category=&severity=&q=&finding=] ·
+// #/registry. The views read their own query (useRouteQuery); the route
+// here only picks the view and its identity.
 // Hand-rolled on purpose — four routes don't justify a router dependency.
 type Route =
   | { view: "fleet" }
   | { view: "registry" }
   | { view: "teams"; target?: string }
-  | { view: "cluster"; id: number; target?: string; team?: string }
+  | { view: "cluster"; id: number; target?: string }
   | { view: "notfound" };
 
 function parseRoute(route: string): Route {
-  const [path = "/", search = ""] = route.split("?", 2);
+  const i = route.indexOf("?");
+  const path = i < 0 ? route : route.slice(0, i);
+  const search = i < 0 ? "" : route.slice(i + 1);
   const params = new URLSearchParams(search);
   const target = params.get("target") ?? undefined;
   if (path === "/") return { view: "fleet" };
@@ -26,8 +30,7 @@ function parseRoute(route: string): Route {
   if (path === "/teams") return { view: "teams", target };
   const m = /^\/cluster\/(\d+)$/.exec(path);
   if (m) {
-    const team = params.get("team") ?? undefined;
-    return { view: "cluster", id: Number(m[1]), target, team };
+    return { view: "cluster", id: Number(m[1]), target };
   }
   return { view: "notfound" };
 }
@@ -66,15 +69,10 @@ export function App() {
         {route.view === "teams" && <Teams key={route.target ?? ""} target={route.target} />}
         {route.view === "registry" && <Registry />}
         {route.view === "cluster" && (
-          // Keyed by the whole route: a new target or team filter starts
-          // from fresh filter state, so a category picked for one target
-          // can never hide every finding of the next.
-          <Cluster
-            key={`${route.id}:${route.target ?? ""}:${route.team ?? ""}`}
-            id={route.id}
-            target={route.target}
-            team={route.team}
-          />
+          // Keyed by cluster and target: the findings filters are in the
+          // URL, and picking another target drops them, so a category
+          // picked for one target can never hide every finding of the next.
+          <Cluster key={`${route.id}:${route.target ?? ""}`} id={route.id} target={route.target} />
         )}
         {route.view === "notfound" && (
           <div className="state">
