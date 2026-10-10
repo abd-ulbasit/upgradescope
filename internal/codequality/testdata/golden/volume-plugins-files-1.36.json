@@ -1,0 +1,74 @@
+[
+  {
+    "description": "In-tree volume plugin cephfs removed in 1.31 (1 object): data. Fix: redeploy the workload on a volume of the CephFS CSI driver (ceph-csi); there is no CSI migration for cephfs.",
+    "check_name": "volume-plugin/cephfs",
+    "fingerprint": "b5723f359546da85c65468562934d2613a11196072843fd9e53080bff4078dbe",
+    "severity": "critical",
+    "location": {
+      "path": "f.yaml",
+      "lines": {
+        "begin": 29
+      }
+    }
+  },
+  {
+    "description": "In-tree volume plugin gitRepo removed in 1.33 (2 objects): shop/web. Fix: clone the repository into an emptyDir volume from an init container, and mount that emptyDir.",
+    "check_name": "volume-plugin/gitRepo",
+    "fingerprint": "e8d96f5e6b430f4ccc2b7526d92800751c585e5b58769d77944ecb105de3452d",
+    "severity": "critical",
+    "location": {
+      "path": "f.yaml",
+      "lines": {
+        "begin": 1
+      }
+    }
+  },
+  {
+    "description": "In-tree volume plugin gitRepo removed in 1.33 (2 objects): sync. Fix: clone the repository into an emptyDir volume from an init container, and mount that emptyDir.",
+    "check_name": "volume-plugin/gitRepo",
+    "fingerprint": "6ed0722bec152abda1887708e7866794daee4cce3f3c44c5066af97a5c12b7ee",
+    "severity": "critical",
+    "location": {
+      "path": "f.yaml",
+      "lines": {
+        "begin": 16
+      }
+    }
+  },
+  {
+    "description": "In-tree volume plugin glusterfs removed in 1.26 (1 object): shop/web. Fix: migrate the volumes to another storage solution before the upgrade; there is no CSI migration for GlusterFS.",
+    "check_name": "volume-plugin/glusterfs",
+    "fingerprint": "fe0ed11d827e3a3e3d9258d4e686cca22268306b55e8af06ab696b0b9123f6c8",
+    "severity": "critical",
+    "location": {
+      "path": "f.yaml",
+      "lines": {
+        "begin": 1
+      }
+    }
+  },
+  {
+    "description": "In-tree volume plugin awsElasticBlockStore needs CSI driver ebs.csi.aws.com from 1.27 (1 object): shop/web. Fix: install the ebs.csi.aws.com CSI driver (aws-ebs-csi-driver) before the upgrade.",
+    "check_name": "volume-plugin/awsElasticBlockStore",
+    "fingerprint": "414ca0486968c7824c9bfa6917bf50b16e331a252741bd1912b83b386d6c24c2",
+    "severity": "minor",
+    "location": {
+      "path": "f.yaml",
+      "lines": {
+        "begin": 1
+      }
+    }
+  },
+  {
+    "description": "In-tree volume plugin flexVolume deprecated since 1.23 (1 object): flex. Fix: move to a CSI driver for the same storage.",
+    "check_name": "volume-plugin/flexVolume",
+    "fingerprint": "0e09035d4037133f89a21e821488ac1b73212125cbcd0906fd676e296e7331d4",
+    "severity": "info",
+    "location": {
+      "path": "pv/flex.yaml",
+      "lines": {
+        "begin": 1
+      }
+    }
+  }
+]

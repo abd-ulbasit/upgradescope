@@ -1,0 +1,38 @@
+[
+  {
+    "description": "In-tree volume plugin glusterfs removed in 1.26 (4 pods). 4 pods name it, in: shop (4). From 1.26 a pod that names it does not start. Fix: migrate the volumes to another storage solution before the upgrade; there is no CSI migration for GlusterFS.",
+    "check_name": "volume-plugin/glusterfs",
+    "fingerprint": "acdd6ab9a27f57ca050fde9c7de0b365477dfb3faaeff438e79d81965f1eab9e",
+    "severity": "critical",
+    "location": {
+      "path": "upgradescope/volume-plugin/glusterfs",
+      "lines": {
+        "begin": 1
+      }
+    }
+  },
+  {
+    "description": "In-tree volume plugin awsElasticBlockStore needs CSI driver ebs.csi.aws.com from 1.27 (3 pods). 3 pods name it, in: shop (3). From 1.27 its in-tree code is gone and every operation on these volumes is redirected to the ebs.csi.aws.com CSI driver: a cluster without that driver installed cannot mount them, one with it is fine. Fix: install the ebs.csi.aws.com CSI driver (aws-ebs-csi-driver) before the upgrade.",
+    "check_name": "volume-plugin/awsElasticBlockStore",
+    "fingerprint": "14656c0cd8f13c085169de4b169a2996f7953e65bb2735e909f35cbb05e88993",
+    "severity": "minor",
+    "location": {
+      "path": "upgradescope/volume-plugin/awsElasticBlockStore",
+      "lines": {
+        "begin": 1
+      }
+    }
+  },
+  {
+    "description": "In-tree volume plugin gitRepo removed in 1.33 (2 pods). 2 pods name it, in: ci (1), kube-system (1). From 1.33 a pod that names it does not start. Upstream: disabled by default in 1.33, where the GitRepoVolumeDriver feature gate can still turn it back on, and locked off in 1.36. Fix: clone the repository into an emptyDir volume from an init container, and mount that emptyDir.",
+    "check_name": "volume-plugin/gitRepo",
+    "fingerprint": "fdb89f9ac6c52d8ecf224c3fba41d68da6f8d3134935ceb50cde717ed12ddf83",
+    "severity": "minor",
+    "location": {
+      "path": "upgradescope/volume-plugin/gitRepo",
+      "lines": {
+        "begin": 1
+      }
+    }
+  }
+]

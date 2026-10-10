@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<testsuites name="upgradescope" tests="3" failures="0" errors="0" time="0">
-  <testsuite name="not-assessed" tests="3" failures="0" errors="0" skipped="3" time="0">
+<testsuites name="upgradescope" tests="4" failures="0" errors="0" time="0">
+  <testsuite name="not-assessed" tests="4" failures="0" errors="0" skipped="4" time="0">
     <testcase name="crds" classname="upgradescope.not-assessed" time="0">
       <skipped message="not assessed: crds: not reported by the collector, which predates CRD checks; upgrade it to assess CRD versions"></skipped>
     </testcase>
@@ -9,6 +9,9 @@
     </testcase>
     <testcase name="helm" classname="upgradescope.not-assessed" time="0">
       <skipped message="not assessed: helm: secrets list forbidden in namespace kube-system"></skipped>
+    </testcase>
+    <testcase name="volumes" classname="upgradescope.not-assessed" time="0">
+      <skipped message="not assessed: volumes: not reported by the collector, which predates in-tree volume plugin checks; upgrade it to assess volume plugins"></skipped>
     </testcase>
   </testsuite>
 </testsuites>
