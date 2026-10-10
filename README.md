@@ -127,6 +127,11 @@ terminate at an ingress (`server.ingress`), or let `serve` terminate it
 renewal), and point agents at a private CA with `agent.serverCA`. Over plain
 http an agent's bearer token and inventories cross the network in cleartext.
 [Exposing the server to remote agents](https://abd-ulbasit.github.io/upgradescope/getting-started/fleet/#exposing-the-server-to-remote-agents).
+The server embeds a web dashboard at `/`: the fleet's clusters by targets
+with a name search, filters and a sort, a summary strip that counts the
+clusters ready, blocked, unknown or stale for a target, a Refresh button, and a `#` link
+on every finding to paste into a ticket.
+[The dashboard](https://abd-ulbasit.github.io/upgradescope/guides/dashboard/).
 
 **Ask an AI assistant**: `upgradescope mcp` gives Claude Code (`claude mcp add upgradescope -- upgradescope mcp`), or any MCP client, read-only tools that return these reports; setup for Claude Desktop is in [AI assistants (MCP)](https://abd-ulbasit.github.io/upgradescope/getting-started/mcp/).
 
