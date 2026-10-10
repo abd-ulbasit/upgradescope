@@ -167,7 +167,8 @@ case \$url in
   "https://api.github.com/repos/abd-ulbasit/upgradescope/releases/tags/"*)
     echo "curl-headers \$hdr" >>"$work/calls"
     code=200
-    if [ -n "\${STUB_API_FAIL:-}" ]; then code=\$STUB_API_FAIL; elif [ ! -d "$work/rel/\${url##*/}" ]; then code=404; fi
+    # STUB_API_REJECT_AUTH: an enterprise token is rejected by github.com (401), an anonymous request is not.
+    if [ -n "\${STUB_API_REJECT_AUTH:-}" ] && [[ \$hdr == *Authorization* ]]; then code=401; elif [ -n "\${STUB_API_FAIL:-}" ]; then code=\$STUB_API_FAIL; elif [ ! -d "$work/rel/\${url##*/}" ]; then code=404; fi
     [ "\$fmt" != '%{http_code}' ] || printf '%s' "\$code"
     [ "\$code" = 200 ] || { echo "curl: (22) The requested URL returned error: \$code" >&2; exit 22; } ;;
   "$releases/download/"*)
@@ -627,6 +628,18 @@ has "the probe sends the workflow token to api.github.com" "$work/calls" "curl-h
 run install "$work/stub-curl:$work/stub-git:" INPUT_VERSION= "$own" ACTION_REF=$sha_two
 has "the probe is anonymous without a token" "$work/calls" "curl-headers [Accept: application/vnd.github+json]"
 hasnt "the probe sends no Authorization header without a token" "$work/calls" "Authorization"
+# On GitHub Enterprise Server or GHE.com, github.token belongs to the
+# enterprise host and api.github.com answers it 401: the probe is anonymous
+# there (and sends the token nowhere it is not valid), so a SHA-pinned
+# install still resolves its published tag, with or without gh.
+for srv in https://ghes.example.com https://octo.ghe.com; do
+  run install "$work/stub-curl:$work/stub-git:" INPUT_VERSION= "$own" ACTION_REF=$sha_two GH_TOKEN=ghes-token GITHUB_SERVER_URL=$srv STUB_API_REJECT_AUTH=1
+  expect "$srv: a SHA pin still resolves its published tag (the enterprise token is not sent to api.github.com)" 0 "installed upgradescope v9.9.9 from $releases/download/v9.9.9/$asset"
+  hasnt "...the probe sends no Authorization header ($srv)" "$work/calls" "Authorization"
+done
+run install "$work/stub-curl:$work/stub-git:" INPUT_VERSION= "$own" ACTION_REF=$sha_two GH_TOKEN=stub-token GITHUB_SERVER_URL=https://github.com STUB_API_REJECT_AUTH=1
+expect "on github.com the workflow token is sent, and a 401 for it is an API error" 1 "cannot tell whether the release for v9.9.10, a tag at the action ref $sha_two, is published"
+has "...naming the HTTP status" "$work/out" "failed with HTTP 401)"
 # Tags at the commit, none with a published release: a SHA pin asks for that
 # version, so latest is no answer, and neither is verify-provenance: false.
 for vp in true false; do

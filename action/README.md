@@ -58,7 +58,10 @@ Pick how the gate moves:
   `verify-provenance: false` would not help, since there is nothing to
   download. Pin a published release (`version: vX.Y.Z`) or wait for the
   release workflow to publish it. If the release lookup itself fails (GitHub's
-  API answers with an error), the step fails too, since it cannot tell. If
+  API answers with an error), the step fails too, since it cannot tell, and
+  names the HTTP status. The lookup sends `github.token` only on github.com
+  runners; on GitHub Enterprise Server or GHE.com it is anonymous, since
+  api.github.com rejects an enterprise token. If
   no release tag points at the commit, or the tag lookup fails (no `git` on
   the runner, no network), it runs `latest` and logs one `::warning` that
   says which. At any other ref (a branch, `v0`) an unset `version`
@@ -333,7 +336,7 @@ v0.2.0-rc.2's linux/amd64 archive with its attestation).
 | `target` | yes | | Target Kubernetes minor version, `MAJOR.MINOR` such as `1.36`, **quoted** (`target: "1.30"`): YAML reads an unquoted `1.30` as the number 1.3, which would judge nothing and read ready, so the action refuses any target below 1.16, the oldest minor the knowledge base covers, and says to quote it. |
 | `fail-on` | no | `blocker` | `blocker`, `warning` or `never`. The step fails when findings reach this severity, or when the verdict is `unknown` (unless `allow-incomplete`). `never` never fails. |
 | `allow-incomplete` | no | `false` | `true` or `false`. `true` passes `scan --allow-incomplete`: the gate fails on findings alone, not on an `unknown` verdict. The `verdict` output still says `unknown`. See [Targets past the horizon](#targets-past-the-horizon). |
-| `version` | no | the action ref's release, else `latest` | A release tag such as `v0.2.0`, `latest` (the newest stable release), or `preinstalled`. `preinstalled` installs nothing and uses the `upgradescope` already on `PATH`. Unset, the action at a release tag ref (`@vX.Y.Z` or `@vX.Y.Z-rc.N`) runs that tag; at a full commit SHA it runs the release tag that points at that commit, or `latest` with a `::warning` when none does or the lookup fails; at any other ref, or inside another action, it runs `latest`. See [Usage](#usage). |
+| `version` | no | the action ref's release, else `latest` | A release tag such as `v0.2.0`, `latest` (the newest stable release), or `preinstalled`. `preinstalled` installs nothing and uses the `upgradescope` already on `PATH`. Unset, the action at a release tag ref (`@vX.Y.Z` or `@vX.Y.Z-rc.N`) runs that tag; at a full commit SHA it runs the newest release tag at that commit whose release is published, fails the step when the commit has release tags but none is published (or the releases API cannot say), and runs `latest` with a `::warning` only when no release tag points at it or the tag lookup fails; at any other ref, or inside another action, it runs `latest`. See [Usage](#usage). |
 | `verify-provenance` | no | `true` | `true` or `false`. `true` verifies, for every release but v0.1.0 and v0.1.1 (which predate provenance), that this repository's release workflow built the archive at that release's tag, with `gh attestation verify` or, without gh 2.68+, `cosign verify-blob`, and fails the step before installing when it does not verify, neither tool is on `PATH`, or no archive downloads (there is no source-build fallback). `false` checks the archive against `checksums.txt` only and warns, and falls back to `go install` when no archive downloads. See [Install and integrity](#install-and-integrity). |
 | `config` | no | | Path to an `.upgradescope.yaml` with ignore rules (`scan --config`). Unset, the scan looks for `.upgradescope.yaml` in `path`, then at the repository root. |
 | `baseline` | no | | Path to the JSON report of an earlier scan: the `report-json` output, or a `write-baseline` file (`scan --baseline`). The gate then fails only on findings that are new since. |
@@ -446,7 +449,9 @@ cannot write the step summary, so a warning replaces it.
   On GitHub Enterprise Server or GHE.com runners, `github.token` belongs to
   that host, not github.com, so `gh attestation verify` against this
   repository fails: put `cosign` on `PATH` and no `gh`, or set
-  `verify-provenance: false`.
+  `verify-provenance: false`. A SHA-pinned install there still resolves
+  its tag: the release lookup is anonymous on those hosts and never sends
+  the enterprise token to api.github.com.
 
   A check that does not pass fails the step, and nothing is put on `PATH`.
   The verifier's output is in the log, each line behind `| `. What is

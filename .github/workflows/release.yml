@@ -61,10 +61,12 @@ name: release
 # verifies. A Latest set by GoReleaser would be a release with no attestation
 # until the next step finishes, for good when it fails, and again on every
 # re-run of the job. Instead, the last step of the goreleaser job points
-# GitHub's Latest, and :latest, at the highest published stable release,
-# after the attestation exists (it runs only when every step before it
-# succeeded, so a failed attestation leaves Latest where it was); whichever
-# of two racing runs publishes last, both end on the higher one.
+# :latest at the highest published stable release, and GitHub's Latest at
+# this run's own release when that is the highest, after its attestation
+# exists (it runs only when every step before it succeeded, so a failed
+# attestation leaves Latest where it was). Latest is never moved to another
+# run's release, which that run has not attested yet: of two racing runs,
+# the higher one's own run moves Latest, once it has attested.
 # hack/release-newest_test.sh runs these steps against a stub gh and pins
 # the order.
 #
@@ -253,12 +255,15 @@ jobs:
       # until a re-run attests it (#304).
       # Two stable releases racing: each decided :latest before the other
       # published, so the one that published last took :latest, whichever
-      # tag it was. Every stable run ends by pointing both Latest and
-      # :latest at the highest published stable release; the last run to get
-      # here sees both releases. A no-op when they already name it. When
+      # tag it was. Every stable run ends by pointing :latest at the highest
+      # published stable release; the last run to get here sees both
+      # releases. GitHub's Latest is different: a run moves it only to its
+      # own release, and only when that is the highest stable one, because
+      # its own attestation is the only one this run has seen succeed. When
       # the highest release is another run's, still publishing (its release
-      # is out but its image is not yet pushed), :latest is left to that
-      # run, which ends with this same step.
+      # is out, but its attestation and image may not be), Latest and
+      # :latest are left to that run, which ends with this same step; if
+      # that run's attestation fails, Latest stays on the previous release.
       - name: GitHub's Latest and the image's :latest name the highest stable release
         if: ${{ !contains(github.ref_name, '-') }}
         env:
@@ -267,7 +272,13 @@ jobs:
           hack/release-newest.sh published >"$RUNNER_TEMP/releases"
           highest=$(hack/release-newest.sh highest <"$RUNNER_TEMP/releases")
           latest=$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name) || latest=
-          if [ "$latest" != "$highest" ]; then
+          if [ "$highest" != "$GITHUB_REF_NAME" ]; then
+            # Another run's release: it is published, but only its own run
+            # attests it, and Latest must not name a release without an
+            # attestation. That run ends with this same step.
+            echo "::notice::GitHub's Latest left to $highest's release run (this run attested only $GITHUB_REF_NAME)"
+            echo "GitHub Latest left to $highest's release run (this run attested only $GITHUB_REF_NAME)" >>"$GITHUB_STEP_SUMMARY"
+          elif [ "$latest" != "$highest" ]; then
             id=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$highest" --jq .id)
             gh api -X PATCH "repos/$GITHUB_REPOSITORY/releases/$id" -f make_latest=true >/dev/null
             echo "GitHub Latest: ${latest:-none} -> $highest" >>"$GITHUB_STEP_SUMMARY"

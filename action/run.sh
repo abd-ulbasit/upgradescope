@@ -152,17 +152,25 @@ newest_first() {
 # for tag, from the releases/tags/<tag> API (a draft, or a tag whose release
 # workflow has not published yet, answers 404). 0: published; 1: 404; 2: the
 # API could not be asked or answered otherwise (no network, a rate limit, a
-# 5xx after the retries). GH_TOKEN, the workflow's github.token when the
-# install step passes it, raises the rate limit that GitHub-hosted runners
-# share; it goes to api.github.com over https, with no redirect followed.
+# 5xx after the retries); api_status then holds curl's HTTP status (000: no
+# answer). GH_TOKEN, the workflow's github.token when the install step
+# passes it, raises the rate limit that GitHub-hosted runners share; it goes
+# to api.github.com over https, with no redirect followed, and only when the
+# runner is on github.com (GITHUB_SERVER_URL unset or https://github.com): on
+# GitHub Enterprise Server or GHE.com the token belongs to the enterprise
+# host, which api.github.com rejects (401), so the probe is anonymous there.
+api_status=
 release_published() {
-  local code rc=0 auth=()
-  [ -z "${GH_TOKEN-}" ] || auth=(-H "Authorization: Bearer $GH_TOKEN")
-  code=$(curl -fsS --retry 3 --proto '=https' -o /dev/null -w '%{http_code}' \
+  local rc=0 auth=()
+  case ${GITHUB_SERVER_URL-https://github.com} in
+    https://github.com | https://github.com/)
+      [ -z "${GH_TOKEN-}" ] || auth=(-H "Authorization: Bearer $GH_TOKEN") ;;
+  esac
+  api_status=$(curl -fsS --retry 3 --proto '=https' -o /dev/null -w '%{http_code}' \
     -H 'Accept: application/vnd.github+json' ${auth[@]+"${auth[@]}"} \
     "https://api.github.com/repos/$repo/releases/tags/$1" 2>/dev/null) || rc=$?
   [ "$rc" -ne 0 ] || return 0
-  [ "$code" = 404 ] && return 1
+  [ "$api_status" = 404 ] && return 1
   return 2
 }
 
@@ -220,8 +228,8 @@ sha256() {
 # passes. Read from cli/cli's pkg/cmd/attestation/verify/verify.go at the
 # release tags (2026-10-10): `attestation verify` and --repo,
 # --deny-self-hosted-runners exist at v2.49.0 (the first gh with
-# `attestation`); --signer-workflow is absent at v2.50.0 and present at
-# v2.54.0; --source-ref (cli/cli#10308) is absent at v2.67.0 and present at
+# `attestation`); --signer-workflow is absent at v2.50.0 and first present
+# at v2.51.0; --source-ref (cli/cli#10308) is absent at v2.67.0 and present at
 # v2.68.0, so it sets the minimum. A gh between 2.49 and 2.67 has
 # `attestation` but rejects --source-ref ("unknown flag"), which is no sign
 # of a replaced asset.
@@ -273,7 +281,7 @@ provenance() {
       logged "$dl/verify.log"
       # Any gh failure fails the step: cosign is never a second chance for
       # an archive gh rejected.
-      die "provenance check failed: gh attestation verify found no attestation that $workflow built $asset at refs/tags/$tag (its output is above); nothing was installed. A replaced release asset fails here; if gh itself cannot reach the attestations API on this runner, verify-provenance: false installs on the checksum alone"
+      die "provenance check failed: gh attestation verify found no attestation that $workflow built $asset at refs/tags/$tag (its output is above); nothing was installed. A replaced release asset fails here, and so does a release whose attestation is not there yet (the release workflow publishes the release a few minutes before it attests it, or its attestation step failed: wait for the release workflow, then re-run); if gh itself cannot reach the attestations API on this runner, verify-provenance: false installs on the checksum alone"
     fi
     # A gh too old for the call (some self-hosted runners; gh_min) is no
     # verifier: cosign is tried next, and without cosign the step fails.
@@ -395,7 +403,7 @@ install() {
         case $prc in
           0) tag=$t && break ;;
           1) unpublished="$unpublished${unpublished:+, }$t" ;;
-          *) die "cannot tell whether the release for $t, a tag at the action ref $sha, is published (the GitHub API request https://api.github.com/repos/$repo/releases/tags/$t failed); nothing was installed. Set version: to a published release (version: vX.Y.Z) and retry" ;;
+          *) die "cannot tell whether the release for $t, a tag at the action ref $sha, is published (the GitHub API request https://api.github.com/repos/$repo/releases/tags/$t failed with HTTP ${api_status:-000}); nothing was installed. Set version: to a published release (version: vX.Y.Z) and retry" ;;
         esac
       done
       if [ -n "$tag" ]; then

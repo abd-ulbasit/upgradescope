@@ -19,6 +19,8 @@
 #     closing step is the only one that can set Latest and runs after
 #     actions/attest-build-provenance with no status function in its if:, so
 #     a run whose attestation fails leaves Latest on the previous release;
+#     and a run moves Latest only to its own release, never to a higher one
+#     that is published but not yet attested by its own run;
 #   - .goreleaser.yml's :latest image template, rendered with Go's
 #     text/template and an envOrDefault like GoReleaser's.
 # Offline; needs jq, node (for the if: expressions) and Go.
@@ -284,7 +286,9 @@ want_rec() {
   fi
 }
 want_rec "v0.2.1 published last and already Latest: nothing to move" v0.2.1 v0.2.1 sha256:bbb "" v0.2.0 v0.2.1
-want_rec "a racing v0.2.0 published last and took both: both move back to v0.2.1" v0.2.0 v0.2.0 sha256:aaa \
+want_rec "a racing v0.2.0 published last and took :latest: :latest moves back to v0.2.1, Latest is v0.2.1's run's to move" v0.2.0 v0.2.0 sha256:aaa \
+  "oras tag ghcr.io/o/r@sha256:bbb latest;" v0.2.0 v0.2.1
+want_rec "v0.2.1 is the highest and this run's own: Latest moves to it, :latest too" v0.2.1 v0.2.0 sha256:aaa \
   "gh api -X PATCH repos/o/r/releases/id-v0.2.1 -f make_latest=true;oras tag ghcr.io/o/r@sha256:bbb latest;" v0.2.0 v0.2.1
 want_rec "a re-run of v0.2.0 with v0.2.1 in place: nothing moves" v0.2.0 v0.2.1 sha256:bbb "" v0.2.0 v0.2.1
 want_rec "the first release with no :latest yet: :latest is created" v0.2.0 v0.2.0 - \
@@ -293,14 +297,25 @@ want_rec "the first stable release, with v0.1.1 as Latest: v0.2.0 is made Latest
   "gh api -X PATCH repos/o/r/releases/id-v0.2.0 -f make_latest=true;" v0.1.1 v0.2.0 v0.2.0-rc.2:pre
 want_rec "no Latest release yet: v0.2.0 is made Latest" v0.2.0 "" sha256:aaa \
   "gh api -X PATCH repos/o/r/releases/id-v0.2.0 -f make_latest=true;" v0.2.0 v0.2.0-rc.2:pre
-# A higher release racing this one: published, its image not pushed yet.
-# Its own run points :latest at it when it ends; this one leaves :latest.
+# A higher release racing this one: published, its attestation and image not
+# there yet. Its own run attests it and then moves Latest and :latest; this
+# run must move neither (#304: a Latest set here could name a release whose
+# attestation then fails, so every `version: latest` install would fail).
 releases v0.2.0 v0.3.0
 run_block "$work/reconcile.sh" v0.2.0 STUB_LATEST=v0.2.0
-[ "$code" = 0 ] && [ "$(writes | tr '\n' ';')" = "gh api -X PATCH repos/o/r/releases/id-v0.3.0 -f make_latest=true;" ] &&
+[ "$code" = 0 ] && [ -z "$(writes)" ] &&
   grep -q '^::notice::ghcr.io/o/r:v0.3.0 is not pushed yet' "$work/out" &&
-  ok "reconcile: a higher release still publishing its image: Latest moves to it, :latest is left to its run" ||
-  fail "reconcile: a higher release without its image yet did not leave :latest to its run" "$work/out"
+  ok "reconcile: a higher release still publishing: neither Latest nor :latest moves (left to its run)" ||
+  fail "reconcile: a run on a lower release moved something while a higher one was still publishing" "$work/out"
+# The same race when the higher run's attestation then fails: the lower run
+# ended first and Latest was never moved, so it stays on the previous release.
+for latest in v0.1.1 v0.2.0 ""; do
+  releases v0.1.1 v0.2.0 v0.3.0
+  run_block "$work/reconcile.sh" v0.2.0 STUB_LATEST="$latest"
+  [ "$code" = 0 ] && ! grep -q 'make_latest' "$work/calls" &&
+    ok "reconcile: v0.3.0 published but unattested, Latest ${latest:-none}: the v0.2.0 run leaves Latest alone" ||
+    fail "reconcile: the v0.2.0 run moved Latest to or from an unattested v0.3.0 (Latest ${latest:-none})" "$work/calls"
+done
 # This run's own image missing: a broken publish, not a race.
 releases v0.2.0 v0.3.0
 run_block "$work/reconcile.sh" v0.3.0 STUB_LATEST=v0.3.0

@@ -316,8 +316,9 @@ release:
   # GoReleaser publishes before actions/attest-build-provenance runs, and a
   # Latest set here is a release with no attestation for as long as the
   # attestation takes, or for good if it fails, and again on every re-run of
-  # the job (#304). release.yml's last step moves Latest, to the highest
-  # stable release, only after the attestation exists.
+  # the job (#304). release.yml's last step moves Latest, to the run's own
+  # release when that is the highest stable one, only after its attestation
+  # exists.
   make_latest: "false"
   # Re-running a release that failed half-way (same tag, same commit)
   # overwrites the assets it already uploaded instead of failing on them.

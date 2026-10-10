@@ -79,10 +79,16 @@ the older "latest" release, which GitHub never sets to a release candidate.
 At a full 40-character commit SHA, the action looks the commit up with
 `git ls-remote --tags https://github.com/abd-ulbasit/upgradescope` (an
 annotated tag counts at the commit it points at) and runs the release tag,
-`vX.Y.Z` or `vX.Y.Z-rc.N`, that points at it, the newest if several do. If
-no release tag points at the commit, or the lookup fails, it runs `latest`
-and logs one `::warning` that says which. At any other ref (a branch, `v0`)
-it is `latest`. The ref counts only when `github.action_repository` is
+`vX.Y.Z` or `vX.Y.Z-rc.N`, that points at it. If several do, it tries them
+newest first and runs the first whose release is published (a tag exists
+before its release does). If the commit has release tags but none is
+published yet, the step fails and names them, so pin a published release
+(`version: vX.Y.Z`) or wait for the release workflow; it does not fall back
+to `latest`, which would be another version. If GitHub's releases API cannot
+answer, the step fails too, naming the HTTP status. Only when no release tag
+points at the commit, or the tag lookup fails, does it run `latest` and log
+one `::warning` that says which. At any other ref (a branch, `v0`) it is
+`latest`. The ref counts only when `github.action_repository` is
 `abd-ulbasit/upgradescope` (in any letter case): inside a composite action
 that wraps this one, GitHub reports the wrapper's repository and ref
 ([actions/runner#2473](https://github.com/actions/runner/issues/2473)), so
