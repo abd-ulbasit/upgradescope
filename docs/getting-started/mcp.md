@@ -134,7 +134,13 @@ limit are cut and judged, as the server cuts them. A file that is not an
 upgradescope report, one that does not follow `api/report.schema.json`, or
 not an inventory the server would judge, is refused with the reason, not
 scored; the reason names the field and the rule, and never quotes the file,
-neither a value nor a key.
+neither a value nor a key. A report is also refused when an object repeats a
+member name, or has one that differs from a declared name only in case (a
+`FINDINGS` beside `findings`): the schema leaves objects open, and the tools
+read exactly the declared names, so they cannot disagree about one document.
+So is a report with a minor (`target`, `since`, a hop's `from` or `to`) or an
+`annualCostDelta` longer than 2 KiB, which the cut below would otherwise
+leave outside the form the schema gives it.
 
 ## Large reports
 
