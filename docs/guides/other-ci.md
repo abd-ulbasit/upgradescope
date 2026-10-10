@@ -68,10 +68,16 @@ when the exit code says so:
 | Unchanged since `--baseline` | skipped, "unchanged since the baseline" |
 | Suppressed by an ignore rule or annotation | skipped, with the reason, expiry and source |
 | A required check not assessed (verdict `unknown`) | error, in the `not-assessed` suite; skipped with `--allow-incomplete` (a `--target` that is not an upgrade stays an error) |
-| An optional check that did not run (Helm in files mode) | skipped, in the `not-assessed` suite |
+| An optional check that did not run (`deprecated-calls`, `helm` and `versions` in files mode) | skipped, in the `not-assessed` suite |
 
-A clean report is one passing test, `readiness/no findings`: Jenkins fails
-a build whose reports hold no tests. Times are 0, so the file is the same
+A clean live-cluster scan, with every check assessed, is one passing test,
+`readiness/no findings`. A clean `--files` scan never is: files mode does
+not run `deprecated-calls`, `helm` or `versions`, so its report is those
+three skipped tests (`not-assessed/deprecated-calls`, `not-assessed/helm`,
+`not-assessed/versions`) and no passed test. Do not count passed tests to
+detect a clean files-mode scan; the exit code says it. Jenkins fails a build
+whose reports hold no tests, and skipped tests are tests, so neither case
+fails it. Times are 0, so the file is the same
 on every run of the same scan. The file validates against the Jenkins JUnit
 schema, the xUnit plugin's `junit-10.xsd` (vendored in
 `internal/junit/junittest`), so readers that validate strictly accept it
