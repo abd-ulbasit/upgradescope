@@ -19,6 +19,17 @@
 # doubling waits until a slow deployment answers, and refuse to run (exit 2)
 # when it has nothing to prove. --list reads the real README and mkdocs.yml
 # with no network. Needs bash, curl and python3.
+#
+# The stub is built not to flake on a loaded host (#321): it listens with a
+# deep backlog (http.server's default of 5 overflows when the check opens
+# eight connections at once, and the kernel then resets or refuses the
+# overflow), the test polls the port with a real connect before the first
+# case rather than trusting a file or a sleep, and every case whose verdict
+# does not depend on the first connection goes through a curl wrapper that
+# retries a refused (7), empty (52) or reset (56) connection. The case that
+# does depend on it (a refused connection must fail) keeps plain curl; the
+# timeout, loop and status cases are not connect errors, so the wrapper
+# never retries them.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -86,7 +97,14 @@ class H(http.server.BaseHTTPRequestHandler):
             pass
 
 
-srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
+class S(http.server.ThreadingHTTPServer):
+    # The default backlog is 5; the check opens up to DOCS_LIVE_PARALLEL
+    # connections at once and a busy host accepts slowly, so the overflow
+    # was reset or refused (#321).
+    request_queue_size = 128
+
+
+srv = S(("127.0.0.1", 0), H)
 with open(READY, "w") as f:
     f.write(str(srv.server_address[1]))
 srv.serve_forever()
@@ -99,8 +117,49 @@ for _ in $(seq 1 300); do
   sleep 0.1
 done
 [ -s "$work/port" ] || { echo "FAIL the stub site never came up" >&2; exit 1; }
-host=http://127.0.0.1:$(cat "$work/port")
+port=$(cat "$work/port")
+# The port file is written once the socket listens, but poll with a real
+# connect (bounded: 100 x 0.1 s) so a server that is not accepting yet fails
+# here, with its own message, and not as a curl error in some later case.
+up=0
+for _ in $(seq 1 100); do
+  if python3 -c 'import socket,sys; socket.create_connection(("127.0.0.1", int(sys.argv[1])), 2).close()' "$port" 2>/dev/null; then
+    up=1
+    break
+  fi
+  kill -0 "$srv" 2>/dev/null || { echo "FAIL the stub site died after binding port $port" >&2; exit 1; }
+  sleep 0.1
+done
+[ "$up" = 1 ] || { echo "FAIL the stub site on port $port never accepted a connection" >&2; exit 1; }
+host=http://127.0.0.1:$port
 site=$host/site/
+
+# A curl wrapper, first on PATH for every run: it retries a connection that
+# was refused (7), answered with nothing (52) or reset (56), up to 5 times
+# with a short wait, and passes everything else straight through (so a 404,
+# a timeout, a redirect loop are still the check's to judge). Only the last
+# attempt's output is shown. STUB_CURL_RETRY=0 turns it off for the case
+# that expects a connect failure. It calls the real curl and sleep by
+# absolute path, so the sleep stub some cases put on PATH never sees it.
+real_curl=$(command -v curl)
+real_sleep=$(command -v sleep)
+mkdir "$work/cbin"
+cat >"$work/cbin/curl" <<WRAP
+#!/usr/bin/env bash
+n=0
+while :; do
+  rc=0
+  out=\$($real_curl "\$@" 2>"$work/curl.err.\$\$") || rc=\$?
+  case \$rc in 7 | 52 | 56) [ "\${STUB_CURL_RETRY:-1}" = 1 ] && [ \$n -lt 5 ] || break ;; *) break ;; esac
+  n=\$((n + 1))
+  $real_sleep 0.\$n
+done
+printf '%s' "\$out"
+cat "$work/curl.err.\$\$" >&2
+rm -f "$work/curl.err.\$\$"
+exit \$rc
+WRAP
+chmod +x "$work/cbin/curl"
 
 # readme <line>...: the fixture README.
 readme() { printf '%s\n' "$@" >"$work/README.md"; }
@@ -110,7 +169,7 @@ readme() { printf '%s\n' "$@" >"$work/README.md"; }
 # log (one path per request) in $work/requests.
 run() {
   local name=$1 want=$2 got=0
-  local envs=(DOCS_LIVE_README="$work/README.md" DOCS_LIVE_MKDOCS="$work/mkdocs.yml" DOCS_LIVE_BACKOFF=0 DOCS_LIVE_RETRIES=0 DOCS_LIVE_TIMEOUT=10 no_proxy=127.0.0.1)
+  local envs=(DOCS_LIVE_README="$work/README.md" DOCS_LIVE_MKDOCS="$work/mkdocs.yml" DOCS_LIVE_BACKOFF=0 DOCS_LIVE_RETRIES=0 DOCS_LIVE_TIMEOUT=10 no_proxy=127.0.0.1 PATH="$work/cbin:$PATH")
   shift 2
   while [ "$1" != -- ]; do
     envs+=("$1")
@@ -208,7 +267,7 @@ has "the timeout is named, with curl's exit" "FAIL no answer (curl exit 28"
 run "a slow answer within the timeout passes" 0 DOCS_LIVE_TIMEOUT=10 -- "$site"
 
 readme "[a](http://127.0.0.1:1/site/ok/a/)"
-run "a refused connection fails" 1 -- http://127.0.0.1:1/site/
+run "a refused connection fails" 1 STUB_CURL_RETRY=0 -- http://127.0.0.1:1/site/
 has "the refusal is named, with curl's exit" "FAIL no answer (curl exit 7"
 has "curl's own message is shown" "curl: curl: (7)"
 
@@ -241,12 +300,12 @@ EOF
 chmod +x "$work/bin/sleep"
 readme "[a](${site}after-9/d/)"
 : >"$work/sleeps"
-run "a link that never answers 200 fails after every retry" 1 PATH="$work/bin:$PATH" SLEEP_LOG="$work/sleeps" DOCS_LIVE_RETRIES=3 DOCS_LIVE_BACKOFF=10 -- "$site"
+run "a link that never answers 200 fails after every retry" 1 PATH="$work/bin:$work/cbin:$PATH" SLEEP_LOG="$work/sleeps" DOCS_LIVE_RETRIES=3 DOCS_LIVE_BACKOFF=10 -- "$site"
 requests "it was requested four times" /site/after-9/d/ 4
 if [ "$(tr '\n' ' ' <"$work/sleeps")" = "10 20 40 " ]; then ok "the waits between attempts double: 10, 20, 40"; else fail "the waits between attempts double" "$work/sleeps"; fi
 readme "[a](${site}ok/e/)"
 : >"$work/sleeps"
-run "a first-try 200 never waits" 0 PATH="$work/bin:$PATH" SLEEP_LOG="$work/sleeps" DOCS_LIVE_BACKOFF=10 -- "$site"
+run "a first-try 200 never waits" 0 PATH="$work/bin:$work/cbin:$PATH" SLEEP_LOG="$work/sleeps" DOCS_LIVE_BACKOFF=10 -- "$site"
 if [ -s "$work/sleeps" ]; then fail "a first-try 200 waited" "$work/sleeps"; else ok "a first-try 200 did not wait"; fi
 
 # more URLs than DOCS_LIVE_PARALLEL are still all judged
