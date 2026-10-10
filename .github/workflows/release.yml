@@ -49,12 +49,24 @@ name: release
 # releases racing) publishes its own assets and leaves all three where they
 # were. hack/release-newest.sh decides, from the published releases, at
 # three points: preflight (whether major-tag runs), just before GoReleaser
-# (make_latest and the :latest image tag, always an explicit true or false)
-# and inside major-tag (re-checked under one repository-wide concurrency
-# group). After publishing, a stable run points Latest and :latest at the
-# highest published stable release, so whichever of two racing runs
-# publishes last, both end on the higher one. hack/release-newest_test.sh
-# runs these steps against a stub gh.
+# (the :latest image tag, always an explicit true or false) and inside
+# major-tag (re-checked under one repository-wide concurrency group).
+#
+# GitHub's Latest and the image's :latest are set differently on purpose
+# (#304). GoReleaser sets the image's :latest itself, when it pushes the
+# image. It never sets GitHub's Latest: .goreleaser.yml hard-codes
+# make_latest "false", because GoReleaser publishes the release before
+# actions/attest-build-provenance has run, and the Action's `version: latest`
+# (and @v0, and an untagged SHA) installs only a release whose attestation
+# verifies. A Latest set by GoReleaser would be a release with no attestation
+# until the next step finishes, for good when it fails, and again on every
+# re-run of the job. Instead, the last step of the goreleaser job points
+# GitHub's Latest, and :latest, at the highest published stable release,
+# after the attestation exists (it runs only when every step before it
+# succeeded, so a failed attestation leaves Latest where it was); whichever
+# of two racing runs publishes last, both end on the higher one.
+# hack/release-newest_test.sh runs these steps against a stub gh and pins
+# the order.
 #
 # The Homebrew tap (abd-ulbasit/homebrew-tap) is not pushed from here: it
 # pulls each stable release on a schedule and verifies checksums.txt against
@@ -202,8 +214,9 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       # Re-checked here, not taken from preflight: a newer release may have
-      # published while ci ran. .goreleaser.yml reads it for make_latest and
-      # the :latest image tag.
+      # published while ci ran. .goreleaser.yml reads it for the :latest
+      # image tag only: GitHub's Latest is set by the last step of this job,
+      # after the attestation (#304).
       # The release list goes to a file first, never through a pipe: a run:
       # step without shell: runs under `bash -e`, with no pipefail, so a
       # failed `gh release list` piped into is-newest would read as an empty
@@ -218,7 +231,7 @@ jobs:
           hack/release-newest.sh published >"$RUNNER_TEMP/releases"
           newest=$(hack/release-newest.sh is-newest "$GITHUB_REF_NAME" <"$RUNNER_TEMP/releases")
           echo "newest=$newest" >>"$GITHUB_OUTPUT"
-          echo "GitHub Latest and :latest move to $GITHUB_REF_NAME: $newest" >>"$GITHUB_STEP_SUMMARY"
+          echo "the image's :latest moves to $GITHUB_REF_NAME: $newest" >>"$GITHUB_STEP_SUMMARY"
       - uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
         with:
           distribution: goreleaser
@@ -233,10 +246,15 @@ jobs:
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-checksums: dist/checksums.txt
-      # Two stable releases racing: each decided make_latest before the
-      # other published, so the one that published last took Latest and
-      # :latest, whichever tag it was. Every stable run ends by pointing
-      # both at the highest published stable release; the last run to get
+      # The only place GitHub's Latest is set (GoReleaser's make_latest is
+      # "false"), so it must stay after the attestation step above and keep
+      # the implicit success() condition: a failed attestation then never
+      # moves Latest, and the release is not what `version: latest` installs
+      # until a re-run attests it (#304).
+      # Two stable releases racing: each decided :latest before the other
+      # published, so the one that published last took :latest, whichever
+      # tag it was. Every stable run ends by pointing both Latest and
+      # :latest at the highest published stable release; the last run to get
       # here sees both releases. A no-op when they already name it. When
       # the highest release is another run's, still publishing (its release
       # is out but its image is not yet pushed), :latest is left to that
