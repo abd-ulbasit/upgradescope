@@ -150,10 +150,11 @@ newest_first() {
 
 # release_published <tag>: whether this repository has a published release
 # for tag, from the releases/tags/<tag> API (a draft, or a tag whose release
-# workflow has not published yet, answers 404). 0: published; 1: 404; 2: the
-# API could not be asked or answered otherwise (no network, a rate limit, a
-# 5xx after the retries); api_status then holds curl's HTTP status (000: no
-# answer). GH_TOKEN, the workflow's github.token when the install step
+# workflow has not published yet, answers 404). 0: published (200); 1: 404; 2:
+# the API could not be asked or answered otherwise (no network, a rate limit,
+# a 5xx after the retries, a 2xx other than 200 or a 3xx: curl -f exits 0
+# for those, so the status decides); api_status then holds curl's HTTP status
+# (000: no answer). GH_TOKEN, the workflow's github.token when the install step
 # passes it, raises the rate limit that GitHub-hosted runners share; it goes
 # to api.github.com over https, with no redirect followed, and only when the
 # runner is on github.com (GITHUB_SERVER_URL unset or https://github.com): on
@@ -164,12 +165,18 @@ release_published() {
   local rc=0 auth=()
   case ${GITHUB_SERVER_URL-https://github.com} in
     https://github.com | https://github.com/)
-      [ -z "${GH_TOKEN-}" ] || auth=(-H "Authorization: Bearer $GH_TOKEN") ;;
+      [ -z "${GH_TOKEN-}" ] || auth=(-K -) ;;
   esac
-  api_status=$(curl -fsS --retry 3 --proto '=https' -o /dev/null -w '%{http_code}' \
-    -H 'Accept: application/vnd.github+json' ${auth[@]+"${auth[@]}"} \
-    "https://api.github.com/repos/$repo/releases/tags/$1" 2>/dev/null) || rc=$?
-  [ "$rc" -ne 0 ] || return 0
+  # The token goes in a curl config on stdin, not -H on argv, where any local
+  # user of a shared self-hosted runner could read it from ps or /proc.
+  api_status=$({ [ -z "${GH_TOKEN-}" ] || [ ${#auth[@]} -eq 0 ] || printf 'header = "Authorization: Bearer %s"\n' "$GH_TOKEN"; } |
+    curl -fsS --retry 3 --proto '=https' -o /dev/null -w '%{http_code}' \
+      -H 'Accept: application/vnd.github+json' ${auth[@]+"${auth[@]}"} \
+      "https://api.github.com/repos/$repo/releases/tags/$1" 2>/dev/null) || rc=$?
+  # curl -f fails only from HTTP 400, and the probe follows no redirect, so a
+  # 2xx or 3xx (a 301 after a repository rename or transfer) exits 0 too:
+  # only a 200 is "published".
+  [ "$rc" -eq 0 ] && [ "$api_status" = 200 ] && return 0
   [ "$api_status" = 404 ] && return 1
   return 2
 }
@@ -412,7 +419,7 @@ install() {
         # A SHA pin asks for this commit's version: latest would be another
         # one, so there is no fallback, and verify-provenance: false would
         # not help (there is nothing to download).
-        die "the release for $unpublished, the tag(s) at the action ref $sha, is not published yet; nothing was installed. Pin a published release (version: vX.Y.Z), or wait for the release workflow to publish it and re-run"
+        die "the release for $unpublished, the tag(s) at the action ref $sha, is not published yet (or its release run failed); nothing was installed. Pin a published release (version: vX.Y.Z), or wait for the release workflow to publish it and re-run"
       else
         tag=latest
         case $rc in

@@ -66,7 +66,9 @@ name: release
 # exists (it runs only when every step before it succeeded, so a failed
 # attestation leaves Latest where it was). Latest is never moved to another
 # run's release, which that run has not attested yet: of two racing runs,
-# the higher one's own run moves Latest, once it has attested.
+# the higher one's own run moves Latest, once it has attested. A Latest
+# moved by hand is therefore not put back by a run on a lower tag; only the
+# highest release's own run (a re-run of it) restores it.
 # hack/release-newest_test.sh runs these steps against a stub gh and pins
 # the order.
 #

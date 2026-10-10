@@ -151,7 +151,9 @@ runs:
         ACTION_REF: ${{ github.action_ref }}
         ACTION_REPOSITORY: ${{ github.action_repository }}
         # gh attestation verify reads this repository's public
-        # attestations through the GitHub API with it; no permission
+        # attestations through the GitHub API with it, and, on github.com
+        # only, the commit-SHA release lookup (releases/tags) is
+        # authenticated with it to raise the rate limit; no permission
         # beyond the default read of public data is needed.
         GH_TOKEN: ${{ github.token }}
       run: bash "$GITHUB_ACTION_PATH/run.sh" install

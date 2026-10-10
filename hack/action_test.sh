@@ -155,8 +155,9 @@ mkdir -p "$work/stub-curl"
 cat >"$work/stub-curl/curl" <<EOF
 #!/usr/bin/env bash
 out= fmt= url= hdr=
+echo "\$*" >>"$work/argv"
 while [ \$# -gt 0 ]; do
-  case \$1 in -o) out=\$2; shift ;; -w) fmt=\$2; shift ;; -H) hdr="\$hdr[\$2]"; shift ;; -*) ;; *) url=\$1 ;; esac
+  case \$1 in -o) out=\$2; shift ;; -w) fmt=\$2; shift ;; -H) hdr="\$hdr[\$2]"; shift ;; -K) hdr="\$hdr[\$(sed -n 's/^header = "\(.*\)"\$/\1/p')]"; shift ;; -*) ;; *) url=\$1 ;; esac
   shift
 done
 echo "curl \$url" >>"$work/calls"
@@ -170,7 +171,8 @@ case \$url in
     # STUB_API_REJECT_AUTH: an enterprise token is rejected by github.com (401), an anonymous request is not.
     if [ -n "\${STUB_API_REJECT_AUTH:-}" ] && [[ \$hdr == *Authorization* ]]; then code=401; elif [ -n "\${STUB_API_FAIL:-}" ]; then code=\$STUB_API_FAIL; elif [ ! -d "$work/rel/\${url##*/}" ]; then code=404; fi
     [ "\$fmt" != '%{http_code}' ] || printf '%s' "\$code"
-    [ "\$code" = 200 ] || { echo "curl: (22) The requested URL returned error: \$code" >&2; exit 22; } ;;
+    # Like curl -f: only 400 and above fail; a 2xx or 3xx answer exits 0.
+    [ "\$code" -lt 400 ] || { echo "curl: (22) The requested URL returned error: \$code" >&2; exit 22; } ;;
   "$releases/download/"*)
     f="$work/rel/\${url#"$releases/download/"}"
     if [ -n "\${STUB_CURL_RETRIES:-}" ]; then
@@ -383,7 +385,7 @@ run() {
   rt="$work/rt$((++n))"
   [ -n "${same_job:-}" ] || tmp="$rt/tmp"
   mkdir -p "$rt" "$tmp"
-  : >"$rt/output" && : >"$rt/path" && : >"$rt/summary" && : >"$work/calls"
+  : >"$rt/output" && : >"$rt/path" && : >"$rt/summary" && : >"$work/calls" && : >"$work/argv"
   code=0
   # gh, to verify attestations, is on PATH as on GitHub-hosted runners,
   # unless the case sets verifier (the stub dirs to use instead, or none).
@@ -625,6 +627,7 @@ hasnt "a SHA with a published release does not warn" "$work/out" "::warning"
 # anonymous.
 run install "$work/stub-curl:$work/stub-git:" INPUT_VERSION= "$own" ACTION_REF=$sha_two GH_TOKEN=stub-token
 has "the probe sends the workflow token to api.github.com" "$work/calls" "curl-headers [Accept: application/vnd.github+json][Authorization: Bearer stub-token]"
+hasnt "...but not on curl's command line, where other users of a shared runner can read it" "$work/argv" "stub-token"
 run install "$work/stub-curl:$work/stub-git:" INPUT_VERSION= "$own" ACTION_REF=$sha_two
 has "the probe is anonymous without a token" "$work/calls" "curl-headers [Accept: application/vnd.github+json]"
 hasnt "the probe sends no Authorization header without a token" "$work/calls" "Authorization"
@@ -645,7 +648,7 @@ has "...naming the HTTP status" "$work/out" "failed with HTTP 401)"
 for vp in true false; do
   run install "$work/stub-curl:$work/stub-git:$work/stub-go:" INPUT_VERSION= "$own" ACTION_REF=$sha_unpub STUB_LATEST=v9.9.4 INPUT_VERIFY_PROVENANCE=$vp
   expect "a SHA whose only tags have no release fails, naming them, newest first (verify-provenance: $vp)" 1 \
-    "the release for v9.9.12-rc.1, v9.9.11, the tag(s) at the action ref $sha_unpub, is not published yet; nothing was installed. Pin a published release (version: vX.Y.Z), or wait for the release workflow to publish it and re-run"
+    "the release for v9.9.12-rc.1, v9.9.11, the tag(s) at the action ref $sha_unpub, is not published yet (or its release run failed); nothing was installed. Pin a published release (version: vX.Y.Z), or wait for the release workflow to publish it and re-run"
   hasnt "...without suggesting verify-provenance: false (verify-provenance: $vp)" "$work/out" "verify-provenance"
   hasnt "...without falling back to latest (verify-provenance: $vp)" "$work/calls" "$releases/latest"
   hasnt "...or to a source build (verify-provenance: $vp)" "$work/calls" "go "
@@ -654,11 +657,14 @@ for vp in true false; do
     fail "...and installs nothing, with one error (verify-provenance: $vp)" "$work/out"
 done
 # An API answer that is neither 200 nor 404 (a rate limit, an outage) is not
-# "unpublished": the step cannot tell, and says so.
-for st in 403 503; do
+# "unpublished": the step cannot tell, and says so. That includes a 2xx or 3xx
+# answer (a 301 after a repository rename or transfer; the probe follows no
+# redirect): curl -f exits 0 for it, so only the status can tell it from 200.
+for st in 403 503 301 204; do
   run install "$work/stub-curl:$work/stub-git:" INPUT_VERSION= "$own" ACTION_REF=$sha_two STUB_API_FAIL=$st
   expect "a releases/tags API error ($st) fails: it cannot tell whether v9.9.10 is published" 1 \
     "cannot tell whether the release for v9.9.10, a tag at the action ref $sha_two, is published"
+  has "...naming the HTTP status ($st)" "$work/out" "failed with HTTP $st)"
   hasnt "...and does not fall back to latest ($st)" "$work/calls" "$releases/latest"
   installed_nothing && ok "...and installs nothing ($st)" || fail "...and installs nothing ($st)" "$work/out"
 done
