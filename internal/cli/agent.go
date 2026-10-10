@@ -286,7 +286,7 @@ The Helm chart (deploy/chart) runs it in the cluster with read-only RBAC.`,
 	cmd.Flags().IntVar(&opts.podPassEvery, "pod-pass-every", collect.DefaultPodPassEvery,
 		"list every pod outside kube-system once per this many ticks (the full pass is the first of them) and detect add-ons from that pass's images and labels in between, so an add-on installed or upgraded since is reported as it was for at most this many ticks minus one; 1 lists them every tick. kube-system pods, Helm releases, GitOps charts and IngressClasses are read every tick, and a change in the Helm releases or GitOps charts that name an add-on lists every pod on the next one")
 	cmd.Flags().DurationVar(&opts.podPassMaxAge, "pod-pass-max-age", collect.DefaultPodPassMaxAge,
-		"list every pod again when the last full pass is this old, whatever --pod-pass-every says; must be positive. The age of reused evidence is status.addOnEvidenceAgeSeconds")
+		"list every pod again when the last full pass is this old, whatever --pod-pass-every says; must be positive. At or below --interval, whether a tick reuses a pass depends on the tick jitter (almost every tick lists every pod), and the agent logs a warning at start. The age of reused evidence is status.addOnEvidenceAgeSeconds")
 	cmd.Flags().StringSliceVar(&opts.targets, "targets", nil,
 		"target minors, CSV, e.g. 1.37,1.38, at most 8 distinct minors (the ClusterReadiness spec.targets cap; more is refused at start); when set, the ClusterReadiness spec.targets is reconciled to them every tick (overriding kubectl edits)")
 	cmd.Flags().BoolVar(&opts.manageCRD, "manage-crd", true,

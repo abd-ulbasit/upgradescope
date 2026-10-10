@@ -109,6 +109,44 @@ func TestRunForceSyncBelowTheIntervalMeansEveryTick(t *testing.T) {
 	}
 }
 
+// A --pod-pass-max-age at or below the interval means the pods are listed on
+// every tick whatever --pod-pass-every says, and whether a tick reuses the
+// pass is up to the jitter: Run warns once at the start, naming both
+// settings, and only when a pass could have been reused otherwise (#228).
+func TestRunWarnsWhenPodPassMaxAgeIsAtOrBelowTheInterval(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		every  int
+		maxAge time.Duration
+		warn   bool
+	}{
+		{"below the interval", 3, time.Minute, true},
+		{"at the interval", 3, 5 * time.Minute, true},
+		{"above the interval", 3, 5*time.Minute + time.Second, false},
+		{"every 1 lists every tick anyway", 1, time.Minute, false},
+		{"defaults", 0, 0, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logs := &syncBuffer{}
+			cfg := Config{Interval: 5 * time.Minute, PodPassEvery: tc.every, PodPassMaxAge: tc.maxAge,
+				Logger: slog.New(slog.NewJSONHandler(logs, nil))}
+			runOneTick(t, fakeAPIExt(), cfg)
+			var warned int
+			for _, l := range logs.lines(t) {
+				if l["level"] == "WARN" && strings.Contains(l["msg"].(string), "pod-pass-max-age") {
+					warned++
+					if l["podPassMaxAge"] != tc.maxAge.String() || l["interval"] != "5m0s" || l["podPassEvery"] != float64(tc.every) {
+						t.Errorf("warning does not name the settings: %v", l)
+					}
+				}
+			}
+			if want := map[bool]int{true: 1, false: 0}[tc.warn]; warned != want {
+				t.Errorf("%d pod-pass-max-age warnings, want %d: %v", warned, want, logs.lines(t))
+			}
+		})
+	}
+}
+
 // The reviewer's case: --force-sync-every 1m with --interval 10m pushed an
 // unchanged inventory on every tick before #238, and must still when the
 // jitter brings a tick early (0.95 × the interval, and the floor itself).
