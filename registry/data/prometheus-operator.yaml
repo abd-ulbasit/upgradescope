@@ -9,6 +9,10 @@ display_name: Prometheus Operator
 matchers:
   images:
     - prometheus-operator/prometheus-operator
+    - rancher/mirrored-prometheus-operator-prometheus-operator # Rancher Monitoring, the upstream tag
+    # Bitnami's rebuild, tagged <po>-debian-12-r<n> (empty on bitnami/ since 2025).
+    - bitnami/prometheus-operator
+    - bitnamilegacy/prometheus-operator
   charts:
     - kube-prometheus-stack
     - prometheus-operator

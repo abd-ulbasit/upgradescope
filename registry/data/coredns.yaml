@@ -4,8 +4,15 @@ id: coredns
 display_name: CoreDNS
 matchers:
   images:
-    - coredns/coredns
+    - coredns/coredns # also matches public.ecr.aws/eks-distro/coredns/coredns (v<coredns>-eks-<k8s>-<n>)
     - eks/coredns # EKS add-on image, tagged v<coredns>-eksbuild.N
+    # AKS: Microsoft's builds, tagged v<coredns>-<build> or v<coredns>-hotfix.<date>
+    # (repositories read from mcr.microsoft.com's tag lists on 2026-10-10). Provider
+    # builds, so they name their host (see CONTRIBUTING).
+    - mcr.microsoft.com/oss/kubernetes/coredns
+    - mcr.microsoft.com/oss/v2/kubernetes/coredns
+    # RKE2 and k3s: Rancher's verbatim mirror, the upstream tag (docker.io/rancher).
+    - rancher/mirrored-coredns-coredns
   charts:
     - coredns
 support:

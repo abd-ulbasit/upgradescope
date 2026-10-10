@@ -6,6 +6,19 @@ matchers:
   images:
     - kube-state-metrics/kube-state-metrics
     - coreos/kube-state-metrics # legacy quay.io/coreos image
+    # AKS: Microsoft's builds, tagged v<ksm> or v<ksm>-<build>.
+    - mcr.microsoft.com/oss/kubernetes/kube-state-metrics
+    - mcr.microsoft.com/oss/v2/kubernetes/kube-state-metrics
+    # GKE: Google's build, tagged v<ksm>-gke.<n>.
+    - gcr.io/gke-release/kube-state-metrics
+    - gke.gcr.io/kube-state-metrics
+    # RKE2, k3s and Rancher Monitoring: Rancher's verbatim mirror, the upstream tag.
+    - rancher/mirrored-kube-state-metrics-kube-state-metrics
+    # Bitnami's rebuild, tagged <ksm>-debian-12-r<n>. The repositories on
+    # public.ecr.aws/bitnami and docker.io/bitnami are empty since 2025 (checked
+    # 2026-10-10); the matchers keep recognising pinned references and mirrors.
+    - bitnami/kube-state-metrics
+    - bitnamilegacy/kube-state-metrics
   charts:
     - kube-state-metrics
 support:

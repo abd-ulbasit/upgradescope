@@ -14,6 +14,16 @@ matchers:
     - cilium/operator-aws
     - cilium/operator-azure
     - cilium/hubble-relay
+    # AKS's Azure CNI powered by Cilium (mcr.microsoft.com/oss/cilium/*,
+    # oss/v2/cilium/*; tags v<cilium>-<build>) is deliberately not matched:
+    # it is Microsoft's build under AKS's support policy, and an upstream line's
+    # end of life is not AKS's (#18, TestProviderBuildsGetNoUpstreamEOL).
+    # RKE2: Rancher's verbatim mirrors (Docker Hub), the upstream tag.
+    - rancher/mirrored-cilium-cilium
+    - rancher/mirrored-cilium-operator-generic
+    - rancher/mirrored-cilium-operator-aws
+    - rancher/mirrored-cilium-operator-azure
+    - rancher/mirrored-cilium-hubble-relay
   charts:
     - cilium
 support:

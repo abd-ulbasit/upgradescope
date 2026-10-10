@@ -17,6 +17,15 @@ matchers:
     - calico/apiserver
     - calico/csi
     - calico/pod2daemon-flexvol
+    # AKS network policy (mcr.microsoft.com/oss/calico/*, oss/v2/calico/*; tags
+    # release-v<major.minor> or v<calico>-<build>) is deliberately not matched,
+    # like AKS Cilium in cilium.yaml: Microsoft's build under AKS's support
+    # policy, not judged by upstream's release-line dates (#18).
+    # RKE2: Rancher's verbatim mirrors (Docker Hub), the upstream tag.
+    - rancher/mirrored-calico-node
+    - rancher/mirrored-calico-cni
+    - rancher/mirrored-calico-typha
+    - rancher/mirrored-calico-kube-controllers
   charts:
     - tigera-operator
 support:
