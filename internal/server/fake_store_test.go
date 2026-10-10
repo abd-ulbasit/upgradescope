@@ -30,6 +30,9 @@ type fakeStore struct {
 	// errs injects failures by method name, e.g. errs["InsertSnapshot"].
 	errs map[string]error
 
+	listReadTokensCalls int    // ListReadTokens calls, failed ones too
+	onListReadTokens    func() // when set, runs at the start of every ListReadTokens, outside the lock
+
 	pruneCalls []time.Time       // cutoffs Prune was called with
 	prunePart  store.PruneResult // what a failing Prune reports it had deleted
 }
@@ -55,6 +58,36 @@ func newFakeStore() *fakeStore {
 		readTokens: map[string]*fakeReadToken{},
 		errs:       map[string]error{},
 	}
+}
+
+// wipe is a lost database: every row is gone, as when a PVC is replaced or
+// an emptyDir restarts empty, under the lock the server's goroutines take.
+// Injected errors and counters stay.
+func (f *fakeStore) wipe() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.clusters = map[int64]store.Cluster{}
+	f.snapshots, f.evals, f.outbox = nil, nil, nil
+	f.tokens = map[string]*fakeToken{}
+	f.readTokens = map[string]*fakeReadToken{}
+}
+
+// setErr injects (or, with nil, clears) a failure of the named method.
+func (f *fakeStore) setErr(method string, err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err == nil {
+		delete(f.errs, method)
+		return
+	}
+	f.errs[method] = err
+}
+
+// readTokenListings is how many times ListReadTokens was called.
+func (f *fakeStore) readTokenListings() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.listReadTokensCalls
 }
 
 func (f *fakeStore) id() int64 { f.nextID++; return f.nextID }
@@ -726,8 +759,12 @@ func (f *fakeStore) ValidReadToken(_ context.Context, token string) ([]string, b
 }
 
 func (f *fakeStore) ListReadTokens(_ context.Context) ([]store.ReadToken, error) {
+	if hook := f.onListReadTokens; hook != nil {
+		hook()
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.listReadTokensCalls++
 	if err := f.errs["ListReadTokens"]; err != nil {
 		return nil, err
 	}

@@ -709,7 +709,7 @@ metrics:
 		}
 	}
 	// A release that fits keeps the names it always had.
-	objs := render(t, "server.enabled=true", "metrics.serviceMonitor.enabled=true", "server.teamMap[0].pattern=a-*", "server.teamMap[0].team=a")
+	objs := render(t, "server.enabled=true", "server.readToken=r", "metrics.serviceMonitor.enabled=true", "server.teamMap[0].pattern=a-*", "server.teamMap[0].team=a")
 	var got []string
 	for _, o := range objs {
 		if o.GetKind() == "Service" || o.GetKind() == "Secret" || o.GetKind() == "ConfigMap" || o.GetKind() == "PersistentVolumeClaim" {
@@ -810,7 +810,7 @@ func TestNetworkPolicyGuards(t *testing.T) {
 		t.Errorf("NetworkPolicy peers = %v, want the agent and the ingress controller", peers)
 	}
 
-	monitor := []string{"server.enabled=true", "networkPolicy.enabled=true", "metrics.serviceMonitor.enabled=true"}
+	monitor := []string{"server.enabled=true", "server.readToken=r", "networkPolicy.enabled=true", "metrics.serviceMonitor.enabled=true"}
 	if msg := renderErr(t, monitor...); !strings.Contains(msg, "networkPolicy.serverIngressFrom") || !strings.Contains(msg, "Prometheus") {
 		t.Errorf("ServiceMonitor with a NetworkPolicy and no peers: render error = %q", msg)
 	}

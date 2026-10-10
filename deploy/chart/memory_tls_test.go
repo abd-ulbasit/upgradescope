@@ -107,7 +107,7 @@ func TestGoMemLimitFollowsTheContainerLimit(t *testing.T) {
 // ca.crt when it has one: a default install pushed the any-cluster
 // ingest token over plain HTTP (#126 SE-09).
 func TestServerTLSFromSecret(t *testing.T) {
-	objs := render(t, "server.enabled=true", "server.ingestToken=t", "server.tls.secretName=srv-tls", "metrics.serviceMonitor.enabled=true")
+	objs := render(t, "server.enabled=true", "server.ingestToken=t", "server.readToken=r", "server.tls.secretName=srv-tls", "metrics.serviceMonitor.enabled=true")
 	srv := container(t, objs, "upgradescope-server")
 	for _, want := range []string{"--tls-cert-file=/etc/upgradescope/tls/tls.crt", "--tls-key-file=/etc/upgradescope/tls/tls.key"} {
 		if !slices.Contains(args(srv), want) {

@@ -204,7 +204,7 @@ avoid it). The server's own read authentication decides what is allowed, as
 it does for `curl`. **A server that requires a token rejects a call made
 without one, and the tool returns that `401`** as its error, saying to
 supply the token. An open server (loopback, or `--allow-anonymous-read`)
-needs none.
+needs none, and answers a token it does not know with `401`.
 
 The client follows no redirect (a `3xx` is the tool's error), and a read
 token sent over plain `http://` to a host that is not loopback gets a

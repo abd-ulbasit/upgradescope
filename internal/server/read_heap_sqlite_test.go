@@ -45,6 +45,9 @@ func newSQLiteTestServerAt(t *testing.T, path string, opts ...func(*Config)) *Se
 	for _, o := range opts {
 		o(&cfg)
 	}
+	if len(cfg.AllowedHosts) == 0 {
+		cfg.AllowedHosts = testClientHosts // as newTestServer
+	}
 	s, err := New(cfg)
 	if err != nil {
 		t.Fatalf("New: %v", err)

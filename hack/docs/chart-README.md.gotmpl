@@ -142,8 +142,10 @@ cluster (the shared ingest token, as any cluster). Give remote agents an
   `server.ingress.host` and `server.ingress.className`, with
   `server.ingress.tls` on by default (Secret `<fullname>-server-tls`
   unless `server.ingress.tls.secretName`, e.g. filled by cert-manager's
-  `cert-manager.io/cluster-issuer` annotation). The Ingress refuses to
-  render without a read token.
+  `cert-manager.io/cluster-issuer` annotation). Without a read token the
+  chart closes the read API (reads are 401 until you mint a token), and
+  the Ingress refuses to render when `server.allowAnonymousRead` opens it
+  without `server.ingress.allowAnonymousRead`.
 - **On the server itself**: `server.tls.secretName` (a `kubernetes.io/tls`
   Secret, mounted read-only and passed as `--tls-cert-file` and
   `--tls-key-file`) or `server.tls.certManager.issuerRef`. Probes, the
@@ -303,12 +305,28 @@ jsonpath='{.data}'`; or remove the value in a later upgrade.
 
 ## Read API exposure
 
-With `server.enabled=true` and no read token, the read API is
-**unauthenticated** behind the ClusterIP Service. Set `server.readToken`
-(or `readTokenFromSecret`) before exposing it via Ingress/LoadBalancer;
-`server.ingress.enabled` refuses to render without one unless
-`server.ingress.allowAnonymousRead=true` says an authenticating layer
-(oauth2-proxy, an identity-aware proxy) fronts it.
+With `server.enabled=true` and no `server.readToken` (or
+`readTokenFromSecret`), the chart passes `--require-read-credential`: the
+read API is **closed**, and every read, the dashboard's data and
+`/api/v1/gate` included, returns 401 until you mint a read token with
+`kubectl exec` (the install notes print the command for your database).
+Read tokens live in the database, so a lost PVC, a restored older backup or
+`persistence.enabled=false` (on every pod restart) forgets them: the flag
+keeps the API closed regardless, and you mint one again. The probes work
+without one; `metrics.serviceMonitor` needs `server.readToken` (the render
+fails without it) because the ServiceMonitor can send only that token.
+
+`server.allowAnonymousRead=true` opts into an **open** read API instead
+(`--allow-anonymous-read`): open while no read credential exists, and open
+again whenever the database is lost or restored, to everyone who can reach
+the server, so use it only when an authenticating layer in front is the
+access control. `server.ingress.allowAnonymousRead=true` is the same
+opt-in (it also says an authenticating layer fronts the Ingress, which the
+render requires when the read API is open); to rely on minted tokens, set
+neither. An open read API answers an anonymous request only when its Host
+is the Service's name, `server.ingress.host`, an entry of
+`server.allowedHosts`, `localhost` or the pod's address, and a request that
+presents a bearer nothing knows gets 401.
 `networkPolicy.enabled=true` admits traffic to the server only from this
 release's agent and the peers in `networkPolicy.serverIngressFrom`; with
 `server.ingress.enabled` or `metrics.serviceMonitor.enabled` the render

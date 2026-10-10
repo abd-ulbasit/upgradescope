@@ -290,7 +290,10 @@ curl -sS --fail-with-body --retry 5 -X POST \
   rules of a `.upgradescope.yaml` sent in `config`
   ([The server gate](../guides/suppressions-and-baselines.md#the-server-gate)).
 - The gate stores nothing. It needs the read token, when the server has
-  one. A team-scoped token judges the PR against that team's share of the
+  one. A server with no read credential and an open read API answers a
+  placeholder bearer with `401`: leave `READ_TOKEN` empty there, which
+  sends `Bearer ` and counts as no bearer
+  ([an unknown bearer is never the open read](../operations/auth.md)). A team-scoped token judges the PR against that team's share of the
   cluster only: its score and cluster verdict are the share's, and a PR
   that breaks only another team's workloads passes. Gate a repository
   that can break shared or other teams' resources with a fleet-wide

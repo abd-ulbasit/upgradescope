@@ -151,7 +151,10 @@ cannot read is reported as not assessed.
   answers 404, as an unknown one does), never `/metrics`
   ([Read access](auth.md)). The server refuses an open read API unless the
   address it actually bound is loopback, or it is told otherwise
-  (`--allow-anonymous-read`). The `Bearer` scheme is matched
+  (`--allow-anonymous-read`); `--require-read-credential` never opens it,
+  whatever the database holds, and an open one answers a bearer it does
+  not know with `401` and an anonymous request for an unknown Host with
+  `421`. The `Bearer` scheme is matched
   case-insensitively. The read, ingest and admin tokens must all differ.
   A per-cluster token is checked again when its push commits, with the
   cluster the push looked up: a push in flight when its token is revoked,

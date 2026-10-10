@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/abd-ulbasit/upgradescope/internal/engine"
 	"github.com/abd-ulbasit/upgradescope/internal/inventory"
@@ -402,8 +403,11 @@ func (s *Server) readAuth(next http.HandlerFunc) http.HandlerFunc {
 //  2. a bearer that is an active read token: its teams;
 //  3. a request from a trusted proxy that carries the team header: the
 //     teams it lists, never the whole fleet (proxyScope);
-//  4. otherwise the whole fleet when the read API is open (readOpen),
-//     whatever bearer was sent, as before read tokens existed; else 401.
+//  4. otherwise the whole fleet when the read API is open (readOpen) and the
+//     request presents no bearer at all; else 401. A bearer that matched
+//     nothing above is an unknown credential, and 401 even on an open API:
+//     it is never silently upgraded to the whole fleet, which a team token
+//     whose database was lost would otherwise be (#295).
 func (s *Server) readScope(w http.ResponseWriter, r *http.Request) (readScope, bool) {
 	if token := bearerToken(r); token != "" {
 		read, admin := s.tokens.read(), s.tokens.admin() // once each: one request, one value
@@ -421,6 +425,12 @@ func (s *Server) readScope(w http.ResponseWriter, r *http.Request) (readScope, b
 	}
 	if sc, ok := s.proxyScope(r); ok {
 		return sc, true
+	}
+	if bearerToken(r) != "" {
+		// An unknown credential: whether the API is open does not matter,
+		// and is not asked (no store query for it).
+		errJSON(w, http.StatusUnauthorized, "invalid or missing bearer token")
+		return readScope{}, false
 	}
 	open, err := s.readOpen(r.Context())
 	if err != nil {
@@ -440,14 +450,38 @@ func equalToken(presented, configured string) bool {
 	return configured != "" && subtle.ConstantTimeCompare([]byte(presented), []byte(configured)) == 1
 }
 
+// readOpenWindow is how long readOpen keeps an answer of "no read token in
+// the store". On an open read API every anonymous request, whatever its path
+// (the dashboard, assets, probes), asks; without this each one cost a store
+// query before any concurrency limit. The price is that a first read token
+// minted by another process (upgradescope tokens create) closes the API
+// within this window, not at once (auth.md says so). Only "open" is kept:
+// "closed" is remembered for good (readTokensMinted), and an error is never
+// kept.
+const readOpenWindow = time.Second
+
 // readOpen reports whether the read API needs no credential: no
 // --read-token, no trusted-proxy header, and no read token ever minted in
 // the store. Rows are never deleted, so once one is minted the answer stays
 // false (remembered, so it is asked until then only), and revoking the last
-// one does not open the read API again.
+// one does not open the read API again. That holds only while the same
+// database does: a lost, emptied or restored one has no rows, and the API
+// is open again. Config.RequireReadCredential is the answer that does not
+// depend on the data: with it the API is never open.
+//
+// While it is open the store is asked at most once per readOpenWindow,
+// concurrent askers sharing one query.
 func (s *Server) readOpen(ctx context.Context) (bool, error) {
-	if s.tokens.read() != "" || s.cfg.TrustTeamHeader != "" || s.readTokensMinted.Load() {
+	if s.cfg.RequireReadCredential || s.tokens.read() != "" || s.cfg.TrustTeamHeader != "" || s.readTokensMinted.Load() {
 		return false, nil
+	}
+	s.openMu.Lock()
+	defer s.openMu.Unlock()
+	now := s.openClock()
+	if s.openSeen {
+		if age := now.Sub(s.openAt); age >= 0 && age < readOpenWindow {
+			return true, nil
+		}
 	}
 	toks, err := s.cfg.Store.ListReadTokens(ctx)
 	if err != nil {
@@ -455,8 +489,10 @@ func (s *Server) readOpen(ctx context.Context) (bool, error) {
 	}
 	if len(toks) > 0 {
 		s.readTokensMinted.Store(true)
+		s.openSeen = false
 		return false, nil
 	}
+	s.openSeen, s.openAt = true, now
 	return true, nil
 }
 
