@@ -202,7 +202,7 @@ func (inv Inventory) ValidateIdentifiers() error {
 			}
 		}
 	}
-	return nil
+	return inv.validateVolumeIdentifiers()
 }
 
 // validateUsage checks one APIUsage's namespace keys and object refs; at
