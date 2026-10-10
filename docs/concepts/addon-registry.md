@@ -23,6 +23,15 @@ the dashboard.
   An image pinned by digest alone has no tag to tell them apart: it is RKE2's
   build when its pod's labels or a Helm release in its namespace name
   `rke2-ingress-nginx`, and Ingress NGINX otherwise.
+  An image that names no version (pinned by digest, or `:latest`) takes the
+  version of its pod's `app.kubernetes.io/version` label when the pod's
+  labels name the same add-on by the rule under **Pod labels** below: a
+  `helm template` render or a kustomize `images: digest:` keeps the label
+  though the image has no tag. A tag that names a version is never
+  overridden by a label, a label naming another add-on gives nothing, and
+  where pods sharing the image carry different labels the oldest wins. A
+  component image's version is its product line, which no label is
+  guessed in place of.
 - **Component images.** A product whose parts carry their own versions is
   matched by those images too, each part's release line mapped to the
   product line that ships it: Flux's `source-controller` v1.5 and
@@ -46,7 +55,9 @@ the dashboard.
   chart name or `app.kubernetes.io/part-of` is an entry's ID or chart
   matcher is that add-on; the version is `app.kubernetes.io/version` when
   the name label (or, without one, the chart label) named it. Pods running
-  a provider build are never claimed through their labels.
+  a provider build are never claimed through their labels. The same label
+  version fills in an image the add-on's own matcher claims but that gives
+  no version (see **Container images**).
 - **IngressClass.** An `IngressClass` whose `spec.controller` is
   `k8s.io/ingress-nginx` is Ingress NGINX, without a version, when nothing
   else found Ingress NGINX, its RKE2 or AKS builds, or Traefik (whose
@@ -99,6 +110,23 @@ At the installed version, independent of the target unless noted:
   tracked lines, one newer than the newest tracked line, which means the
   registry is behind upstream, or a product without release lines), or no
   version readable → `addon-no-data` info, never a blocker.
+
+  The info's detail says what was missing for the evidence the install was
+  found by, and never a source the detector did not consult. For an image it
+  says no version was read from it: the inventory cannot tell a tag that
+  names no version (a digest, `:latest`) with no usable pod label from a
+  component image whose release line the registry does not map yet, and the
+  sentence covers both. An inventory from an agent that predates the
+  pod-label rule (v0.1.x, v0.2.0-rc.1 and rc.2, which stamp no
+  `collectorSchema`) never took a pod's version label for such an image, so
+  the detail names only the tag or component reason and says the agent did
+  not read the label, and to upgrade it. A Helm release or GitOps chart
+  without an app version is worded the same way, with one difference for a
+  Helm release found by such an agent: a v0.1.x agent reported the chart
+  version where the app version belongs, which the server sets aside, so the
+  release may well record an appVersion, and the detail says only that no
+  app version was read (the release records none, or the agent did not
+  collect it), never that the release records none.
 
 Each install (one per namespace, two where a Helm release and images on
 another release line share one, or one per node for a runtime) is judged

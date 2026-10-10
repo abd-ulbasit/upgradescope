@@ -128,6 +128,11 @@ func TestEvalAddOnsNodeRuntimeNoDataDetail(t *testing.T) {
 	if want := "Detected containerd on node(s): worker-1 (1.9.0), worker-2 (version unknown)."; !strings.HasPrefix(fs[0].Detail, want) {
 		t.Errorf("detail = %q, want prefix %q", fs[0].Detail, want)
 	}
+	// A node whose runtime version is unread keeps the node sentence.
+	fs = evalAddOns(nodes("containerd://"), runtimeKB("1.37"), inventory.Version{Major: 1, Minor: 36}, day("2026-10-02"))
+	if want := " The node reports no container runtime version. Its end of life and Kubernetes compatibility were not assessed."; len(fs) != 1 || !strings.HasSuffix(fs[0].Detail, want) {
+		t.Errorf("findings = %+v, want one with suffix %q", fs, want)
+	}
 }
 
 // The kubelet's removal release is registry data: upstream already moved
