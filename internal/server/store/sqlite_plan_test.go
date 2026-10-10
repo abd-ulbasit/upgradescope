@@ -242,14 +242,21 @@ func TestPruneEvaluationDrainUsesCreatedAtIndex(t *testing.T) {
 	if !strings.Contains(plan, "idx_evaluations_created_at") || !strings.Contains(plan, "created_at<?") {
 		t.Errorf("plan = %q, want a search of idx_evaluations_created_at bounded by created_at<?", plan)
 	}
-	// The outer DELETE looks the ids up by primary key, and the subquery of
-	// each cluster's newest decided evaluation reads a covering index
-	// (idx_evaluations_decided, no report); a bare "SCAN evaluations" is
-	// the table, reports and all.
+	// The outer DELETE looks the ids up by primary key. The subquery of
+	// the newest decided evaluations walks the partial index
+	// idx_evaluations_decided, which is not a covering index: its
+	// "ready = 1 OR blockers > 0" predicate is re-checked against the
+	// table row, so each decided evaluation's row is looked up for its
+	// leading columns (never its report overflow). It runs only when the
+	// created_at range finds a row older than the cutoff. A bare
+	// "SCAN evaluations" would be the table itself, reports and all.
 	for _, step := range strings.Split(plan, "; ") {
 		if step == "SCAN evaluations" {
 			t.Errorf("plan step %q scans every evaluation (plan = %q)", step, plan)
 		}
+	}
+	if !strings.Contains(plan, "SCAN evaluations USING INDEX idx_evaluations_decided") {
+		t.Errorf("plan = %q, want the decided-evaluation subquery to walk idx_evaluations_decided", plan)
 	}
 	if strings.Contains(plan, "TEMP B-TREE") {
 		t.Errorf("plan = %q, want no sort: the index delivers the order", plan)

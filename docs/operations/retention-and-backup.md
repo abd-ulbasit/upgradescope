@@ -73,11 +73,18 @@ measured: a Postgres prune, and the temp space one batch needs.
 What one run reads. The evaluation step finds the old rows from an index on
 `evaluations (created_at, id)` (migration 0010, SQLite and Postgres), taking
 them oldest first and stopping at the cutoff, so a run with nothing older
-than the window reads the oldest index entries and no report. The conditions
-that spare rows read covering indexes only: each cluster's latest snapshot,
-and every decided evaluation's index entry for the newest of each
-(cluster, target). Before 0010 the step scanned the whole evaluations table,
-every run, the last short batch of a drain included; `created_at` is stored
+than the window reads the oldest index entries and no report. The
+subqueries that spare rows (each cluster's latest snapshot, and the newest
+decided evaluation of each cluster and target) run only when the index
+range finds a row older than the cutoff, which in steady state is every
+daily run. The snapshot condition reads a covering index. The decided one
+walks `idx_evaluations_decided` and looks up the row of every decided
+evaluation for its leading columns (the index is partial, its predicate is
+re-checked against the table, so the plan says `USING INDEX`, not
+`USING COVERING INDEX`), never reading its report, so its cost
+follows the number of decided evaluations and not their size. A prune that
+deletes nothing runs neither subquery. Before 0010 the step scanned the
+whole evaluations table, every run, the last short batch of a drain included; `created_at` is stored
 after the report on SQLite, so that read every report's overflow pages, all
 under SQLite's single write lock, which every push and re-evaluation commit
 waits for. The index alone does not change this: the statement has to order
@@ -191,6 +198,11 @@ whole job (arm 1 still judges each replica's own gauge). The alert waits a
 further 15 minutes (`for`) after its condition holds, and the prune runs at
 startup and then daily, so arm 1 and arm 2 are two missed days in a row.
 Until a run completes the database keeps growing.
+
+One transient failure at startup (a locked database, say) keeps arm 3
+firing until the next prune completes, which can be up to the retention
+interval (daily) away, since the server does not retry sooner; restarting
+the server runs the startup prune again.
 
 `/readyz` does not change: it pings the database and nothing else. A server
 that cannot prune can still ingest and serve, and restarting it would not

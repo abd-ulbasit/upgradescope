@@ -202,7 +202,10 @@ that keeps failing). The third arm reads the counter's value, not its
 increase, because the startup prune fails before Prometheus first scrapes
 the new process: the series is first seen at 1 and `increase()` over it is
 0. A restart resets both series, so a process that has not failed, or a
-restart after a prune succeeded, stays quiet. Not covered: a process that
+restart after a prune succeeded, stays quiet. One transient startup failure
+(a locked database, say) keeps arm 3 firing until the next prune completes,
+up to the daily retention interval, because the server does not retry
+sooner. Not covered: a process that
 restarts before it is scraped even once (the pod's restarts are the
 signal), and, with several Postgres replicas, a replica that fails while
 another has completed a prune, since `absent()` looks at the whole job

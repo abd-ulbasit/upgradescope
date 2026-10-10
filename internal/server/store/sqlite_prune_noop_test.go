@@ -40,13 +40,19 @@ func seedInWindowEvaluations(t *testing.T, s *SQLite, n, reportBytes int) int64 
 // a report, and so does not hold SQLite's one write lock for longer than a
 // few milliseconds: a push of another cluster started with it commits in
 // well under 50 ms. Before the index every run scanned the table, the
-// reports' overflow pages included, 184-220 ms here on a warm cache and
-// growing with the history (#297). The plan test pins the index; this
-// pins the effect. It writes 600 MB, so it does not run with -short, and
-// the bounds are for a plain run, not the race detector's.
+// reports' overflow pages included, 177-270 ms (five runs, commit 2f9de7cc, 10
+// October 2026; docs/operations/retention-and-backup.md) and growing with
+// the history (#297). The plan test pins the index; this pins the effect.
+// It writes 600 MB, so it does not run with -short, and it skips under the
+// race detector, whose slowdown the bounds are not for (the timing is the
+// proof, not a heap figure, though raceEnabled makes hack/test-heap.sh list
+// it).
 func TestPruneWithNothingToDeleteIsCheap(t *testing.T) {
 	if testing.Short() {
 		t.Skip("writes 600 MB of reports")
+	}
+	if raceEnabled {
+		t.Skip("timing bounds are for a run without the race detector")
 	}
 	ctx := context.Background()
 	s := newTestStore(t)
@@ -54,15 +60,22 @@ func TestPruneWithNothingToDeleteIsCheap(t *testing.T) {
 	other := mustCluster(t, s, "other")
 
 	pushed := make(chan time.Duration, 1)
-	start := time.Now()
+	pushStarted := make(chan time.Time, 1)
 	go func() {
-		// A push of another cluster contending for the write lock.
+		// A push of another cluster contending for the write lock, timed
+		// from its own start, not from the test's.
+		began := time.Now()
+		pushStarted <- began
 		_, _, err := s.InsertSnapshot(ctx, Snapshot{ClusterID: other, Hash: "bbb", KBVersion: "kb-1", AgentVersion: "v0.2.0", ReceivedAt: tBase, Inventory: []byte(`{}`)})
 		if err != nil {
 			t.Error(err)
 		}
-		pushed <- time.Since(start)
+		pushed <- time.Since(began)
 	}()
+	// Prune starts once the push goroutine is running, so the push is
+	// already contending (or about to) as Prune takes its statements.
+	began := <-pushStarted
+	start := time.Now()
 	res, err := s.Prune(ctx, tBase.Add(-90*24*time.Hour), nil)
 	took := time.Since(start)
 	if err != nil {
@@ -76,10 +89,7 @@ func TestPruneWithNothingToDeleteIsCheap(t *testing.T) {
 	if err := s.db.QueryRow(`SELECT (SELECT page_count FROM pragma_page_count) * (SELECT page_size FROM pragma_page_size)`).Scan(&size); err != nil {
 		t.Fatal(err)
 	}
-	t.Logf("database %d MB; %d evaluations of %d KB, nothing to delete: Prune %v, concurrent push committed after %v", size>>20, noopPruneEvaluations, noopPruneReportBytes>>10, took, wait)
-	if raceEnabled {
-		return
-	}
+	t.Logf("database %d MB; %d evaluations of %d KB, nothing to delete: Prune %v, concurrent push (started %v before Prune) committed after %v", size>>20, noopPruneEvaluations, noopPruneReportBytes>>10, took, start.Sub(began), wait)
 	if took > 50*time.Millisecond || wait > 50*time.Millisecond {
 		t.Errorf("Prune took %v and the concurrent push %v, want both under 50ms", took, wait)
 	}
