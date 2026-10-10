@@ -53,8 +53,10 @@ func TestScanFilesUnassessedRemovedAPIIsUnknown(t *testing.T) {
 	if rep.Verdict != "unknown" || rep.Ready || !found {
 		t.Errorf("verdict %q ready %v notAssessed %+v; want unknown, naming the PDB template", rep.Verdict, rep.Ready, rep.NotAssessed)
 	}
-	if !strings.Contains(stderr, "warning: skipped ") || !strings.Contains(stderr, "pdb.yaml:1: ") {
-		t.Errorf("stderr = %q, want a skipped-document warning", stderr)
+	// The template is outside any chart, so it is counted, not warned
+	// about by name: the report names it.
+	if !strings.Contains(stderr, "warning: skipped 1 file containing {{ }}") {
+		t.Errorf("stderr = %q, want the count of skipped templates", stderr)
 	}
 
 	out, _, err = execScanFiles(t, "--files", dir, "--output", "sarif")
