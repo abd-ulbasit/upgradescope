@@ -5,7 +5,9 @@ upgrade, because a field inside it stops working. The commonest case is a
 pod volume of an in-tree plugin that upstream removed when CSI migration
 finished: a Deployment with a `glusterfs` volume is valid `apps/v1`, and on
 Kubernetes 1.26 or later its pods do not start. upgradescope reports these
-as `volume-plugin` findings (#351).
+as `volume-plugin` findings (#351). A StorageClass whose provisioner is
+the plugin's in-tree one (`kubernetes.io/rbd`) has the same problem for the
+claims it provisions (#362).
 
 ## What is checked
 
@@ -18,25 +20,35 @@ notes and pull requests that minor comes from. A unit test refuses an
 entry without a citation, with a minor that does not parse, or whose name
 is not a field of either type.
 
+An entry may also name the plugin's in-tree StorageClass provisioner
+(`provisioner`, as `kubernetes.io/<name>`, each once), with a citation of
+its own (`provisionerCitation`): the upstream source that names it, the
+plugin's `pkg/volume` package in the last release that had it, or
+`k8s.io/csi-translation-lib` for a CSI-migrated plugin. `cephfs` never had
+an in-tree provisioner, nor `gitRepo` or `flexVolume`, so a StorageClass
+cannot name one of them. The provisioners are part of the knowledge base
+version.
+
 The classification follows the `k8s.io/api` field comments: "the in-tree
 type is no longer supported" is **removed**, and "all operations are
 redirected to the CSI driver" is **CSI migration**.
 
-| Plugin | Class | Minor | CSI driver |
-|---|---|---|---|
-| `scaleIO` | removed | 1.22 | |
-| `flocker`, `quobyte`, `storageos` | removed | 1.25 | |
-| `glusterfs` | removed | 1.26 | |
-| `cephfs`, `rbd` | removed | 1.31 | |
-| `gitRepo` | removed (disabled) | 1.33 | |
-| `cinder` | CSI migration | 1.26 | `cinder.csi.openstack.org` |
-| `awsElasticBlockStore` | CSI migration | 1.27 | `ebs.csi.aws.com` |
-| `azureDisk` | CSI migration | 1.27 | `disk.csi.azure.com` |
-| `gcePersistentDisk` | CSI migration | 1.28 | `pd.csi.storage.gke.io` |
-| `vsphereVolume` | CSI migration | 1.29 | `csi.vsphere.vmware.com` |
-| `azureFile` | CSI migration | 1.30 | `file.csi.azure.com` |
-| `portworxVolume` | CSI migration | 1.36 | `pxd.portworx.com` |
-| `flexVolume` | deprecated (1.23) | | |
+| Plugin | Class | Minor | CSI driver | StorageClass provisioner |
+|---|---|---|---|---|
+| `scaleIO` | removed | 1.22 | | `kubernetes.io/scaleio` |
+| `flocker`, `quobyte`, `storageos` | removed | 1.25 | | `kubernetes.io/flocker`, `kubernetes.io/quobyte`, `kubernetes.io/storageos` |
+| `glusterfs` | removed | 1.26 | | `kubernetes.io/glusterfs` |
+| `cephfs` | removed | 1.31 | | none |
+| `rbd` | removed | 1.31 | | `kubernetes.io/rbd` |
+| `gitRepo` | removed (disabled) | 1.33 | | none |
+| `cinder` | CSI migration | 1.26 | `cinder.csi.openstack.org` | `kubernetes.io/cinder` |
+| `awsElasticBlockStore` | CSI migration | 1.27 | `ebs.csi.aws.com` | `kubernetes.io/aws-ebs` |
+| `azureDisk` | CSI migration | 1.27 | `disk.csi.azure.com` | `kubernetes.io/azure-disk` |
+| `gcePersistentDisk` | CSI migration | 1.28 | `pd.csi.storage.gke.io` | `kubernetes.io/gce-pd` |
+| `vsphereVolume` | CSI migration | 1.29 | `csi.vsphere.vmware.com` | `kubernetes.io/vsphere-volume` |
+| `azureFile` | CSI migration | 1.30 | `file.csi.azure.com` | `kubernetes.io/azure-file` |
+| `portworxVolume` | CSI migration | 1.36 | `pxd.portworx.com` | `kubernetes.io/portworx-volume` |
+| `flexVolume` | deprecated (1.23) | | | none |
 
 Notes:
 
@@ -63,8 +75,12 @@ Notes:
 | CSI migration | never | at or after the minor: name the CSI driver that must be installed | earlier |
 | deprecated | never | never | always |
 
-A CSI-migrated plugin is never a blocker on its own. The API field keeps
-working, and every operation goes to the named CSI driver, so a cluster
+A removed plugin's pods do not start whether they name it or mount a
+claim bound to a PersistentVolume that does, and a StorageClass with its
+in-tree provisioner no longer provisions new claims. A CSI-migrated
+plugin's StorageClass keeps working, its new claims provisioned by the
+named CSI driver. A CSI-migrated plugin is never a blocker on its own. The
+API field keeps working, and every operation goes to the named CSI driver, so a cluster
 with that driver installed is fine. upgradescope does not check whether
 the driver is installed. Each finding is keyed `volume-plugin/<plugin>`,
 so ignore rules, `upgradescope.basit.engineer/ignore` annotations on the
@@ -74,24 +90,43 @@ workload and baselines work on it as on any other finding.
 
 - **`scan --files` and the gate.** The pod templates of Deployments,
   DaemonSets, StatefulSets, ReplicaSets, Jobs and CronJobs, a Pod's own
-  volumes, and PersistentVolume manifests. Each one is located by file
+  volumes, PersistentVolume manifests, and StorageClass manifests with an
+  in-tree provisioner. Each one is located by file
   and line. A document that cannot be decoded makes the `volumes`
   capability partial. With `?cluster=`, the gate adds the posted
   manifests' plugins to the cluster's.
-- **Live (`scan`, the agent).** The pods the collector lists anyway: the
-  kube-system pods from the `versions` step and the rest from the
-  `addons` step. The capability makes **no request of its own**
-  (`TestCollectLiveVolumesNoExtraRequest` counts them). Pods are counted
-  per plugin and namespace, and no pod is named. Between full pod passes
-  (`--pod-pass-every`), the pods outside kube-system are reported as the
-  last full pass read them, as add-ons are (`addOnEvidenceAgeSeconds`).
-  If no pod can be listed, `volumes` is not assessed. If a later page
-  fails, it is partial.
-- **Not read live: PersistentVolumes and StorageClasses.** Reading them
-  needs RBAC on `persistentvolumes` and `storageclasses`, which the agent
-  does not have. A PersistentVolumeClaim bound to an in-tree
-  PersistentVolume is not traced, so a pod that uses
-  `awsElasticBlockStore` through a claim is not found live.
+- **Live (`scan`, the agent): pods.** The pods the collector lists
+  anyway: the kube-system pods from the `versions` step and the rest from
+  the `addons` step. Reading them makes no request of its own. Pods are
+  counted per plugin and namespace, and no pod is named. Between full pod
+  passes (`--pod-pass-every`), the pods outside kube-system are reported
+  as the last full pass read them, as add-ons are
+  (`addOnEvidenceAgeSeconds`). If no pod can be listed, `volumes` is not
+  assessed, and the two lists below are not made. If a later page fails,
+  it is partial.
+- **Live: PersistentVolumes and StorageClasses (#362).** The capability
+  makes two requests of its own each collection, more on a cluster with
+  more than 500 of either: one paged list of PersistentVolumes and one of
+  StorageClasses, 500 objects a page (`TestCollectLiveVolumesTwoExtraRequests`
+  counts them). They are listed every collection, never held between pod
+  passes. A PersistentVolume counts for the in-tree plugin of its source,
+  under the namespace of its claim when it is bound, and under none
+  (cluster-scoped) when it is not (a Released one, whose claim is gone,
+  included). A StorageClass whose provisioner is an
+  in-tree one counts for that plugin, under none; a CSI provisioner is not
+  counted. Both are named in the finding, and the ignore annotations on
+  them work as on a workload. The agent's ClusterRole grants `get` and
+  `list` on `persistentvolumes` and `storageclasses` for this. A refused or
+  failed list makes `volumes` partial, with a reason naming what was not
+  read (for example "list persistentvolumes: ... forbidden ...;
+  PersistentVolumes were not checked"). It is not a hard error.
+- **Still not traced.** A pod that uses an in-tree plugin through a claim
+  is found through the PersistentVolume the claim is bound to, not traced
+  from the pod: the finding names the PersistentVolume and counts it under
+  the claim's namespace, but does not name the pods that mount it. A claim
+  still Pending is not read, so a claim of an in-tree StorageClass is found
+  through the class only. A PersistentVolume of a CSI StorageClass names
+  the `csi` source and is not counted.
 
 ## Older agents
 
