@@ -29,5 +29,12 @@ internal/collect TestCollectHelmManifestParsingIsBounded 120
 internal/collect TestPodPagePeakHeapIsBounded 24
 internal/collect TestCollectHelmPeakHeapIsBoundedByOneRelease 9
 internal/collect TestCollectHelmGzipBombIsBounded 1
+# The two #329 tests postdate run 38038631216: their seconds come from a
+# local `make test-heap` of integrate/sweep-2026-10-11 (Apple silicon,
+# 2026-10-11: 8.04 s and 0.74 s, rounded up), where the hosted runner took
+# about three times as long for the collect tests above. Replace them with
+# the hosted runner's from that branch's CI run.
+internal/collect TestParseOnce_RandomManifestsMatchTwoParses 9
+internal/collect TestParseOnce_NumberDenseStreamIsNotSlower 1
 internal/server/store TestPruneWithNothingToDeleteIsCheap 6
 internal/server/store TestEvaluationReadsDoNotGrowWithHistory 2
