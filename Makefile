@@ -370,6 +370,8 @@ hack-test:
 	./hack/vuln-latest-release_test.sh
 	./hack/vuln-latest-release-workflow_test.sh
 	./hack/release-artifacthub-workflow_test.sh
+	./hack/docs-live-check_test.sh
+	./hack/docs-live-workflow_test.sh
 	./packaging/homebrew-tap/script/render-formula_test.sh
 
 .PHONY: demo-up demo-down

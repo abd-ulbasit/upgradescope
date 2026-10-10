@@ -212,6 +212,9 @@ kubectl and kubeconform are also checked against their upstream sha256
 
 `pr-lint.yml` is a separate workflow, not a `ci.yml` job: on every PR, and again when its title or description is edited, `hack/check-breaking.sh` fails a title, description or commit with a `BREAKING CHANGE:` footer whose subject has no `!` (see [Commit conventions](#commit-conventions)). It is not part of `ci-ok`; the repository ruleset decides whether it blocks a merge.
 
+`docs.yml` publishes the documentation site, and GitHub Pages with Source: "GitHub Actions" (Settings -> Pages -> Build and deployment) is part of the repository's required configuration: with it off the deploy fails and every docs link in the README is a 404 (#284).
+After each deploy, and every Monday against the published site, `hack/docs-live-check.sh <site-url>` requests the site root and every README link to it (redirects followed, `#anchors` stripped, retries with doubling waits for a deployment still propagating) and fails the run listing each URL that does not answer 200; `--list` prints those URLs without requesting any.
+
 **When a run is cancelled.** A new push to a pull request cancels that pull
 request's superseded run. Runs on `main`, on a schedule, by dispatch and on
 tags never cancel runs of another commit, ref or kind. Runs of one kind on
