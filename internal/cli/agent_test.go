@@ -465,3 +465,48 @@ func TestAgentPodPassFlags(t *testing.T) {
 		}
 	}
 }
+
+// #344: --helm-namespaces (or $UPGRADESCOPE_HELM_NAMESPACES when the flag
+// is not given), repeatable or comma separated, limits the Helm release
+// read to those namespaces, sorted and each once. Each must be a namespace
+// name, a DNS-1123 label, and a bad one is refused before any cluster
+// access. Neither set reads the whole cluster.
+func TestAgentHelmNamespacesFlag(t *testing.T) {
+	t.Setenv("UPGRADESCOPE_HELM_NAMESPACES", "")
+	got, err := execAgent(t)
+	if err != nil || got.helmNamespaces != nil {
+		t.Fatalf("default = %q, err %v; want none (the whole cluster)", got.helmNamespaces, err)
+	}
+	got, err = execAgent(t, "--helm-namespaces", "kube-system,ingress-nginx", "--helm-namespaces", " cert-manager ", "--helm-namespaces", "kube-system")
+	if want := []string{"cert-manager", "ingress-nginx", "kube-system"}; err != nil || !reflect.DeepEqual(got.helmNamespaces, want) {
+		t.Fatalf("set = %q, err %v; want %q", got.helmNamespaces, err, want)
+	}
+
+	t.Setenv("UPGRADESCOPE_HELM_NAMESPACES", "monitoring, kube-system")
+	got, err = execAgent(t)
+	if want := []string{"kube-system", "monitoring"}; err != nil || !reflect.DeepEqual(got.helmNamespaces, want) {
+		t.Fatalf("from the environment = %q, err %v; want %q", got.helmNamespaces, err, want)
+	}
+	got, err = execAgent(t, "--helm-namespaces", "apps")
+	if want := []string{"apps"}; err != nil || !reflect.DeepEqual(got.helmNamespaces, want) {
+		t.Fatalf("flag and environment = %q, err %v; want the flag's %q", got.helmNamespaces, err, want)
+	}
+
+	t.Setenv("UPGRADESCOPE_HELM_NAMESPACES", "")
+	for _, bad := range []string{"Kube-System", "a.b", "-apps", "apps_1", strings.Repeat("a", 64), ",", "  "} {
+		ran := false
+		orig := runAgent
+		runAgent = func(context.Context, agentOptions) error { ran = true; return nil }
+		root := Root()
+		root.SetArgs([]string{"agent", "--helm-namespaces", bad})
+		err := root.Execute()
+		runAgent = orig
+		if err == nil || !strings.Contains(err.Error(), "invalid --helm-namespaces") || ran {
+			t.Errorf("--helm-namespaces %q: err = %v, ran = %v; want a refusal before the agent runs", bad, err, ran)
+		}
+	}
+	t.Setenv("UPGRADESCOPE_HELM_NAMESPACES", "ok,Not-OK")
+	if _, err := execAgent(t); err == nil || !strings.Contains(err.Error(), "UPGRADESCOPE_HELM_NAMESPACES") {
+		t.Errorf("a bad namespace from the environment: err = %v, want a refusal naming the variable", err)
+	}
+}

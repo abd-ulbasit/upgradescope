@@ -86,6 +86,13 @@ type Config struct {
 	// leaves spec.targets to whoever edits the CR. applyDefaults normalizes
 	// each to MAJOR.MINOR ("v1.38" → "1.38", "1.37.2" → "1.37").
 	Targets []string
+	// HelmNamespaces, when non-empty, are the only namespaces Helm release
+	// storage is read in (--helm-namespaces, #344): for a role that grants
+	// Secrets and ConfigMaps there alone (the chart's
+	// rbac.helmSecretsNamespaces). The helm capability is then partial,
+	// saying releases elsewhere were not assessed. Empty reads the whole
+	// cluster (collect.Options.HelmNamespaces).
+	HelmNamespaces []string
 	// SkipCRDManagement leaves the CRD alone entirely (--manage-crd=false):
 	// no read, no schema upgrade. The default keeps it in step with the
 	// embedded manifest at startup.
@@ -501,7 +508,7 @@ func newRunner(clients collect.Clients, dyn dynamic.Interface, k kb.KB, cfg Conf
 	// their add-on evidence reused in between (#228).
 	podPass := collect.NewPodPassCache(cfg.PodPassEvery, cfg.PodPassMaxAge)
 	r.collectFn = func(ctx context.Context) inventory.Inventory {
-		inv := collect.Collect(ctx, clients, k, collect.Options{TeamLabel: cfg.TeamLabel, HelmCache: helmCache, DiscoveryCache: discoveryCache, GitOpsCache: gitopsCache, PodPass: podPass,
+		inv := collect.Collect(ctx, clients, k, collect.Options{TeamLabel: cfg.TeamLabel, HelmCache: helmCache, HelmNamespaces: cfg.HelmNamespaces, DiscoveryCache: discoveryCache, GitOpsCache: gitopsCache, PodPass: podPass,
 			OnConform: func(notes []string) { r.conformed = notes }})
 		r.collectorConformed = true
 		return inv

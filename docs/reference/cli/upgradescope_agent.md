@@ -36,6 +36,7 @@ upgradescope agent [flags]
       --cr-name string              ClusterReadiness object name, an RFC 1123 subdomain of at most 253 bytes (changing it leaves the old object behind: kubectl delete ucr <old-name>) (default "cluster")
       --force-sync-every duration   push a snapshot even if unchanged after this long; must be positive, and a value at or below --interval means every tick (default 1h0m0s)
       --health-addr string          listen address for /healthz, /readyz and /metrics (empty = disabled) (default ":8081")
+      --helm-namespaces strings     read Helm releases only in these namespaces, repeatable or comma separated (default $UPGRADESCOPE_HELM_NAMESPACES; none: the whole cluster): for a role that grants get/list on Secrets and ConfigMaps in them alone (the chart's rbac.helmSecretsNamespaces). Releases in other namespaces are not assessed, and the helm capability is reported partial saying so
   -h, --help                        help for agent
       --interval duration           evaluation interval (minimum 1m) (default 10m0s)
       --kubeconfig string           path to kubeconfig (default: in-cluster config, then standard loading rules)
