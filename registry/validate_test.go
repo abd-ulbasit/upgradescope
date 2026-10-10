@@ -37,6 +37,26 @@ func validAddOn() AddOn {
 	}
 }
 
+// validComponent is a component image that passes every rule.
+func validComponent() ComponentImage {
+	return ComponentImage{
+		Image:     "fluxcd/source-controller",
+		Lines:     []ComponentLine{{Component: "1.5", Product: "2.5"}, {Component: "1.6", Product: "2.6"}},
+		Citations: []string{"https://github.com/fluxcd/flux2/releases"},
+	}
+}
+
+// validExtendedSupport is split support that passes every rule.
+func validExtendedSupport() Support {
+	return Support{
+		Status:                   "supported",
+		EOLDate:                  "2026-03-31",
+		ExtendedEOLDate:          "2027-11-30",
+		ExtendedSupportCondition: "the cluster has a SUSE Rancher Prime LTS subscription",
+		Citations:                []string{"https://docs.rke2.io/reference/ingress_migration"},
+	}
+}
+
 func TestValidate(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -195,6 +215,104 @@ func TestValidate(t *testing.T) {
 			a.Cycles[0].K8sMin = "1.31"
 			a.Cycles[0].K8sMax = "1.30"
 		}, `k8s_min "1.31" must not exceed k8s_max "1.30"`},
+
+		// A tag pattern ("path:*-hardened*") separates two builds published
+		// on one repository path that only their tags tell apart (#265).
+		{"image matcher with a tag pattern is fine", func(a *AddOn) {
+			a.Matchers.Images = []string{"rancher/nginx-ingress-controller:*-hardened*"}
+		}, ""},
+		{"tag pattern of stars only", func(a *AddOn) { a.Matchers.Images = []string{"rancher/nginx-ingress-controller:**"} }, "tag pattern"},
+		{"tag pattern with a slash", func(a *AddOn) { a.Matchers.Images = []string{"rancher/nginx-ingress-controller:*hard/ened*"} }, "tag pattern"},
+		{"tag pattern with a bracket", func(a *AddOn) { a.Matchers.Images = []string{"rancher/nginx-ingress-controller:*[h]*"} }, "tag pattern"},
+		{"empty tag pattern", func(a *AddOn) { a.Matchers.Images = []string{"rancher/nginx-ingress-controller:"} }, "tag or digest"},
+		{"tag pattern on an any-prefix matcher", func(a *AddOn) { a.Matchers.Images = []string{"*/etcd:*-x*"} }, "any-prefix"},
+		{"tag pattern with a host", func(a *AddOn) { a.Matchers.Images = []string{"quay.io/x/y:*-x*"} }, "without the registry host"},
+
+		// Component images carry their own version; each line maps to the
+		// product line that ships it (#265, Flux's controllers).
+		{"component image is fine", func(a *AddOn) { a.Matchers.Components = []ComponentImage{validComponent()} }, ""},
+		{"component image with a host", func(a *AddOn) {
+			c := validComponent()
+			c.Image = "ghcr.io/fluxcd/source-controller"
+			a.Matchers.Components = []ComponentImage{c}
+		}, "without the registry host"},
+		{"component image with a tag pattern", func(a *AddOn) {
+			c := validComponent()
+			c.Image = "fluxcd/source-controller:*-x*"
+			a.Matchers.Components = []ComponentImage{c}
+		}, "matchers.components[0]"},
+		{"component image any-prefix", func(a *AddOn) {
+			c := validComponent()
+			c.Image = "*/source-controller"
+			a.Matchers.Components = []ComponentImage{c}
+		}, "matchers.components[0]"},
+		{"component image also an image matcher", func(a *AddOn) {
+			c := validComponent()
+			c.Image = "ingress-nginx/controller"
+			a.Matchers.Components = []ComponentImage{c}
+		}, "also matches"},
+		{"component image without lines", func(a *AddOn) {
+			c := validComponent()
+			c.Lines = nil
+			a.Matchers.Components = []ComponentImage{c}
+		}, "at least one line"},
+		{"component line not MAJOR.MINOR", func(a *AddOn) {
+			c := validComponent()
+			c.Lines[0].Component = "1.5.0"
+			a.Matchers.Components = []ComponentImage{c}
+		}, "MAJOR.MINOR"},
+		{"component line product not a version", func(a *AddOn) {
+			c := validComponent()
+			c.Lines[0].Product = "v2.5"
+			a.Matchers.Components = []ComponentImage{c}
+		}, "product"},
+		{"duplicate component line", func(a *AddOn) {
+			c := validComponent()
+			c.Lines = append(c.Lines, ComponentLine{Component: c.Lines[0].Component, Product: "2.6"})
+			a.Matchers.Components = []ComponentImage{c}
+		}, "duplicate component line"},
+		{"component image without citations", func(a *AddOn) {
+			c := validComponent()
+			c.Citations = nil
+			a.Matchers.Components = []ComponentImage{c}
+		}, "at least one citation"},
+		{"components-only matcher is fine", func(a *AddOn) { a.Matchers = Matchers{Components: []ComponentImage{validComponent()}} }, ""},
+
+		// Split support (#265): an end date for everyone, and a later one
+		// that holds only under a condition the collector cannot see.
+		{"extended support is fine", func(a *AddOn) { a.Support = validExtendedSupport() }, ""},
+		{"extended_eol_date without a condition", func(a *AddOn) {
+			a.Support = validExtendedSupport()
+			a.Support.ExtendedSupportCondition = ""
+		}, "extended_eol_date and extended_support_condition go together"},
+		{"condition without an extended_eol_date", func(a *AddOn) {
+			a.Support = validExtendedSupport()
+			a.Support.ExtendedEOLDate = ""
+		}, "extended_eol_date and extended_support_condition go together"},
+		{"extended_eol_date without eol_date", func(a *AddOn) {
+			a.Support = validExtendedSupport()
+			a.Support.EOLDate = ""
+		}, "extended_eol_date requires eol_date"},
+		{"extended_eol_date not after eol_date", func(a *AddOn) {
+			a.Support = validExtendedSupport()
+			a.Support.ExtendedEOLDate = a.Support.EOLDate
+		}, "must be later than eol_date"},
+		{"extended_eol_date not a date", func(a *AddOn) {
+			a.Support = validExtendedSupport()
+			a.Support.ExtendedEOLDate = "2027-11"
+		}, "extended_eol_date"},
+		{"extended support on a product retired as a whole", func(a *AddOn) {
+			a.Support = validExtendedSupport()
+			a.Support.Status = "eol"
+		}, "requires support.status supported"},
+		{"condition with a leading if", func(a *AddOn) {
+			a.Support = validExtendedSupport()
+			a.Support.ExtendedSupportCondition = "if the cluster has a subscription"
+		}, "bare clause"},
+		{"condition with a trailing period", func(a *AddOn) {
+			a.Support = validExtendedSupport()
+			a.Support.ExtendedSupportCondition = "the cluster has a subscription."
+		}, "bare clause"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

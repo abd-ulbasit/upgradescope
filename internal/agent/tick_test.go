@@ -168,26 +168,67 @@ func TestTickWritesStatusWithDefaultTarget(t *testing.T) {
 	}
 }
 
+// gkeStandardEnd is the day GKE standard support ends for minor, from the
+// embedded knowledge base: the test's clock is derived from the data, never
+// the wall clock, so it does not break on the day a real calendar says a
+// minor leaves support (#269: it did on 2027-04-11).
+func gkeStandardEnd(t *testing.T, k kb.KB, minor string) time.Time {
+	t.Helper()
+	p, ok := k.Provider("gke")
+	if !ok {
+		t.Fatal("the knowledge base has no GKE calendar")
+	}
+	for _, w := range p.Versions {
+		if w.Minor == minor {
+			d, err := time.Parse("2006-01-02", w.StandardEnd)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return d
+		}
+	}
+	t.Fatalf("the GKE calendar has no minor %s", minor)
+	return time.Time{}
+}
+
 // Chart defaults (targets: []) on a GKE cluster: the default target derives
 // from the vendor-suffixed server version and a score and verdict are
 // written. The fakes leave api-usage unassessed (nil metadata client), so
-// the verdict is unknown, never ready.
+// the verdict is unknown, never ready. The clock is injected, 120 days
+// before GKE 1.35 leaves standard support (outside the 90-day warning
+// window), and again the day after, when the support calendar's blocker
+// makes the verdict blocked: the test no longer depends on the date it
+// runs on.
 func TestTickVendorServerVersionWritesScoreAndVerdict(t *testing.T) {
-	dyn := fakeDyn()
-	cfg := Config{}
-	if err := cfg.applyDefaults(); err != nil {
-		t.Fatal(err)
-	}
-	r := newRunner(fakeClients(t, "v1.35.2-gke.1080000"), dyn, mustKB(t), cfg)
-	if err := r.tick(context.Background()); err != nil {
-		t.Fatalf("tick: %v", err)
-	}
-	st := readCRStatus(t, dyn, crd.DefaultName)
-	if len(st.Targets) != 1 || st.Targets[0].Target != "1.36" {
-		t.Fatalf("Targets = %+v, want default next minor 1.36", st.Targets)
-	}
-	if got := st.Targets[0]; got.Verdict != "unknown" || got.Ready {
-		t.Errorf("target status verdict = %q ready = %v, want unknown/false", got.Verdict, got.Ready)
+	k := mustKB(t)
+	end := gkeStandardEnd(t, k, "1.35")
+	for _, c := range []struct {
+		name        string
+		now         time.Time
+		wantVerdict string
+	}{
+		{"before the support calendar's window", end.AddDate(0, 0, -120), "unknown"},
+		{"after standard support ended", end.AddDate(0, 0, 1), "blocked"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			dyn := fakeDyn()
+			cfg := Config{}
+			if err := cfg.applyDefaults(); err != nil {
+				t.Fatal(err)
+			}
+			r := newRunner(fakeClients(t, "v1.35.2-gke.1080000"), dyn, k, cfg)
+			r.now = func() time.Time { return c.now }
+			if err := r.tick(context.Background()); err != nil {
+				t.Fatalf("tick: %v", err)
+			}
+			st := readCRStatus(t, dyn, crd.DefaultName)
+			if len(st.Targets) != 1 || st.Targets[0].Target != "1.36" {
+				t.Fatalf("Targets = %+v, want default next minor 1.36", st.Targets)
+			}
+			if got := st.Targets[0]; got.Verdict != c.wantVerdict || got.Ready {
+				t.Errorf("target status verdict = %q ready = %v, want %s/false", got.Verdict, got.Ready, c.wantVerdict)
+			}
+		})
 	}
 }
 

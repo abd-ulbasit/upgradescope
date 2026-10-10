@@ -3,6 +3,7 @@ package server
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http/httptest"
 	"os"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/abd-ulbasit/upgradescope/internal/engine"
 	"github.com/abd-ulbasit/upgradescope/internal/inventory"
+	"github.com/abd-ulbasit/upgradescope/internal/textsafe"
 )
 
 func TestParseTeamMap(t *testing.T) {
@@ -212,4 +214,53 @@ func TestIngestAppliesTeamMap(t *testing.T) {
 	if got := rep.Findings[0].Teams; !reflect.DeepEqual(got, []string{"payments"}) {
 		t.Fatalf("finding teams = %v, want [payments] (override must win over label %q)", got, "labelled")
 	}
+}
+
+// A --team-map is an operator's file, but its patterns and teams can come
+// from a repository the operator did not write. The startup log and the
+// errors quote them with %q, which escapes C0, C1, DEL, U+202E and U+2028;
+// this keeps a later %s from putting them on the terminal raw.
+func TestTeamMapLogsAndErrorsQuoteHostileText(t *testing.T) {
+	var logged bytes.Buffer
+	log.SetOutput(&logged)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+
+	const bad = "ev\x1b(2Jil\r::error::x\u202eabc\u009b\u2028\nnext"
+	check := func(what, out string) {
+		t.Helper()
+		for _, r := range out {
+			if r != '\n' && textsafe.Unsafe(r) {
+				t.Errorf("%s holds %U raw: %q", what, r, out)
+				return
+			}
+		}
+		if strings.Contains(out, "\nnext") {
+			t.Errorf("%s: a newline inside a name survived: %q", what, out)
+		}
+	}
+
+	// %q writes \x1b, \u009b and \u202e, which a YAML double-quoted
+	// string reads back as the characters.
+	rules := func(pattern, team string) []byte {
+		return []byte(fmt.Sprintf("- pattern: %q\n  team: %q\n", pattern, team))
+	}
+	if _, err := ParseTeamMap(rules(bad+"-*", "*")); err != nil {
+		t.Fatalf("ParseTeamMap: %v", err)
+	}
+	if !strings.Contains(logged.String(), `\x1b(2J`) {
+		t.Fatalf("the startup warning does not show the escape: %q", logged.String())
+	}
+	check("startup warning", logged.String())
+
+	_, err := ParseTeamMap(rules(bad, ""))
+	if err == nil {
+		t.Fatal("a rule without a team was accepted")
+	}
+	check("missing-team error", err.Error())
+
+	_, err = ParseTeamMap(rules(bad+"[", "t"))
+	if err == nil {
+		t.Fatal("an invalid glob was accepted")
+	}
+	check("invalid-glob error", err.Error())
 }

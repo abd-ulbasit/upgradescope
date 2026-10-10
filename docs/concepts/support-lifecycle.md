@@ -37,7 +37,7 @@ terminal and is wrapped here):
     2026-10-03, not your bill). Extended support is on by default and billed per
     cluster-hour; a cluster whose upgrade policy is STANDARD is upgraded
     automatically at the end of standard support instead.
-    fix: Upgrade the control plane, one minor at a time. The nearest minor in standard support is 1.35; the newest known is 1.36.
+    fix: Upgrade the control plane, one minor at a time. The nearest minor in standard support is 1.35; the newest known is 1.37.
 ```
 
 On GKE and AKS the same finding is worded conditionally, because the
@@ -94,8 +94,16 @@ It is a blocker because a cluster past standard support is not on a version
 the provider fully supports. It is judged whatever the target, and it blocks
 `--fail-on blocker` gates until the cluster is upgraded; accept it with an
 [ignore rule](../guides/suppressions-and-baselines.md) (`key:
-support-lifecycle/eks/1.34`, or `category: support-lifecycle`) when
-you have decided to stay and pay.
+support-lifecycle/eks/1.34/extended`, or `category: support-lifecycle`)
+when you have decided to stay and pay. The key names the phase (`ending`,
+`extended` or `ended`), so a rule accepts the phase you decided on and no
+later one: with the `extended` key, the day extended support ends
+(2027-12-02 for EKS 1.34) the finding comes back as the out-of-support
+blocker, `support-lifecycle/eks/1.34/ended`, and a baseline written before
+holds neither. Set an `expires` on the rule no later than that day. The
+key used to be the same in all three phases; a rule with the old key
+(`support-lifecycle/eks/1.34`) matches nothing now and `scan` warns about
+it ([Upgrade](../operations/upgrade.md#the-support-lifecycle-key-names-its-phase)).
 
 ## The cost line
 

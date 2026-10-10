@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -55,6 +56,28 @@ func TestConfigRejectsInvalidTargets(t *testing.T) {
 	err := cfg.applyDefaults()
 	if err == nil || !strings.Contains(err.Error(), "latest") {
 		t.Fatalf("err = %v, want invalid-target error naming the value", err)
+	}
+}
+
+// A truncated --targets entry (what YAML makes of 1.30 in a chart's
+// agent.targets) fails at startup, naming the pitfall, instead of being
+// written to spec.targets and judged against a Kubernetes older than the
+// knowledge base covers (#237).
+func TestConfigRejectsTargetsBelowTheKnowledgeBase(t *testing.T) {
+	for _, bad := range []string{"1.3", "1.4", "1.15"} {
+		cfg := Config{Targets: []string{"1.37", bad}}
+		err := cfg.applyDefaults()
+		if err == nil || !strings.Contains(err.Error(), "targets:") || !strings.Contains(err.Error(), "oldest minor the knowledge base covers is 1.16") {
+			t.Errorf("targets [1.37 %s]: err = %v, want a targets error naming the knowledge base floor", bad, err)
+		}
+	}
+	cfg := Config{Targets: []string{"1.3"}}
+	if err := cfg.applyDefaults(); err == nil || !strings.Contains(err.Error(), `is this 1.30 written as a YAML number? quote it`) {
+		t.Errorf("err = %v, want the YAML pitfall named", err)
+	}
+	cfg = Config{Targets: []string{"1.16", "1.30"}}
+	if err := cfg.applyDefaults(); err != nil {
+		t.Errorf("targets [1.16 1.30]: %v, want them accepted", err)
 	}
 }
 
@@ -116,8 +139,40 @@ func TestResolveTargetsSkipsInvalidWithNote(t *testing.T) {
 	if len(targets) != 1 || targets[0] != (inventory.Version{Major: 1, Minor: 37}) {
 		t.Errorf("targets = %v, want [1.37]", targets)
 	}
-	if len(notes) != 1 || !strings.Contains(notes[0], "latest") {
-		t.Errorf("notes = %v, want one mentioning %q", notes, "latest")
+	// The note says why, in ParseTarget's own words.
+	_, perr := inventory.ParseTarget("latest")
+	if perr == nil {
+		t.Fatal(`ParseTarget accepted "latest"`)
+	}
+	if want := fmt.Sprintf("targets: skipped invalid spec target %q: %v", "latest", perr); len(notes) != 1 || notes[0] != want {
+		t.Errorf("notes = %q, want [%q]", notes, want)
+	}
+}
+
+// A spec.targets entry below the knowledge base ("1.3", written by hand or
+// by a tool that read the YAML number) is skipped with a note, never
+// evaluated: it would read ready.
+func TestResolveTargetsSkipsTargetsBelowTheKnowledgeBase(t *testing.T) {
+	targets, notes, err := resolveTargets(
+		crd.Spec{Targets: []string{"1.3", "1.37"}},
+		inventory.Inventory{ServerVersion: "v1.35.2"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(targets) != 1 || targets[0] != (inventory.Version{Major: 1, Minor: 37}) {
+		t.Errorf("targets = %v, want [1.37]", targets)
+	}
+	if len(notes) != 1 || !strings.Contains(notes[0], `"1.3"`) {
+		t.Errorf("notes = %v, want one naming %q", notes, "1.3")
+	}
+	// The note carries ParseTarget's error, so the YAML-number hint (1.3 is
+	// what YAML makes of 1.30) and the knowledge base's floor reach the
+	// operator in status.notAssessed.
+	_, perr := inventory.ParseTarget("1.3")
+	if perr == nil || len(notes) != 1 || !strings.HasSuffix(notes[0], ": "+perr.Error()) ||
+		!strings.Contains(notes[0], `quote it ("1.30")`) || !strings.Contains(notes[0], inventory.OldestCovered().String()) {
+		t.Errorf("notes = %q, want the note to end with ParseTarget's error %v (the YAML hint and the floor)", notes, perr)
 	}
 }
 

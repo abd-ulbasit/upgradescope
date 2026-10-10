@@ -28,15 +28,40 @@ import (
 // retentionInterval is how often the pruner runs after the startup pass.
 const retentionInterval = 24 * time.Hour
 
-// pruneOnce deletes what has aged out of the retention window. A failure
-// is logged; the next run retries.
+// Retention is observable (#263): a prune that fails is counted
+// (upgradescope_retention_prune_failures_total), and the time of the last
+// complete one is exported (upgradescope_retention_last_success_timestamp_seconds),
+// which the chart's UpgradescopeRetentionStale alert watches. A failed
+// prune is not a readiness failure: /readyz pings the store and nothing
+// else, because a server that cannot prune still ingests and serves, and
+// restarting it would not help.
+//
+// The store deletes in bounded batches (store.Prune), so a failure partway
+// leaves the batches it committed deleted and the next run (the next day,
+// or the next start) resumes where it stopped.
+
+// pruneOnce deletes what has aged out of the retention window and records
+// the outcome. A failure is logged and counted; the next run retries and
+// resumes where this one stopped. A prune cut short by shutdown is neither
+// a failure nor a success.
 func (s *Server) pruneOnce(ctx context.Context) {
+	rm := s.metrics.retention
 	cutoff := s.now().Add(-s.cfg.Retention)
 	res, err := s.cfg.Store.Prune(ctx, cutoff, s.retainedBaselines(ctx))
+	rm.deleted.WithLabelValues("snapshots").Add(float64(res.Snapshots))
+	rm.deleted.WithLabelValues("evaluations").Add(float64(res.Evaluations))
 	if err != nil {
-		log.Printf("server: retention: pruning before %s: %v", cutoff.UTC().Format(time.RFC3339), err)
+		if ctx.Err() != nil {
+			log.Printf("server: retention: pruning before %s stopped by shutdown after %d snapshots and %d evaluations; the next run resumes: %v",
+				cutoff.UTC().Format(time.RFC3339), res.Snapshots, res.Evaluations, err)
+			return
+		}
+		rm.failures.WithLabelValues(storeKind(s.cfg.Store)).Inc()
+		log.Printf("server: retention: pruning before %s failed after %d snapshots and %d evaluations; the next run resumes: %v",
+			cutoff.UTC().Format(time.RFC3339), res.Snapshots, res.Evaluations, err)
 		return
 	}
+	rm.succeeded(s.now())
 	if res.Snapshots > 0 || res.Evaluations > 0 {
 		log.Printf("server: retention: pruned %d snapshots and %d evaluations older than %s",
 			res.Snapshots, res.Evaluations, cutoff.UTC().Format(time.RFC3339))
@@ -50,7 +75,7 @@ func (s *Server) pruneOnce(ctx context.Context) {
 // keeps every target's baseline; so is every cluster when the heads
 // cannot be read.
 //
-// Prune applies this set in its own transaction, after it was computed:
+// Prune applies this set in its own transactions, after it was computed:
 // a version change landing between the two can leave out a baseline only
 // the new version needs. That is harmless for an ordinary upgrade, since
 // consecutive lookback sets overlap (a one-minor upgrade keeps all but the

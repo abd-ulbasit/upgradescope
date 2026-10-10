@@ -11,7 +11,10 @@ The payload has a JSON Schema,
 added within a `schemaVersion`; ignore the ones you do not know. A test
 delivers real notifications through ingest, the outbox and a signed
 request and validates them against it, so the schema and this page
-cannot drift from what the server sends.
+cannot drift from what the server sends. Another test regenerates the
+add-on changes of the example below from the embedded add-on registry at
+the example's `timestamp`, so their titles and details are what the engine
+prints.
 
 ## Payload (schemaVersion 1)
 
@@ -33,15 +36,16 @@ cannot drift from what the server sends.
       "kind": "new-blocker",
       "key": "eol-addon/ingress-nginx",
       "severity": "blocker",
-      "title": "ingress-nginx is end-of-life",
-      "detail": "retired upstream in March 2026",
+      "title": "Ingress NGINX Controller is end-of-life since 2026-03-24",
+      "detail": "Detected Ingress NGINX Controller version 1.11.3 via image in namespace(s): ingress-nginx. Upstream support has ended.",
       "targets": ["1.35", "1.36"]
     },
     {
       "kind": "eol-approaching",
-      "key": "eol-approaching/istio/1.24",
+      "key": "eol-approaching/istio/1.30",
       "severity": "warning",
-      "title": "Istio 1.24 reaches end-of-life on 2026-11-30",
+      "title": "Istio 1.30 reaches end-of-life on 2026-12-31",
+      "detail": "Detected Istio version 1.30.1 via image in namespace(s): istio-system. Upstream support for the 1.30 release line ends on 2026-12-31.",
       "targets": ["1.36"]
     }
   ],

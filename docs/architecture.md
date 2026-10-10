@@ -199,14 +199,15 @@ cluster. The requests of one tick are:
   the objects it will hold, so a page's worst case is 1,000 times the
   largest object: small objects followed by large ones (pods are listed
   by namespace). 500 pods of 137 bytes followed by 1,000 of up to 41,685
-  bytes (39.4 MiB encoded) peaked at 124.5 to 125.5 MiB of live heap, and
-  a run of such pods, read 500 a page, at 63.2 to 63.7 MiB, as before
-  (`TestPodPagePeakHeapIsBounded`, which enforces 128 MiB, 2.5 to 3.5 MiB
-  above that worst case). That is one
-  example, not the bound: at its rate, about 3.2 bytes of live heap per
-  encoded byte, a page of 1,000 pods of about 70 KiB after a page of small
-  ones would pass the agent's `GOMEMLIMIT` (90% of 256Mi, about 230 MiB),
-  and pages of at most 500, before #228, at about 145 KiB (computed, not
+  bytes (39.4 MiB encoded) held 122.3 to 125.3 MiB of live heap on
+  GitHub's ubuntu-latest (linux/amd64) runner, and a run of such pods,
+  read 500 a page, 61.7 to 68.0 MiB, as before
+  (`TestPodPagePeakHeapIsBounded`, which enforces 144 MiB, 86.4 MiB under
+  the agent's `GOMEMLIMIT`). That is one example, not the bound: at its
+  rate, about 3.2 bytes of live heap per encoded byte, a page of 1,000 pods
+  of about 60 KiB after a page of small ones would pass the agent's
+  `GOMEMLIMIT` (90% of 256Mi, 230.4 MiB) beside the rest of the agent, and
+  pages of at most 500, before #228, at about 120 KiB (computed, not
   measured). So no page holds more than twice the objects a page held
   before #228, and the pod size at which one page fills the agent's memory
   is half what it was.
@@ -455,8 +456,8 @@ always give the same bytes out.
 
 | Category | Severity | Rule |
 |---|---|---|
-| `removed-api` | blocker | An object written through a group/version removed at or before the target (for a kind that goes away, any stored object). Matching `deprecated-calls` rows are folded in as evidence. |
-| `removed-api` | warning | Removed in the minor after the target. |
+| `removed-api` | blocker | An object written through a group/version removed at or before the target (for a kind that goes away, any stored object). Matching `deprecated-calls` rows are folded in as evidence. In `--files` mode and the gate, also a manifest at a group/version the target does not serve yet (introduced after it), titled "not served until X": applying it fails with "no matches for kind", the same as for a removed API, and the remediation names the newest version of the kind the target serves. A live cluster's stored objects are never judged so. |
+| `removed-api` | warning | Removed in the minor after the target. A removal after the knowledge base's horizon is titled "(projected)", blocker or warning: it is a `k8s.io/api` lifecycle default, not a shipped release. |
 | `deprecated-api` | info | Deprecated, with no removal within that window (a deprecation after the target is titled as one). |
 | `deprecated-api` | warning | A Helm release's stored manifest uses a deprecated API that the target still serves. An object the live scan also flags is left to the live finding only when that finding is at least as severe, so a live info does not lower it. |
 | `deprecated-api-in-use` | blocker / warning / info | Requests seen in the apiserver metric for an API with no `removed-api` or `deprecated-api` finding. Otherwise they are evidence on that finding, unless the row is more severe than it (the apiserver reports a removal release the knowledge base does not have); then the row stays a finding of its own. Same window as above, from the knowledge base's removal release when it has one for the group, version and resource (inferred removals included), else the metric's `removed_release` label. Info when neither gives a removal. A folded row is kept as structured data (`callers`); suppressing every object of its finding by annotation or object-scoped rule leaves it standing as a finding of its own. |
@@ -535,7 +536,10 @@ verdict (and `--fail-on`); the score is for trends and comparison.
 
 Per-team scores (`engine.TeamScores`) apply the same formula to each team's
 subset of findings. Teams come from a namespace label (`--team-label`,
-default `team`), optionally overridden by the server's `--team-map`. A
+default `team`), optionally overridden by the server's `--team-map`. Only a
+live cluster (a scan, the agent, or the server's stored snapshot) has the
+labels: `scan --files` reads no Namespace objects, so all its findings are
+unattributed and `--team-label` is refused with `--files`. A
 finding that spans N teams counts for each of them, and an unattributed
 finding is grouped under `""`. Each team also has a `verdict`: `blocked`
 by a blocker of its own or an unattributed one (which cannot be ruled out

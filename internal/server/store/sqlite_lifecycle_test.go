@@ -87,3 +87,40 @@ func TestPruneRowCounts(t *testing.T) {
 		t.Errorf("rows after prune = %v, want [92 183] (91 days of busy, plus silent's latest)", got)
 	}
 }
+
+// TestPruneDefaultBatchBoundsEveryTransaction runs Prune with the batch
+// size it ships with: a backlog of 2*pruneBatchRows+7 old snapshots, each
+// with one evaluation, drains in three transactions per table (5,000,
+// 5,000 and 7 rows), never one that holds the whole backlog.
+func TestPruneDefaultBatchBoundsEveryTransaction(t *testing.T) {
+	ctx := context.Background()
+	s := newTestStore(t)
+	old := 2*pruneBatchRows + 7
+	cid := mustCluster(t, s, "backlog")
+	for i := 0; i < old; i++ {
+		at := tBase.Add(-400*24*time.Hour + time.Duration(i)*time.Second)
+		sid := mustSnapshot(t, s, cid, fmt.Sprintf("old-%d", i), at)
+		if _, err := s.InsertEvaluation(ctx, Evaluation{ClusterID: cid, SnapshotID: sid, Target: "1.36", Score: 80, CreatedAt: at}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cur := mustSnapshot(t, s, cid, "current", tBase)
+	if _, err := s.InsertEvaluation(ctx, Evaluation{ClusterID: cid, SnapshotID: cur, Target: "1.36", Score: 80, CreatedAt: tBase}); err != nil {
+		t.Fatal(err)
+	}
+	rows := map[string][]int64{}
+	s.SetPruneTestHook(0, func(b PruneBatch) { rows[b.Table] = append(rows[b.Table], b.Rows) })
+	res, err := s.Prune(ctx, tBase.Add(-90*24*time.Hour), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res != (PruneResult{Snapshots: int64(old), Evaluations: int64(old)}) {
+		t.Errorf("Prune = %+v, want %d of each", res, old)
+	}
+	want := fmt.Sprint([]int64{pruneBatchRows, pruneBatchRows, 7})
+	for _, table := range []string{"evaluations", "snapshots"} {
+		if got := fmt.Sprint(rows[table]); got != want {
+			t.Errorf("%s transactions deleted %s rows, want %s", table, got, want)
+		}
+	}
+}

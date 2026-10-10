@@ -139,7 +139,10 @@ func TestFindingsTooLargeToReceiveAreRefusedWithAWayOut(t *testing.T) {
 		t.Fatal(err)
 	}
 	first := m["findings"].([]any)[0].(map[string]any)
-	first["detail"] = strings.Repeat("<", 4000)
+	// Each under the cut of an outside string, so the size is the escaping.
+	for _, k := range []string{"title", "detail", "remediation"} {
+		first[k] = strings.Repeat("<", MaxClusterTextBytes-48)
+	}
 	findings := make([]any, maxLimit+100)
 	for i := range findings {
 		findings[i] = first

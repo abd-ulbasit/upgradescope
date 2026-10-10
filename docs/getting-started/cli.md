@@ -111,7 +111,7 @@ horizon:
 $ upgradescope scan --files rendered --target 1.38
 ...
 READY  unknown (required checks were not assessed)
-  kb-coverage (required): knowledge base covers Kubernetes up to 1.37; target 1.38 cannot be assessed
+  kb-coverage (required): knowledge base covers Kubernetes up to 1.37; target 1.38 cannot be assessed (API removals after 1.37 are projected from k8s.io/api lifecycle markers, not shipped releases)
 ...
 $ echo $?
 2

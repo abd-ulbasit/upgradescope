@@ -156,7 +156,7 @@ func TestWriteMarkdownEscapes(t *testing.T) {
 		}
 	}
 	want := `| blocker | a \| b \<img src=x\> \*bold\* \[link\](http://x) | ` +
-		"``dir/we`ird\\|name.yaml:2`` n\\|x | line one line two |"
+		"``dir/we`ird\\|name.yaml:2`` n\\|x | line one\\\\nline two |"
 	if row != want {
 		t.Errorf("row\n got: %s\nwant: %s", row, want)
 	}
@@ -289,7 +289,7 @@ func TestWriteMarkdownSuppressedEscapes(t *testing.T) {
 	}
 	var buf bytes.Buffer
 	WriteMarkdown(&buf, r)
-	want := `| warning | t |  | see \<script\>x\</script\> \| \*now\* second line | ` + "``dir/we`ird\\|.yaml`` until 2099-12-31 |\n"
+	want := `| warning | t |  | see \<script\>x\</script\> \| \*now\*\\nsecond line | ` + "``dir/we`ird\\|.yaml`` until 2099-12-31 |\n"
 	if !strings.HasSuffix(buf.String(), want) {
 		t.Errorf("suppressed row\n got: %s\nwant suffix: %s", buf.String(), want)
 	}

@@ -8,6 +8,7 @@ import (
 	"github.com/abd-ulbasit/upgradescope/internal/collect"
 	"github.com/abd-ulbasit/upgradescope/internal/engine"
 	"github.com/abd-ulbasit/upgradescope/internal/suppress"
+	"github.com/abd-ulbasit/upgradescope/internal/textsafe"
 )
 
 // WriteMarkdown renders the report as GitHub-flavoured Markdown: a header
@@ -22,7 +23,9 @@ import (
 // why a gate passed: blockers suppressed, or all in the baseline. Object
 // names, file paths, titles and reasons can come from the scanned
 // manifests or the config file, so every cell is escaped: nothing in them
-// can end a cell, a row or a code span, or add markup.
+// can end a cell, a row or a code span, or add markup, and a control
+// character or bidi override in them is shown as an escape (textsafe), not
+// written to the step summary or a log as itself.
 func WriteMarkdown(w io.Writer, r engine.Report) {
 	verdict := string(r.Verdict)
 	if r.Verdict == engine.VerdictUnknown {
@@ -99,7 +102,7 @@ func WriteMarkdown(w io.Writer, r engine.Report) {
 			if len(g.Skipped) > 0 {
 				skipped = ". Skipped: " + mdText(strings.Join(g.Skipped, ", "))
 			}
-			fmt.Fprintf(w, "- %s: %s%s\n", g.Label(), mdText(g.Reason), skipped)
+			fmt.Fprintf(w, "- %s: %s%s\n", esc(g.Label()), mdText(g.Reason), skipped)
 		}
 	}
 	mdUnrecognizedImages(w, r)
@@ -181,9 +184,11 @@ var mdEscaper = strings.NewReplacer(
 	"<", `\<`, ">", `\>`, "|", `\|`, "~", `\~`, "&", `\&`,
 )
 
-// mdText escapes s for a table cell and folds it onto one line.
+// mdText escapes s for a table cell and folds it onto one line. The
+// control characters are escaped before the markup is, so the backslash of
+// an escape is escaped too and the cell shows \x1b, not the character.
 func mdText(s string) string {
-	return mdEscaper.Replace(oneLine(s))
+	return mdEscaper.Replace(oneLine(textsafe.Escape(s)))
 }
 
 // mdCode renders s as a code span in a table cell: the fence is one
@@ -194,7 +199,7 @@ func mdText(s string) string {
 // shows as a\|b (checked against GitHub's /markdown API). Escaping it as
 // mdText does would show the extra backslash.
 func mdCode(s string) string {
-	s = strings.ReplaceAll(oneLine(s), "|", `\|`)
+	s = strings.ReplaceAll(oneLine(textsafe.Escape(s)), "|", `\|`)
 	longest, run := 0, 0
 	for _, c := range s {
 		if c == '`' {
@@ -211,7 +216,9 @@ func mdCode(s string) string {
 	return fence + s + fence
 }
 
-// oneLine joins s's lines with spaces: a newline would end the table row.
+// oneLine collapses the runs of spaces that remain once the controls are
+// escaped (the escape of a newline is two printable characters, so no line
+// break is left that could end the table row).
 func oneLine(s string) string {
 	return strings.Join(strings.Fields(s), " ")
 }

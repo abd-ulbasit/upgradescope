@@ -43,6 +43,9 @@ var auditedInferredRemovals = []string{
 	"scheduling.k8s.io/v1alpha2 Workload",
 	"settings.k8s.io/v1alpha1 PodPreset",
 	"storagemigration.k8s.io/v1alpha1 StorageVersionMigration",
+	// A registered type, tagged for removal in 1.24 upstream, that
+	// kube-apiserver stopped serving in 1.23 (taggedRemovalFixes).
+	"storage.k8s.io/v1alpha1 VolumeAttachment",
 }
 
 // TestInferredRemovalsAreAudited: an inferred removal is only as good as

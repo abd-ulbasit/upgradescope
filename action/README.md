@@ -197,6 +197,78 @@ uses the old baseline and the file is then replaced by this scan's report.
 These inputs need upgradescope v0.2.0 or later. With an older `version`,
 the scan does not know the flags and the step fails with exit 1.
 
+### Who can turn the gate off
+
+On a `pull_request`, `config`, `baseline`, the object annotations and the
+workflow itself come from the pull request's tree, so **a pull request can
+suppress its own findings and the gate then passes**. The suppressions are
+visible (the step summary's suppressed table names each reason and the file
+that suppressed it), but they are not blocked. `config` and `baseline` are
+plain workspace paths, and the action does not care which commit wrote
+them, so point them at files copied from the base commit. Naming `config`
+also stops `scan` looking for another `.upgradescope.yaml`:
+
+```yaml
+on: pull_request
+jobs:
+  upgrade-gate:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7            # the pull request (its merge commit)
+        with:
+          persist-credentials: false
+      - name: Clear the path the base commit goes to
+        run: rm -rf -- trusted               # a pull request may have committed one
+      - uses: actions/checkout@v7            # the base commit, only the two files
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: trusted
+          sparse-checkout: |
+            /.upgradescope.yaml
+            /upgradescope-baseline.json
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - run: helm template my-release ./chart --output-dir rendered
+      - name: Take the config and baseline from the base commit, last
+        run: |
+          rm -f -- .upgradescope.yaml upgradescope-baseline.json
+          cp trusted/.upgradescope.yaml trusted/upgradescope-baseline.json .
+      - uses: abd-ulbasit/upgradescope@v0.2.0
+        id: gate
+        with:
+          path: rendered
+          target: "1.37"
+          version: v0.2.0
+          config: .upgradescope.yaml           # named, so no other config is looked for
+          baseline: upgradescope-baseline.json
+```
+
+The copy fails the step when the base commit has no such file (`ignore: []`
+is a valid empty config), and a pull request that changes either file is
+judged by the old rules, so accepting a finding takes a pull request of its
+own that changes only those files. The copy comes last, right before the
+gate, and removes the destination first (`rm -f --`): a pull request can
+commit `.upgradescope.yaml` as a symlink to a file an earlier step writes, a
+plain `cp` would write through it, and that step would then overwrite the
+trusted content. `config` names the copy, not `trusted/...`, because the
+config's file globs resolve relative to the config's directory. Annotations
+stay honoured and have no input to turn them off: put `CODEOWNERS` with
+required review on the config, the baseline and `.github/workflows/`, and to
+fail the job when an annotation suppressed a finding, add after the gate
+step:
+
+```yaml
+      - if: ${{ !cancelled() && steps.gate.outputs.report-json != '' }}
+        run: jq -e '[.suppressed[]? | select(.source == "annotation")] | length == 0' "$REPORT"
+        env:
+          REPORT: ${{ steps.gate.outputs.report-json }}
+```
+
+The trust table, with the reasoning, is on the
+[CI gate page](https://github.com/abd-ulbasit/upgradescope/blob/main/docs/getting-started/ci-gate.md#who-can-turn-the-gate-off).
+
 ### Targets past the horizon
 
 The embedded knowledge base knows Kubernetes up to one minor, its horizon
@@ -245,7 +317,7 @@ v0.2.0-rc.2's linux/amd64 archive with its attestation).
 | Input | Required | Default | |
 |---|---|---|---|
 | `path` | yes | | File or directory of rendered manifests (`*.yaml`, `*.yml`, `*.json`). It must exist. |
-| `target` | yes | | Target Kubernetes minor version, such as `1.36`. |
+| `target` | yes | | Target Kubernetes minor version, `MAJOR.MINOR` such as `1.36`, **quoted** (`target: "1.30"`): YAML reads an unquoted `1.30` as the number 1.3, which would judge nothing and read ready, so the action refuses any target below 1.16, the oldest minor the knowledge base covers, and says to quote it. |
 | `fail-on` | no | `blocker` | `blocker`, `warning` or `never`. The step fails when findings reach this severity, or when the verdict is `unknown` (unless `allow-incomplete`). `never` never fails. |
 | `allow-incomplete` | no | `false` | `true` or `false`. `true` passes `scan --allow-incomplete`: the gate fails on findings alone, not on an `unknown` verdict. The `verdict` output still says `unknown`. See [Targets past the horizon](#targets-past-the-horizon). |
 | `version` | no | the action ref's release, else `latest` | A release tag such as `v0.2.0`, `latest` (the newest stable release), or `preinstalled`. `preinstalled` installs nothing and uses the `upgradescope` already on `PATH`. Unset, the action at a release tag ref (`@vX.Y.Z` or `@vX.Y.Z-rc.N`) runs that tag; at a full commit SHA it runs the release tag that points at that commit, or `latest` with a `::warning` when none does or the lookup fails; at any other ref, or inside another action, it runs `latest`. See [Usage](#usage). |
@@ -255,7 +327,7 @@ v0.2.0-rc.2's linux/amd64 archive with its attestation).
 | `write-baseline` | no | | Also write this scan's JSON report, after suppression, to this path, for a later `baseline` (`scan --write-baseline`). |
 
 Relative paths resolve from the workspace. The action checks every input
-before it downloads anything. A bad `version`, `target`, `fail-on`,
+before it downloads anything. A bad `version`, `target` (not `MAJOR.MINOR`, or below 1.16), `fail-on`,
 `allow-incomplete` or `verify-provenance` value, a `path` that does not exist, a `config` or `baseline` that is not
 a file, or a `write-baseline` whose directory does not exist fails the
 step with an error that names the input. The error shows the value with

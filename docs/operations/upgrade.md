@@ -18,7 +18,35 @@ Replace the binary through the channel you installed it with
 `@vX.Y.Z` and `version`, or the `VERSION` your job downloads) in a pull
 request of its own, so a change in verdicts shows up as the effect of the
 upgrade and not of an unrelated change. A baseline written by an older
-release stays usable: finding keys are stable across releases.
+release stays usable: finding keys are stable across releases, except for
+the one change below.
+
+### The support-lifecycle key names its phase
+
+The key of a `support-lifecycle` finding (a cluster on EKS, GKE or AKS
+leaving a provider's support) now ends in the phase:
+`support-lifecycle/<provider>/<minor>/<phase>`, with `ending` (the warning
+before standard support ends), `extended` (past standard support, in
+extended support) or `ended` (out of support). It used to be
+`support-lifecycle/<provider>/<minor>` for all three, so a rule or a baseline
+that accepted one phase also hid the next, worse one: the rule recommended
+for staying in paid extended support kept hiding the cluster after extended
+support ended. What to do after the upgrade:
+
+- **Ignore rules.** A rule with the old key,
+  `key: support-lifecycle/eks/1.34`, matches nothing any more, so the finding
+  is back (a blocker in the `extended` and `ended` phases) until the rule
+  names the phase you accept, `key: support-lifecycle/eks/1.34/extended`
+  with an `expires` no later than the day extended support ends. `scan`
+  prints a warning for such a rule. A rule by `category: support-lifecycle`
+  still takes every phase, on purpose.
+- **Baselines.** A baseline written before holds the old key, so the finding
+  is new against it and fails the gate if it is a blocker. Write the baseline
+  again (`--write-baseline`) after you have decided to accept it.
+- **Notifications.** The server's next evaluation of a cluster that is in the
+  `extended` or `ended` phase sends one `new-blocker` notification, since the
+  key it stored last time is gone. A cluster moving from one phase to the
+  next is a new blocker from now on, which the old key did not report.
 
 ## The chart
 
@@ -88,10 +116,16 @@ helm get values upgradescope -n upgradescope | diff values-before.yaml -
   which must be writable and large enough. Chart versions before this one
   had no such directory, and a prune of
   more than a few tens of MB failed with `disk I/O error (6410)`: if
-  you ran one, the first prune after the upgrade deletes the whole backlog
-  at once, which can take a lot of temp space, so raise `server.tmp.sizeLimit`
-  to the size of the database first
-  ([Retention and backup](retention-and-backup.md)).
+  you ran one, the first prune after the upgrade deletes the backlog in
+  batches of at most 5,000 rows, each a statement of its own and not part of
+  one long transaction. Measured on a 60 MB backlog, that form needed no
+  temp directory where the same delete inside a transaction failed (SQLite
+  journals the statements of a transaction in a temp file; the delete of a
+  whole cluster, which is one transaction, still needs the directory). The
+  temp space one full batch needs was not measured, so if it still fails,
+  `upgradescope_retention_prune_failures_total`
+  counts it and `server.tmp.sizeLimit` is the knob
+  ([Retention and backup](retention-and-backup.md#when-the-prune-fails)).
 - **The stale threshold follows `agent.interval`.** With `server.staleAfter`
   unset, the server marks a cluster stale after the larger of 2h and three
   agent intervals, where the chart used to fix 2h; the

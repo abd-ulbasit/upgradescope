@@ -87,13 +87,14 @@ quote them.
   request, which only informs scheduling. A pod page is bounded by its count
   only, at most 1,000 pods, so its worst case is 1,000 times the largest
   pod, whatever its size, reached when small pods are followed by large
-  ones. 1,000 pods of about 40 KiB after small ones measured 124.5 to 125.5
-  MiB of live heap in a test (`TestPodPagePeakHeapIsBounded`, which allows
-  128 MiB); at that rate, about 3.2 bytes of live heap per encoded byte,
-  pods of about 70 KiB after small ones would take one page past the agent's
-  `GOMEMLIMIT` (about 230 MiB) and likely past the limit, where the pages of
-  500 before #228 would have reached it at about 145 KiB (computed, not
-  measured; see [the steady tick](#the-tick-after-226-and-228)).
+  ones. 1,000 pods of about 40 KiB after small ones held 122.3 to 125.3 MiB
+  of live heap in a test on GitHub's ubuntu-latest runner
+  (`TestPodPagePeakHeapIsBounded`, which allows 144 MiB); at that rate,
+  about 3.2 bytes of live heap per encoded byte, pods of about 60 KiB after
+  small ones would take one page past the agent's `GOMEMLIMIT` (230.4 MiB)
+  beside what the rest of the agent holds, and likely past the limit, where
+  the pages of 500 before #228 would have reached it at about 120 KiB
+  (computed, not measured; see [the steady tick](#the-tick-after-226-and-228)).
 - **The chart's default CPU limit was too low for such a cluster, and is now
   1 CPU.** As a pod at the old 200m the first tick gave up at its Helm
   step's deadline with 132 of 1,001 releases unread, and a steady tick took
@@ -125,6 +126,8 @@ quote them.
 | Also running, #248 | `bookstore` (12 to 22% of a core) and lab `us-lab-137`, another session's, up and not idle: 10 to 90% of a core and 654 MiB, so holding no full fill; host load average 12 to 28 (4 threads) |
 | upgradescope, #247 | `da90a86e` as a pod at 200m (the image packed as above, version `collect-da90a86e`), 9 October 2026, 17:46 to 18:12 UTC, on lab `us-lab-137b` reset and filled by `BENCH_STEPS=1 BENCH_TICKS=2` at `86500c36` (docs only after `da90a86e`) just before; the ThinkPad's kernel was 7.0.0-38 then ([the run](#the-tick-after-a-partial-helm-step-247)) |
 | Also running, #247 | `bookstore` and lab `us-lab-137`, both idle (11.7 to 24.3% of a core each; `us-lab-137` at 581 to 664 MiB, no fill); host load average 4.8 to 9.5 |
+| upgradescope, #247 (the cause) | `9687cffc` (this branch: PR #271's tip `0eb41cab`, which is `da90a86e` and 18 commits since, changing the GitOps reads, the tick reserve, the wording of the step's reasons and the push but not the Helm fetch, cache or decoding, plus the opt-in `--pprof-addr`), as a pod at 200m, the image packed as above (version `prof247-before`, `linux/amd64`, `CGO_ENABLED=0 -trimpath -s -w`), 9 October 2026, on lab `us-lab-137b` reset and filled by `BENCH_STEPS=1 BENCH_TICKS=2` at `9687cffc` (21:40 to 21:48 UTC). Two pod runs, each a fresh pod and so an empty cache: with the profiler on and CPU profiles taken around each tick, 22:10 to 22:36 UTC, and with it off, 22:40 to 23:05 UTC. A first attempt at 21:56 UTC, eight minutes after the fill, was dropped: the control plane was still busy (kube-apiserver at 318% of a core and 1.2 GiB in `top` at 22:06, the `kindnet` and `kube-proxy` DaemonSets 1,971 and 1,980 ready of 2,001), the kubelet killed the agent for a failed liveness probe about 5 minutes after it started, and the tick after the restart could not write its status ([the runs](#the-tick-after-a-partial-helm-step-247)) |
+| Also running, #247 (the cause) | `bookstore` and lab `us-lab-137`, idle (10 to 17% of a core each; `us-lab-137` at 575 to 680 MiB, no fill; `docker stats` at the start and end of each run and around the decode runs); the lab's own control plane at 125 to 325% of a core from KWOK's heartbeats; the host's 1-minute load average 3.1 to 11.2 in the spot samples between 21:48 and 23:05 UTC (1.25 before the fill, at 21:40). The two decode runs below (the collector's `TestHelmDecodeCostByRelease`, outside a quota, the lab's agent uninstalled) ran on the ThinkPad at 23:08 UTC at a load of 4.6 and 7.2; an earlier one at 22:36 UTC (pod idle, load 7.3 to 10.7, before the test reported 43, 51 and 83) gave 12.7 s for all 1,000 and 5.40 s for the last 50 |
 
 ### What is simulated
 
@@ -149,7 +152,16 @@ quote them.
   pods with one container each; 1,000 `helm.sh/release.v1` Secrets in
   Helm's storage format (base64 of gzip of JSON), 80% small, 15% medium and
   5% large releases, 22.8 MB stored and 106.9 MB decompressed in all
-  (compare the real charts measured in `internal/collect/helm.go`). Every
+  (compare the real charts measured in `internal/collect/helm.go`). The
+  class follows the release's number (`rel-NNNN`: the large ones are those
+  whose number ends in 95 to 99) and so does its namespace (`bench-ns-NNN`,
+  one per last two digits of the number, so `bench-ns-000` to `bench-ns-099`
+  with the seeder's default 100 namespaces), so **at the default 100
+  namespaces and 1,000 releases the large releases are exactly the last five
+  namespaces (`bench-ns-095` to `bench-ns-099`), the last 50 releases in the
+  order the Helm step visits them** (namespace, then name): the ones a first
+  tick that gives up leaves unread, and the costliest to decode (about 8 times a mean release,
+  [measured below](#the-tick-after-a-partial-helm-step-247)). Every
   node also carries two DaemonSet pods (`kube-proxy` and `kindnet`, created
   by the cluster's own DaemonSets), so the cluster holds about 4,000 pods
   more than the 10,000 seeded: 14,000 in all, 4,000 of them in `kube-system`.
@@ -303,20 +315,35 @@ them without a watch (AG-01) and without reading pods less often:
   are seen, so nothing bounds its bytes but the count: its worst case is
   1,000 times the largest object, reached when small objects are followed by
   large ones (pods are listed by namespace). `TestPodPagePeakHeapIsBounded`
-  measures it: 500 pods of 137 bytes, then 1,000 of up to 41,685 bytes (39.4
-  MiB encoded), peaked at 124.5 to 125.5 MiB of live heap, under half the
-  chart's 256Mi but only 2.5 to 3.5 MiB under the test's own limit of 128
-  MiB, so a change that makes a page's decoding about 2 to 3% larger fails
-  it; a run of those pods, which stays at 500 a page as before, at 63.2 to
-  63.7 MiB; production-sized pods (about 8 KiB in protobuf, managedFields
-  included; about 990 a page) at 34.5 to 35.4 MiB (Apple M1 Pro, 4 October
-  2026). The 40 KiB pods are an example, not the bound: at the rate they
-  measured, about 3.2 bytes of live heap per encoded byte (125.5 MiB for
-  39.4 MiB), one page of 1,000 pods passes the agent's `GOMEMLIMIT` (90% of
-  256Mi, about 230 MiB) at pods of about 70 KiB after a page of small ones
-  (230 MiB / 3.2 / 1,000 is 74 KiB, less what the rest of the agent holds),
-  where pages of at most 500, before #228, would have reached it at about
-  145 KiB (230 MiB / 3.2 / 500 is 147 KiB; computed, not measured). Pods
+  measures it on GitHub's ubuntu-latest runner (linux/amd64), where users'
+  agents run (four CI runs at `23f8739` and `04c39fa`, runs 37950213827
+  and 37964795504, this change before its rebase onto `377fd77`; 9 October
+  2026): 500 pods of 137 bytes, then 1,000 of up to 41,685 bytes (39.4
+  MiB encoded), held between 122.3 and 125.3 MiB of live heap (its lower bounds 122.3 to
+  123.4, its upper bounds 125.0 to 125.3), under half the chart's 256Mi; a
+  run of those pods, which stays at 500 a page as before, 61.7 to 68.0 MiB;
+  production-sized pods (about 8 KiB in protobuf, managedFields included;
+  about 990 a page) 32.9 to 34.3 MiB. A single reading after a forced
+  collection can also count the garbage of reading the response, up to
+  153.8 MiB in those runs: #251's CI read 153.0 MiB and failed the 128 MiB
+  the test enforced then, 2.5 to 3.5 MiB above an Apple M1 Pro's readings.
+  So the test lists each case 10 times, passes on the lowest upper bound,
+  and enforces 144 MiB. Five dispatched runs of the final test, at
+  `443a542` (this change before its last rebase onto main; runs 37987299524, 37987318295, 37990925915, 37994320874 and
+  37996739083, 9 October 2026), all passed it: the worst case between 123.0
+  and 125.1 MiB (lower bounds 119.4 to 123.8, per attempt), a run of large
+  pods 62.4 to 63.5, production-sized pods 33.0 to 33.4 (lower bounds); 8 of
+  the 50 worst-case attempts read past 144 MiB, up to 153.7 (garbage), and
+  every run had at least 6 of its 10 under it. 144 MiB is 18.7 MiB (14.9%)
+  above the highest upper bound read, and 86.4 MiB under the agent's `GOMEMLIMIT` (90% of 256Mi, 230.4
+  MiB) for the rest of the agent and a collection's garbage. The 40 KiB
+  pods are an example, not the bound: at the rate they measured, about 3.2
+  bytes of live heap per encoded byte (125.3 MiB for 39.4 MiB), one page of
+  1,000 pods passes the agent's `GOMEMLIMIT` at pods of about 60 KiB after a
+  page of small ones, beside the 39.2 MiB the rest of the agent's heap
+  peaked at here ((230.4 − 39.2) MiB / 3.18 / 1,000 is 61.6 KiB; 74.2 KiB
+  with nothing else held), where pages of at most 500, before #228, would
+  have reached it at about 120 KiB (123.1 KiB; computed, not measured). Pods
   that large exist: Argo Workflows pods carry their template, for example.
   The drafts sized a page from the average object of the page before, up to
   2,000: 10 pod and 2 node requests, 24 in all, but they ask for 2,000 of
@@ -637,11 +664,12 @@ against 59 s.
   that time, and left 132 releases unread; the status said so (`helm
   (partial)`, the first release not read, "step deadline: gave up after
   59s"). The following tick completed the step, in 105 s, using 13.0
-  CPU-seconds, more than 132 releases explain (about 3 for them, 3 for the
-  rest). It was not a decode again of what the partial tick had read:
+  CPU-seconds, more than 132 releases at the mean cost explain (about 3 for
+  them, 3 for the rest). It was not a decode again of what the partial tick
+  had read, and the 132 were not average:
   [below](#the-tick-after-a-partial-helm-step-247), re-measured, the tick
-  after a partial one fetched exactly the releases left unread, and still
-  used more CPU than they explain. A steady tick took
+  after a partial one fetched exactly the releases left unread, and what
+  they cost to decode, the largest releases of the fill, explains its CPU. A steady tick took
   21 s against the 4 s it takes without a quota, throttled in 58 to 80% of
   the CFS periods it ran in.
 - **At 500m the first tick finished, in 48 s, and so did its Helm step,
@@ -674,46 +702,129 @@ against 59 s.
 the releases a partial Helm step decoded are cache hits on the next tick.
 They are: `TestHelmCacheKeepsWhatAPartialStepDecoded` stops a step at its
 deadline part way through 40 releases against a fake API, and the next tick
-fetches exactly the ones left unread. Re-measured as a pod at 200m, with
-the procedure above and `hack/bench/pod-sample.sh`, on 9 October 2026,
-17:46 to 18:12 UTC: the agent at `da90a86e` (this branch, on main
-`345a879`, so with #226's 8 concurrent GETs and #228), on lab
-`us-lab-137b` reset and filled with `BENCH_STEPS=1` (2,001 nodes, 1,000
-Helm releases, no Argo CD or Flux) just before, the chart installed with
-`agent.resources.limits.cpu=200m` and the default interval of 10 minutes.
-The other lab, `us-lab-137`, was up and idle (11.7 to 20.4% of a core, 581 to
-664 MiB); the ThinkPad's load average was 4.8 to 9.5 (4 threads), most of
-it this lab's KWOK heartbeats (1 to 3 cores). The requests per tick are
-from the lab's apiserver audit log, filtered to the agent's service
-account.
+fetches exactly the ones left unread. A hit makes no GET and no decode, so
+a GET count pins it. Re-measured as a pod at 200m, with the procedure
+above and `hack/bench/pod-sample.sh`, the tick after a partial one fetched
+exactly the releases left unread, and still used 3 to 4 times the CPU of a
+steady tick. **That CPU is the unread releases', and nothing else: they are
+the largest releases of the fill, and the mean cost per release the first
+estimate used does not describe them.**
 
-| Tick | Wall s | CPU s | Helm step | Release GETs | Throttled periods | Throttled s |
-|---|---|---|---|---|---|---|
-| first | 75.5 | 15.0 | **gave up at its deadline**: 958 of 1,001 read, 43 not (and the Argo CD and Flux discovery after it gave up too) | 965 | 734 of 767 (96%) | 63.1 |
-| second | 51.9 | 9.0 | complete | 43 | 413 of 494 (84%) | 27.8 |
-| steady | 29.2 | 2.9 | complete | 0 | 120 of 174 (69%) | 8.5 |
+**The runs.** The agent as a pod at 200m, the chart installed with
+`agent.resources.limits.cpu=200m` and the default interval of 10 minutes,
+on lab `us-lab-137b` reset and filled with `BENCH_STEPS=1` (2,001 nodes,
+1,000 Helm releases, no Argo CD or Flux) just before, in the state given
+in [What was measured](#what-was-measured-and-on-what). The CPU of a tick
+is the counter's change between the samples around it (every 5 s, at most
+11 s outside the tick, while the agent idles); the requests per tick are
+from the lab's apiserver audit log, filtered to the agent's service account.
+The first row is the earlier run (`da90a86e`, 9 October 2026, 17:46 to
+18:12 UTC, the lab then at `86500c36`); the others are this branch's
+(`9687cffc`, 9 October 2026), each a fresh pod.
 
-The peak RSS of the agent was 81 MiB and the cgroup's peak memory 107 MiB.
-The CPU of a tick is the counter's change between the samples around it
-(every 5 s, at most 11 s outside the tick, while the agent idles).
+| Run | First tick: wall s, CPU s, Helm step | Second tick: wall s, CPU s, release GETs | Steady tick: wall s, CPU s | Second less steady, CPU s |
+|---|---|---|---|---|
+| `da90a86e` | 75.5, 15.0, gave up with **43** of 1,001 unread | 51.9, 9.0, 43 | 29.2, 2.9 | 6.1 |
+| `9687cffc`, profiler on | 67.8, 12.9, gave up with **51** unread (950 read) | 57.4, 10.0, 51 | 16.2, 2.5 | 7.5 |
+| `9687cffc`, profiler off | 67.3, 13.1, gave up with **83** unread (918 read) | 68.5, 11.3, 83 | 17.8, 2.8 | 8.5 |
 
-- **The second tick fetched the 43 releases the first left unread, and no
-  other**: its 74 requests were a steady tick's 31 and the 43 GETs. So the
-  958 decoded before the deadline were cache hits, and #247's hypothesis,
-  a decode again of what the partial step read, is ruled out.
-- **Its CPU is still not explained by them.** It used 9.0 CPU-seconds, 6.1
-  more than the steady tick's 2.9, where 43 releases take about 0.8 (19.6
-  ms a release: the first tick of the fill's own benchmark run, outside a
-  quota, at `86500c36`, which differs from `da90a86e` only in docs, 22.6
-  CPU-seconds, less a steady tick's 3.0, over 1,000 releases;
-  computed, not measured in the pod). What the other 5 or so CPU-seconds are
-  was not found: they come with no extra request. At `735751d` the same
-  tick used 13.0 for 132 releases, about 7.6 more than they and a steady
-  tick (2.8 there) explain by the same arithmetic. #247 stays open for that.
-- At 200m the first tick still does not finish its Helm step, but it leaves
-  43 releases unread where `735751d` left 132: the first tick used 15.0
-  CPU-seconds, throttled in 96% of its periods. The chart's default is 1
-  CPU (below).
+How many a first tick leaves unread is a race against its step deadline (the
+Helm step gets at most 54 s of the 5-minute tick, the apiserver and the
+host share the same four threads), so it differed in every run, 43 to 83.
+The second tick made exactly that many Secret GETs each time (the lab's
+audit log, ResponseComplete only: 43, 51 and 83 `get secrets` in the second
+tick, after 965, 957 and 925 in the first) and the status the tick before
+it wrote named them (`helm (partial)`, "83 release(s) not read, first
+bench-ns-091/rel-0891"). Every other request of the second tick was a
+steady tick's 31 (114 in all in the last run, 82 in the one before, 31 in
+its steady tick). The quota throttled the first ticks in 96 to 98% of their
+CFS periods, the second in 84 to 91% and the steady in 69 to 81%.
+
+**Where the CPU goes.** With the profiler on (`--pprof-addr`, reached with
+`kubectl port-forward`; [Profiling the agent](../observability.md#profiling-the-agent)),
+CPU profiles of 30 s were taken from just before each later tick was due
+until it ended (the first tick's was one of 90 s). Samples of the second tick and of the steady third tick of that
+run, in CPU-seconds (9.64 and 2.66 sampled, against 10.0 and 2.5 in the
+cgroup, so the profile's total is 96% and 106% of the cgroup's):
+
+| | Second tick | Steady tick |
+|---|---|---|
+| `decodeHelmEntry`: gzip and JSON of the stored release, then its manifest parsed for the flagged APIs (4.49 and 1.15) | **5.64** | 0.00 |
+| the 51 payload GETs, on the fetch workers | 0.31 | 0.00 |
+| the garbage collector's mark workers | 1.16 | 0.34 |
+| add-ons (the kube-system pods) | 1.22 | 1.23 |
+| versions | 0.44 | 0.39 |
+| deprecated-API callers | 0.41 | 0.40 |
+| the status write and the evaluation | 0.12 | 0.12 |
+| everything else | 0.34 | 0.18 |
+
+Every function a steady tick runs cost what it cost in the second tick, to
+within 0.05 CPU-seconds; what is added is the 51 releases: 5.64 to decode
+them, 0.31 to fetch them, and 0.82 more garbage collection, which their
+decoding allocates (the second tick's profile less the steady one's: 6.98,
+of which 6.77 is these three, 97%). The first tick's profile (12.59
+sampled) has the same shape: `decodeHelmEntry` 8.21 of it, for 950
+releases.
+
+**Why 51 releases cost that.** The estimate that "43 releases take about
+0.8" divided the first tick's CPU by 1,000 (19.6 ms a release, outside a
+quota, which includes the GET, the garbage and the rest of the tick), and
+multiplied. It assumed the unread were average. They are not: the Helm step
+visits releases by namespace and name, a step that gives up leaves the end
+of that order unread, and the fill's large releases (300 objects, 20 bundled
+files, 157 KB stored against 12 KB for a small one; 5% of the releases) are
+exactly its last 50 ([What is simulated](#what-is-simulated)).
+`TestHelmDecodeCostByRelease` (opt-in, `UPGRADESCOPE_HELM_PAYLOADS`: it
+feeds the lab's own 1,000 payloads, read with `kubectl`, to `decodeHelmEntry`
+one at a time and reads the process's CPU time) measured on the ThinkPad,
+outside a quota, twice:
+
+| | Run 1 | Run 2 |
+|---|---|---|
+| all 1,000 releases | 12.5 s (12.5 ms a release) | 12.3 s (12.3 ms) |
+| share of the CPU, by twentieth of the order, the first sixteen | 2% each | 2% each |
+| the seventeenth to nineteenth | 8% each | 9, 8 and 9% |
+| the last twentieth (the 50 large releases) | 42% | 41% |
+| the last 43 / 51 / 83 releases | 4.56 / 5.29 / 5.92 s | 4.37 / 5.06 / 5.73 s |
+| the last 43 / 51 as a multiple of that many mean releases | 8.5x / 8.3x | 8.3x / 8.1x |
+
+So the unread of the three runs cost 4.4 to 4.6 s, 5.1 to 5.3 s and 5.7 to
+5.9 s to decode (outside a quota, with nothing else in the process), where
+the mean said 0.5, 0.6 and 1.0. The second tick's CPU above a steady tick's
+(6.1, 7.5 and 8.5 s) is 1.37, 1.45 and 1.46 times the decode alone (the
+means of the two runs). The rest of that factor is what the profile found
+above: the fetches and the garbage (6.77 against 5.64 s, 1.20 times), the
+pod's decode taking 5.64 s where the harness took 5.1 to 5.3 s for the same
+51 releases, and the cgroup's excess being 7% above the profile's (7.5 s
+against 6.98). That is the acceptance: the CPU of the tick after a partial
+step is explained by the unread releases alone, to 97% in the profile. The
+other two runs were not profiled: their excess over the harness's decode
+(1.37 and 1.46 times) is in line with the profiled run's 1.45, which is
+consistent with the same account but does not prove it separately.
+
+**What was not found, and what did not change.** Nothing in the second tick
+is done again: no release is decoded twice, no request is repeated, the
+discovery cache and the other caches answered as in a steady tick, and the
+engine, the status write and the push cost what they cost then. So there is
+no CPU to remove from that tick without making a release cheaper to decode,
+which is another change (the manifest of a large release is parsed twice,
+by the walk that locates each object and by kubectl's own decoder, which
+the walk is checked against: 4.49 of the 5.64 s are the manifest, 2.73 of
+them kubectl's decoder) and was not made here. At
+a mean cost the unread cost less than they did here; on a cluster whose
+largest releases do not sort last, the tick after a partial step costs about
+the unread count times the mean (12.4 ms, the mean of the two harness runs,
+times 43 to 83: 0.5 to 1.0 s, computed). The first tick at 200m used 12.9
+to 13.1 CPU-seconds in these two runs (15.0 at `da90a86e`), against 22.0 to
+22.8 for the same first tick in the benchmark outside a quota; why a tick
+costs less CPU under a quota was not investigated.
+
+- At 200m the first tick still does not finish its Helm step, and leaves 43
+  to 83 releases unread (132 at `735751d`). The chart's default is 1 CPU
+  (below).
+- A pod started minutes after a fill may be killed by its liveness probe
+  while the lab's control plane is still busy (the dropped attempt above);
+  wait until it is quiet, or the first tick is not a first tick.
 
 **The chart's default is now 1 CPU** (`agent.resources.limits.cpu`),
 requests unchanged at 50m. The old default could not read 1,000 Helm

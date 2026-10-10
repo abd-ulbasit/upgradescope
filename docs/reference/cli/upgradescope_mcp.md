@@ -27,7 +27,9 @@ kubeconfig.
 The cluster a scan reads is the one --kubeconfig and --context name, else
 $KUBECONFIG and the kubeconfig's current context, as for 'scan'; without
 --context, the current context is read once at start and kept, so switching
-contexts later does not move the server to another cluster. Nothing else
+contexts later does not move the server to another cluster; when there is
+none at start, scan is off until the server is restarted with --context.
+Nothing else
 chooses it: an assistant names the target versions, never the cluster, and
 no ignore file is looked up. With --server-url, get_report and list_findings
 can read a cluster from an upgradescope server and fleet_summary summarises

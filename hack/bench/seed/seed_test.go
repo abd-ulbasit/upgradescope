@@ -9,6 +9,7 @@ import (
 	"errors"
 	"io"
 	"slices"
+	"sort"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -135,6 +136,42 @@ func TestHelmSizeClassesAndRealisticSizes(t *testing.T) {
 	}
 	if small < 1<<10 {
 		t.Errorf("small release stored at %d bytes, too small to be a chart", small)
+	}
+}
+
+// docs/operations/scale.md says that, at the default 100 namespaces and 1,000
+// releases, the large releases are exactly the last five namespaces
+// (bench-ns-095 to bench-ns-099), the last 50 releases in the order the Helm
+// step visits them (namespace, then name).
+func TestLargeReleasesAreTheLastFiveNamespaces(t *testing.T) {
+	cfg := config{Namespaces: 100, HelmRevisions: 1, Seed: 1}
+	type rel struct{ ns, name, class string }
+	var all []rel
+	for i := range 1000 {
+		r, err := helmReleaseSecrets(i, cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		s := r.secrets[0]
+		all = append(all, rel{s.Namespace, s.Labels["name"], r.class})
+	}
+	sort.Slice(all, func(a, b int) bool {
+		if all[a].ns != all[b].ns {
+			return all[a].ns < all[b].ns
+		}
+		return all[a].name < all[b].name
+	})
+	for i, r := range all {
+		wantLarge := i >= len(all)-50
+		if (r.class == "large") != wantLarge {
+			t.Fatalf("release %d in visit order (%s/%s) is %s, want large exactly for the last 50", i, r.ns, r.name, r.class)
+		}
+		if wantLarge && (r.ns < "bench-ns-095" || r.ns > "bench-ns-099") {
+			t.Errorf("large release %s/%s is outside bench-ns-095 to bench-ns-099", r.ns, r.name)
+		}
+	}
+	if first := all[len(all)-50].ns; first != "bench-ns-095" {
+		t.Errorf("the last 50 releases start in %s, want bench-ns-095", first)
 	}
 }
 

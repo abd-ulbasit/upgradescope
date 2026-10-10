@@ -608,3 +608,80 @@ func TestEvalAddOnsCompatNamesOnlyIncompatibleInstalls(t *testing.T) {
 		t.Errorf("detail = %q, want %q", fs[0].Detail, want)
 	}
 }
+
+// Split support (#265): support ends for everyone on eol_date and lasts
+// until extended_eol_date only under a condition the collector cannot see
+// (a vendor subscription). Before eol_date nothing is wrong yet; between
+// the two dates the condition decides, so a warning states it; past the
+// later date the product is end of life for everyone.
+func TestEvalAddOnsSplitSupport(t *testing.T) {
+	cond := "the cluster has a SUSE Rancher Prime LTS subscription"
+	k := kb.KB{AddOns: []registry.AddOn{{
+		SchemaVersion: 2, ID: "vendor-ingress", DisplayName: "Vendor Ingress",
+		Matchers: registry.Matchers{Charts: []string{"vendor-ingress"}},
+		Support: registry.Support{Status: "supported", EOLDate: "2026-03-31", ExtendedEOLDate: "2027-11-30",
+			ExtendedSupportCondition: cond, Citations: []string{"https://docs.rke2.io/reference/ingress_migration"}},
+		Recommendation: "Migrate to Traefik.",
+	}}}
+	target := inventory.Version{Major: 1, Minor: 34}
+	inv := addOnAt("vendor-ingress", "1.12.6")
+	for _, tc := range []struct {
+		now                string
+		sev                Severity
+		key, title, detail string
+	}{
+		{now: "2025-12-15"}, // eol_date more than 90 days away
+		{"2026-01-15", SevWarning, "eol-approaching/vendor-ingress",
+			"Vendor Ingress reaches end-of-life on 2026-03-31",
+			"Support ends on 2026-03-31; after that it continues until 2027-11-30 only if " + cond + ", which upgradescope cannot see."},
+		{"2026-10-09", SevWarning, "eol-approaching/vendor-ingress",
+			"Vendor Ingress is supported until 2027-11-30 only if " + cond,
+			"Support without that condition ended on 2026-03-31; upgradescope cannot see whether this cluster meets it."},
+		{"2027-09-15", SevWarning, "eol-approaching/vendor-ingress",
+			"Vendor Ingress reaches end-of-life on 2027-11-30",
+			"Support until then applies only if " + cond + "; without it, support ended on 2026-03-31."},
+		{"2027-12-01", SevBlocker, "eol-addon/vendor-ingress",
+			"Vendor Ingress is end-of-life since 2027-11-30",
+			"Support ended on 2026-03-31, and support that applied only if " + cond + " ended on 2027-11-30."},
+	} {
+		fs := evalAddOns(inv, k, target, day(tc.now))
+		if tc.key == "" {
+			if len(fs) != 0 {
+				t.Errorf("%s: want no finding, got %s", tc.now, summarize(fs))
+			}
+			continue
+		}
+		if len(fs) != 1 {
+			t.Fatalf("%s: want one finding, got %s", tc.now, summarize(fs))
+		}
+		f := fs[0]
+		if f.Severity != tc.sev || f.Key != tc.key || f.Title != tc.title || !strings.HasSuffix(f.Detail, " "+tc.detail) {
+			t.Errorf("%s: got %s %s %q\n%q\nwant %s %s %q\n...%q", tc.now, f.Severity, f.Key, f.Title, f.Detail, tc.sev, tc.key, tc.title, tc.detail)
+		}
+		if f.Remediation != "Migrate to Traefik." || !slices.Equal(f.Citations, k.AddOns[0].Support.Citations) {
+			t.Errorf("%s: remediation %q citations %v", tc.now, f.Remediation, f.Citations)
+		}
+	}
+}
+
+// The embedded RKE2 Ingress NGINX entry carries SUSE's split support
+// (#265): community builds ended in March 2026, Prime LTS support runs
+// through November 2027.
+func TestEvalAddOnsRKE2IngressNginxSupportEnd(t *testing.T) {
+	addons, err := registry.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	k := kb.KB{AddOns: addons, Skew: kb.DefaultSkewPolicy(), MaxKnownK8s: inventory.Version{Major: 1, Minor: 99}}
+	target := inventory.Version{Major: 1, Minor: 33}
+	inv := addOnAt("rke2-ingress-nginx", "1.12.6")
+	for now, want := range map[string]string{
+		"2026-10-09": "warning eol-approaching eol-approaching/rke2-ingress-nginx RKE2 Ingress NGINX is supported until 2027-11-30 only if the cluster has a SUSE Rancher Prime LTS subscription",
+		"2027-09-15": "warning eol-approaching eol-approaching/rke2-ingress-nginx RKE2 Ingress NGINX reaches end-of-life on 2027-11-30",
+		"2027-12-01": "blocker eol-addon eol-addon/rke2-ingress-nginx RKE2 Ingress NGINX is end-of-life since 2027-11-30",
+	} {
+		if got := strings.Join(summarize(evalAddOns(inv, k, target, day(now))), "\n"); got != want {
+			t.Errorf("%s:\n got %s\nwant %s", now, got, want)
+		}
+	}
+}

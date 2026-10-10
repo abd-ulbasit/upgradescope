@@ -163,6 +163,24 @@ func TestScanPlanFiles(t *testing.T) {
 	}
 }
 
+// --from is the version the cluster runs, not a target: it has no
+// knowledge-base floor, so a 1.15 cluster plans in files mode as it does
+// live (a target below the floor is refused; a cluster's version is not).
+func TestScanPlanFilesFromHasNoFloor(t *testing.T) {
+	dir := writeFiles(t, map[string]string{"all.yaml": removedAPIs})
+	out, _, err := execScanFiles(t, "--files", dir, "--plan", "--from", "1.15", "--target", "1.17", "--output", "json", "--fail-on", "never")
+	if err != nil {
+		t.Fatalf("--from 1.15: %v", err)
+	}
+	if !strings.Contains(out, `"from": "1.15"`) && !strings.Contains(out, `"from":"1.15"`) {
+		t.Errorf("no hop from 1.15:\n%s", out)
+	}
+	_, _, err = execScanFiles(t, "--files", dir, "--plan", "--from", "1.30", "--target", "1.3", "--fail-on", "never")
+	if err == nil || !strings.Contains(err.Error(), "oldest minor the knowledge base covers") {
+		t.Errorf("--target 1.3 = %v, want the target floor", err)
+	}
+}
+
 func TestScanPlanFlagErrors(t *testing.T) {
 	dir := writeFiles(t, map[string]string{"all.yaml": removedAPIs})
 	for _, tc := range []struct {

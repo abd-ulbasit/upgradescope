@@ -96,11 +96,19 @@ the Node list is forbidden: a kubelet past the policy would be a blocker.
 
 The control plane is upgraded one minor at a time, and every check judges a
 newer minor. On a live cluster, a `--target` at or below the minor the
-oldest kube-apiserver runs (a downgrade, the same minor, or a typo such as
-`1.4` for `1.40`) is reported as a required `target` gap: the verdict is
-`unknown` and `scan` exits 2, even with `--allow-incomplete`. The table and
-the JSON report show the server version the target was judged against
-(`serverVersion`).
+oldest kube-apiserver runs (a downgrade or the same minor) is reported as a
+required `target` gap: the verdict is `unknown` and `scan` exits 2, even with
+`--allow-incomplete`; only `--fail-on never`, which always exits 0, passes it.
+The table and the JSON report show the server version the target was judged
+against (`serverVersion`).
+
+A typo such as `1.4` for `1.40` (what YAML makes of an unquoted
+`target: 1.40`) is below the oldest minor the knowledge base covers, 1.16, and
+is refused before anything is scanned, live or with `--files`: `scan` exits 1,
+the agent and `serve` refuse to start, a `spec.targets` entry is skipped with
+a note, and the server's gate answers 400. The message says to quote the
+version. A target between 1.16 and the cluster's own minor is a downgrade, the
+gap above.
 
 Each finding names the nodes or versions, and cites the policy.
 

@@ -1,0 +1,14 @@
+[
+  {
+    "description": "admissionregistration.k8s.io/v1alpha1 MutatingAdmissionPolicy removed in 1.37 (projected) (1 object): p. Fix: migrate to admissionregistration.k8s.io/v1 MutatingAdmissionPolicy.",
+    "check_name": "removed-api/admissionregistration.k8s.io/v1alpha1/MutatingAdmissionPolicy",
+    "fingerprint": "4b4a854e41b4e0c3e79bf9602d646fb17e2b0cad9999d952622f3d27dc3183c9",
+    "severity": "minor",
+    "location": {
+      "path": "rendered/all.yaml",
+      "lines": {
+        "begin": 5
+      }
+    }
+  }
+]

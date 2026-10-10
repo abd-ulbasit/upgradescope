@@ -40,6 +40,7 @@ type agentOptions struct {
 	targets        []string
 	manageCRD      bool
 	healthAddr     string
+	pprofAddr      string
 	logFormat      string
 	logLevel       string
 	registryDir    string // --registry-dir: extra add-on registry entries
@@ -118,6 +119,7 @@ var runAgent = func(ctx context.Context, opts agentOptions) error {
 		Targets:           opts.targets,
 		SkipCRDManagement: !opts.manageCRD,
 		HealthAddr:        opts.healthAddr,
+		PprofAddr:         opts.pprofAddr,
 		Logger:            logger,
 	})
 }
@@ -236,6 +238,9 @@ The Helm chart (deploy/chart) runs it in the cluster with read-only RBAC.`,
 			if _, err := newAgentLogger(io.Discard, opts.logFormat, opts.logLevel); err != nil {
 				return err // a typo fails before any cluster access
 			}
+			if err := agent.ValidatePprofAddr(opts.pprofAddr); err != nil {
+				return fmt.Errorf("invalid --pprof-addr: %w", err)
+			}
 			if err := validAgentNames(opts); err != nil {
 				return err
 			}
@@ -267,6 +272,8 @@ The Helm chart (deploy/chart) runs it in the cluster with read-only RBAC.`,
 		"keep the ClusterReadiness CRD schema in step with this binary at startup, a failed check retried every tick until it succeeds (needs get/patch on that CRD); false = never touch the CRD")
 	cmd.Flags().StringVar(&opts.healthAddr, "health-addr", ":8081",
 		"listen address for /healthz, /readyz and /metrics (empty = disabled)")
+	cmd.Flags().StringVar(&opts.pprofAddr, "pprof-addr", "",
+		"serve the Go profiler (/debug/pprof/) on this loopback host:port, e.g. 127.0.0.1:6060, reached in a pod with kubectl port-forward (empty = off)")
 	cmd.Flags().StringVar(&opts.logFormat, "log-format", "text", "log format: text (logfmt) or json")
 	cmd.Flags().StringVar(&opts.logLevel, "log-level", "info", "log level: debug, info, warn or error")
 	cmd.Flags().StringVar(&opts.registryDir, "registry-dir", "", registryDirUsage)

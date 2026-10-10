@@ -18,6 +18,7 @@ Contents:
 5. [The server gate](#the-server-gate)
 6. [The agent: `spec.ignore`](#the-agent-specignore)
 7. [Finding keys](#finding-keys)
+8. [Who can turn the gate off](#who-can-turn-the-gate-off)
 
 ## Ignore rules (`.upgradescope.yaml`)
 
@@ -38,7 +39,7 @@ ignore:
   # A whole finding, by key, until a date.
   - key: eol-addon/ingress-nginx
     reason: migrating to Gateway API, tracked in PLAT-123
-    expires: 2026-12-31
+    expires: 2099-12-31   # a date inside your migration window
 
   # Every removed-API finding, but only for objects under legacy/.
   - category: removed-api
@@ -67,6 +68,15 @@ Such a finding names at most 100 namespaces and counts the rest, which
 cannot be shown to match, so past 100 a `namespace` rule no longer takes
 it, even with a glob such as `*` that would match them all; use a rule
 without selectors (by `key`) for it.
+An add-on install in no named namespace cannot be shown to match either: a
+manifest object without `metadata.namespace` (`helm template` output usually
+has none, and the install can land in any namespace, production included),
+or a cluster-scoped `IngressClass`. A finding that covers one is marked
+`unnamespaced` in the JSON report, and a `namespace` rule, a glob such as
+`*` included, never takes it: an `ingress-nginx` end-of-life blocker for an
+install in `sandbox` and another with no namespace stays a blocker under a
+rule for `sandbox`. A finding whose installs are all in named namespaces
+the rule matches is suppressed as before.
 Rules apply in order, and the first one that matches an object takes it.
 
 **Deprecated-API callers.** When the apiserver's
@@ -233,7 +243,7 @@ spec:
   ignore:
     - key: eol-addon/ingress-nginx
       reason: migrating to Gateway API, tracked in PLAT-123
-      expires: "2026-12-31"
+      expires: "2099-12-31"   # a date inside your migration window
 ```
 
 Each `status.targets[]` entry counts suppressed findings in `suppressed`.
@@ -265,8 +275,87 @@ becomes "2 objects"). Examples:
 | Version skew | `version-skew/kubelet-post-upgrade`, `version-skew/<component>-newer` or `-behind`, `version-skew/upgrade-path` |
 | Unknown built-in API | `unknown-api/<group>/<version>/<kind>` |
 | CRD version | `crd-version/unserved/<group>/<version>/<kind>`, `crd-version/deprecated/…`, `crd-version/stored-unserved/…` |
-| Managed-provider support | `support-lifecycle/<provider>/<minor>`, e.g. `support-lifecycle/eks/1.34` |
+| Managed-provider support | `support-lifecycle/<provider>/<minor>/<phase>`, e.g. `support-lifecycle/eks/1.34/extended`; the phase is `ending`, `extended` or `ended`, so accepting one never accepts a later one (a key without the phase, as written before, matches nothing: see [Upgrade](../operations/upgrade.md#the-support-lifecycle-key-names-its-phase)) |
 | Knowledge base behind the target | `kb-stale` |
 
 `--output json` shows the key of every finding, and the SARIF output uses
 it as the rule id.
+
+## Who can turn the gate off
+
+Everything on this page that makes a finding stop counting is a file in the
+repository being judged: the ignore rules, the annotations in the manifests
+and the baseline. In CI on a `pull_request` those files come from the pull
+request's own tree, so **a pull request can suppress its own findings and
+the gate then passes.** Nothing is hidden (the suppressed findings, their
+reasons and the rule's file are in the table, the step summary, the JSON and
+the SARIF, and the change is in the diff), but the gate does not stop an
+author who wants past it unless you pin its inputs:
+
+- **Ignore rules.** `.upgradescope.yaml` is found in the scan root, then at
+  the repository root, so a pull request that adds one next to a manifest
+  with a removed API turns exit 2 into exit 0. `--config <path>` (the
+  Action's `config`) names the one file to read and stops that search.
+- **Annotations.** `upgradescope.dev/ignore` with `ignore-reason` on an
+  object always applies; no flag turns it off. Review the suppressed table,
+  or fail the job when a suppression came from an annotation
+  (`jq -e '[.suppressed[]? | select(.source == "annotation")] | length == 0'`
+  on the JSON report).
+- **The baseline.** `--baseline <path>` (the Action's `baseline`) reads
+  whatever file it is given, so a pull request can commit a baseline that
+  holds its own findings.
+
+To pin the config and the baseline, take both from the base commit: check it
+out into another directory, copy the two files over the pull request's, and
+name them in the Action. The files must exist at the base (`ignore: []` is a
+valid empty config), and a pull request that changes them is judged by the
+old rules, so accepting a finding takes a pull request of its own that
+changes only those files. The copy comes last, right before the gate, and
+removes the destination first (`rm -f --`): a pull request can commit
+`.upgradescope.yaml` as a symlink to a file an earlier step writes, a plain
+`cp` would write through it, and that step would then overwrite the trusted
+content. `config` names the copy, not `trusted/...`, because the config's
+file globs resolve relative to the config's directory. `CODEOWNERS` with
+required code-owner review on the two files and on `.github/workflows/`
+covers what a checkout cannot, and the workflow can be edited by a pull
+request too:
+
+```yaml
+on: pull_request
+jobs:
+  upgrade-gate:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7            # the pull request (its merge commit)
+        with:
+          persist-credentials: false
+      - name: Clear the path the base commit goes to
+        run: rm -rf -- trusted               # a pull request may have committed one
+      - uses: actions/checkout@v7            # the base commit, only the two files
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: trusted
+          sparse-checkout: |
+            /.upgradescope.yaml
+            /upgradescope-baseline.json
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - run: helm template my-release ./chart --output-dir rendered
+      - name: Take the config and baseline from the base commit, last
+        run: |
+          rm -f -- .upgradescope.yaml upgradescope-baseline.json
+          cp trusted/.upgradescope.yaml trusted/upgradescope-baseline.json .
+      - uses: abd-ulbasit/upgradescope@v0.2.0
+        id: gate
+        with:
+          path: rendered
+          target: "1.37"
+          version: v0.2.0
+          config: .upgradescope.yaml           # named, so no other config is looked for
+          baseline: upgradescope-baseline.json
+```
+
+The [CI gate page](../getting-started/ci-gate.md#who-can-turn-the-gate-off)
+has the full trust table and the annotation guard.

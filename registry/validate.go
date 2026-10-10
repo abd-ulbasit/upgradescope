@@ -44,13 +44,16 @@ func Validate(a AddOn) []error {
 	} else if !idPattern.MatchString(a.ID) {
 		errs = append(errs, fmt.Errorf("%s: id must be kebab-case (lowercase alphanumerics separated by single dashes)", a.ID))
 	}
-	if len(a.Matchers.Images) == 0 && len(a.Matchers.Charts) == 0 && len(a.Matchers.Runtimes) == 0 {
-		errs = append(errs, fmt.Errorf("%s: at least one matcher (matchers.images, matchers.charts or matchers.runtimes) required", a.ID))
+	if len(a.Matchers.Images) == 0 && len(a.Matchers.Charts) == 0 && len(a.Matchers.Runtimes) == 0 && len(a.Matchers.Components) == 0 {
+		errs = append(errs, fmt.Errorf("%s: at least one matcher (matchers.images, matchers.charts, matchers.runtimes or matchers.components) required", a.ID))
 	}
 	for _, m := range a.Matchers.Images {
 		if err := validateImageMatcher(m); err != nil {
 			errs = append(errs, fmt.Errorf("%s: matchers.images %q: %w", a.ID, m, err))
 		}
+	}
+	for i, c := range a.Matchers.Components {
+		errs = append(errs, validateComponent(fmt.Sprintf("%s: matchers.components[%d] (%s)", a.ID, i, c.Image), c, a.Matchers.Images)...)
 	}
 	for _, r := range a.Matchers.Runtimes {
 		if !runtimePattern.MatchString(r) {
@@ -81,6 +84,7 @@ func Validate(a AddOn) []error {
 			errs = append(errs, fmt.Errorf("%s: eol_date %q must be a valid YYYY-MM-DD date", a.ID, a.Support.EOLDate))
 		}
 	}
+	errs = append(errs, validateExtendedSupport(a.ID, a.Support)...)
 	seenCycles := map[string]bool{}
 	for i, c := range a.Cycles {
 		where := fmt.Sprintf("%s: cycles[%d] (%s)", a.ID, i, c.Cycle)
@@ -115,13 +119,27 @@ func Validate(a AddOn) []error {
 	return errs
 }
 
+// tagPatternPattern is a tag pattern: tag characters and "*" wildcards.
+var tagPatternPattern = regexp.MustCompile(`^[A-Za-z0-9_.*-]+$`)
+
 // validateImageMatcher accepts a repository path without registry host, tag
 // or digest: the collector matches it on the path, so a host would stop it
 // matching mirrors and the legacy k8s.gcr.io. The one exception is a
-// provider build, named under its ProviderBuildPrefixes location.
+// provider build, named under its ProviderBuildPrefixes location. The path
+// may end in a tag pattern with a "*" ("path:*-hardened*"), never in a tag:
+// one tag is one release, not a product.
 func validateImageMatcher(m string) error {
-	if strings.ContainsAny(m, ":@") {
+	if strings.Contains(m, "@") {
 		return fmt.Errorf("must not carry a tag or digest")
+	}
+	m, pattern, tagged := strings.Cut(m, ":")
+	if tagged {
+		if err := validateTagPattern(pattern); err != nil {
+			return err
+		}
+		if strings.HasPrefix(m, AnyPrefix) {
+			return fmt.Errorf("an any-prefix matcher (%q) takes no tag pattern", AnyPrefix)
+		}
 	}
 	if name, ok := strings.CutPrefix(m, AnyPrefix); ok {
 		return validateAnyPrefixMatcher(name)
@@ -144,6 +162,92 @@ func validateImageMatcher(m string) error {
 		}
 	}
 	return nil
+}
+
+// validateTagPattern checks the part after ":" of an image matcher: tag
+// characters with at least one "*" and at least one other character.
+func validateTagPattern(p string) error {
+	if !strings.Contains(p, "*") {
+		return fmt.Errorf("must not carry a tag or digest; a tag pattern (\"path:*-hardened*\") needs a \"*\"")
+	}
+	if !tagPatternPattern.MatchString(p) || strings.Trim(p, "*") == "" {
+		return fmt.Errorf("tag pattern %q must be tag characters (letters, digits, \"_\", \".\", \"-\") with \"*\" wildcards, and not \"*\" alone", p)
+	}
+	return nil
+}
+
+// validateComponent checks a component image: a path-only image matcher
+// that no image matcher of the entry also claims (its version would be read
+// two ways), and lines mapping MAJOR.MINOR component lines, each once, to
+// product release lines, with a citation for the mapping.
+func validateComponent(where string, c ComponentImage, images []string) []error {
+	var errs []error
+	if strings.ContainsAny(c.Image, ":@") || strings.HasPrefix(c.Image, AnyPrefix) {
+		errs = append(errs, fmt.Errorf("%s: image must be a repository path without a tag pattern or the any-prefix %q", where, AnyPrefix))
+	} else if err := validateImageMatcher(c.Image); err != nil {
+		errs = append(errs, fmt.Errorf("%s: image: %w", where, err))
+	}
+	for _, m := range images {
+		if matchersOverlap(m, c.Image) {
+			errs = append(errs, fmt.Errorf("%s: image also matches matchers.images %q; list it in one place", where, m))
+		}
+	}
+	if len(c.Lines) == 0 {
+		errs = append(errs, fmt.Errorf("%s: at least one line required", where))
+	}
+	seen := map[string]bool{}
+	for j, l := range c.Lines {
+		if !k8sVerPattern.MatchString(l.Component) {
+			errs = append(errs, fmt.Errorf("%s: lines[%d]: component %q must be MAJOR.MINOR of the image tag, such as \"1.5\"", where, j, l.Component))
+		} else if seen[l.Component] {
+			errs = append(errs, fmt.Errorf("%s: lines[%d]: duplicate component line %q", where, j, l.Component))
+		}
+		seen[l.Component] = true
+		if !cyclePattern.MatchString(l.Product) {
+			errs = append(errs, fmt.Errorf("%s: lines[%d]: product %q must be a dotted release line such as \"2.5\"", where, j, l.Product))
+		}
+	}
+	return append(errs, validateCitations(where, c.Citations)...)
+}
+
+// validateExtendedSupport checks split support: extended_eol_date and
+// extended_support_condition together, after an eol_date, on a supported
+// product (one retired as a whole has no extended window).
+func validateExtendedSupport(id string, s Support) []error {
+	if s.ExtendedEOLDate == "" && s.ExtendedSupportCondition == "" {
+		return nil
+	}
+	var errs []error
+	if s.ExtendedEOLDate == "" || s.ExtendedSupportCondition == "" {
+		errs = append(errs, fmt.Errorf("%s: support.extended_eol_date and extended_support_condition go together: the later date holds only under the condition", id))
+	}
+	if s.Status != "supported" {
+		errs = append(errs, fmt.Errorf("%s: support.extended_eol_date requires support.status supported, got %q", id, s.Status))
+	}
+	if c := s.ExtendedSupportCondition; c != "" && !bareClause(c) {
+		errs = append(errs, fmt.Errorf("%s: extended_support_condition %q must be a bare clause with no leading \"if\" and no trailing period (it completes \"only if ...\")", id, c))
+	}
+	if s.ExtendedEOLDate == "" {
+		return errs
+	}
+	ext, err := time.Parse("2006-01-02", s.ExtendedEOLDate)
+	if err != nil {
+		return append(errs, fmt.Errorf("%s: extended_eol_date %q must be a valid YYYY-MM-DD date", id, s.ExtendedEOLDate))
+	}
+	if s.EOLDate == "" {
+		return append(errs, fmt.Errorf("%s: support.extended_eol_date requires eol_date, the day support ends without the condition", id))
+	}
+	if end, err := time.Parse("2006-01-02", s.EOLDate); err == nil && !ext.After(end) {
+		errs = append(errs, fmt.Errorf("%s: extended_eol_date %s must be later than eol_date %s", id, s.ExtendedEOLDate, s.EOLDate))
+	}
+	return errs
+}
+
+// bareClause reports whether a condition completes "only if ...": no
+// surrounding space, no leading "if", no trailing period.
+func bareClause(c string) bool {
+	low := strings.ToLower(c)
+	return c == strings.TrimSpace(c) && !strings.HasSuffix(c, ".") && !strings.HasPrefix(low, "if ") && !strings.HasPrefix(low, "only if ")
 }
 
 // genericImageNames are final path segments many unrelated products publish
