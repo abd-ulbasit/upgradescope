@@ -161,8 +161,9 @@ storageClassName: standard
 
 // TestEnvtestMatrix runs the real collector and engine, the way `scan`
 // does, against a real kube-apiserver and etcd (controller-runtime's
-// envtest). CI runs it once per Kubernetes minor from 1.24 to 1.28, the
-// minors kind's node images do not cover (#135, #69).
+// envtest), once per Kubernetes minor from 1.24 to 1.28, the minors kind's
+// node images do not cover (#135, #69): a pull request runs 1.24 and 1.28,
+// the weekly run every minor (hack/envtest-versions.txt).
 //
 // There is no kubelet, controller manager or node, so what the
 // apiserver alone cannot answer must come back not assessed, which the

@@ -162,7 +162,8 @@ covers. A target past that is `unknown`, by design.
 
 Tested against Kubernetes 1.24 to the newest minor: 1.29 and up as whole
 kind clusters, 1.24 to 1.28 as real kube-apiservers through envtest (the
-collector and engine only).
+collector and engine only; 1.24 and 1.28 on every pull request, every
+minor weekly).
 [Tested Kubernetes range](https://abd-ulbasit.github.io/upgradescope/compatibility-policy/#tested-kubernetes-range).
 
 ### Managed clusters

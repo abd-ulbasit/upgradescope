@@ -4,8 +4,13 @@
 # has no node image for (1.24 to 1.28, hack/envtest-versions.txt). CI's
 # envtest job runs one minor per matrix leg; a laptop runs the same:
 #
-#   hack/envtest.sh          every minor in the table
-#   hack/envtest.sh 1.24     just that one
+#   hack/envtest.sh               every minor in the table
+#   hack/envtest.sh 1.24          just that one
+#   hack/envtest.sh matrix pr|all JSON array of minors, e.g. ["1.24","1.28"]:
+#                                 the rows marked pr, or every row. CI's
+#                                 kube-matrix job picks the set per event with
+#                                 hack/kind-images.sh set, and the envtest job
+#                                 runs one leg per minor it prints.
 #
 # No Docker, no cluster, no kubeconfig: the apiserver is a local process on
 # a loopback port that the test starts and stops itself, so no kube context
@@ -41,14 +46,25 @@ case "$ENVTEST_BIN" in /*) ;; *) ENVTEST_BIN="$PWD/$ENVTEST_BIN" ;; esac
 
 bad() { echo "envtest: $*" >&2; exit 2; }
 
-minors=() exact=()
-while read -r minor version _; do
+minors=() exact=() when=()
+while read -r minor version cadence _; do
   case "$minor" in '' | '#'*) continue ;; esac
   [[ "$minor" =~ ^1\.[0-9]+$ ]] || bad "$TABLE: bad minor '$minor'"
   [[ "$version" =~ ^"$minor"\.[0-9]+$ ]] || bad "$TABLE: $minor: '$version' is not an exact $minor.N release"
-  minors+=("$minor") exact+=("$version")
+  case "$cadence" in pr | weekly) ;; *) bad "$TABLE: $minor: schedule '$cadence' must be pr or weekly" ;; esac
+  minors+=("$minor") exact+=("$version") when+=("$cadence")
 done <"$TABLE"
 [ ${#minors[@]} -gt 0 ] || bad "$TABLE: no minors"
+
+if [ "${1:-}" = matrix ]; then
+  { [ $# -eq 2 ] && { [ "$2" = pr ] || [ "$2" = all ]; }; } || { echo "usage: $0 matrix pr|all" >&2; exit 2; }
+  out=""
+  for i in "${!minors[@]}"; do
+    if [ "$2" = all ] || [ "${when[$i]}" = pr ]; then out+="${out:+,}\"${minors[$i]}\""; fi
+  done
+  echo "[$out]"
+  exit 0
+fi
 
 want=("$@")
 [ ${#want[@]} -gt 0 ] || want=("${minors[@]}")

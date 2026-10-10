@@ -8,8 +8,8 @@ on:
   # Kubernetes and Postgres patch images ship, and the published Action's
   # release-install path can break, whether or not anyone pushes. The
   # scheduled run is the vuln gate, the full Kubernetes (1.29-1.37) and
-  # Postgres (14-18) matrices, the envtest apiserver matrix (1.24-1.28,
-  # the same legs as on a PR), the Action check and KB freshness.
+  # Postgres (14-18) matrices, the envtest apiserver matrix (every minor
+  # 1.24-1.28; a PR runs 1.24 and 1.28), the Action check and KB freshness.
   schedule:
     - cron: '41 5 * * 1' # Mondays 05:41 UTC
   # On demand, from any branch: `gh workflow run ci.yml --ref <branch>`
@@ -24,7 +24,7 @@ on:
   workflow_dispatch:
     inputs:
       full-matrix:
-        description: 'Every Kubernetes minor in hack/kind-node-images.txt (1.29-1.37) and Postgres 14-18; false runs the PR sets'
+        description: 'Every Kubernetes minor in hack/kind-node-images.txt (1.29-1.37), every envtest minor in hack/envtest-versions.txt (1.24-1.28) and Postgres 14-18; false runs the PR sets'
         type: boolean
         default: true
       upload-fixture-sarif:
@@ -880,11 +880,14 @@ jobs:
   # releases; every minor 1.29-1.37 on the schedule and on demand
   # (workflow_dispatch, unless full-matrix=false). hack/kind-images.sh set
   # makes that choice; hack/kind-images_test.sh covers each kind of run.
+  # The envtest job's minors take the same set from hack/envtest-versions.txt
+  # (hack/envtest.sh matrix), so one choice of set serves both matrices.
   kube-matrix:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
       minors: ${{ steps.matrix.outputs.minors }}
+      envtest-minors: ${{ steps.matrix.outputs.envtest-minors }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -899,6 +902,9 @@ jobs:
           minors="$(hack/kind-images.sh matrix "$set")"
           echo "Kubernetes minors ($set): $minors"
           echo "minors=$minors" >> "$GITHUB_OUTPUT"
+          envtest="$(hack/envtest.sh matrix "$set")"
+          echo "envtest minors ($set): $envtest"
+          echo "envtest-minors=$envtest" >> "$GITHUB_OUTPUT"
 
   # kind e2e per minor (make e2e, hack/e2e.sh): pinned node image, kind and
   # kubectl pinned and sha256-verified, the zero-false-blocker regression,
@@ -948,23 +954,27 @@ jobs:
   # #135, #69): GA-only objects give no removed-API finding, a second scan of
   # an unchanged cluster is identical, an object written through a beta API
   # that minor still serves blocks at its removal, and what an apiserver
-  # without nodes cannot answer is reported as not assessed. It is cheap (a
-  # few seconds of test and a bundle download), so every minor runs wherever
-  # the kube job does, the PR set included. make envtest reproduces a leg on
-  # a laptop. hack/envtest.sh pins setup-envtest and its bundle index, and
-  # the downloads are sha512-verified.
+  # without nodes cannot answer is reported as not assessed. A pull request
+  # and a push to main run the `pr` rows, the ends of the range (1.24 and
+  # 1.28); the schedule and workflow_dispatch (unless full-matrix=false) run
+  # every minor, as the kube job does (kube-matrix picks the set). The
+  # warning one minor before a removal is asserted only on 1.27, so it runs
+  # weekly, not on a PR. A minor outside the set is not a leg at all, so it
+  # cannot fail ci-ok. make envtest reproduces a leg on a laptop.
+  # hack/envtest.sh pins setup-envtest and its bundle index, and the
+  # downloads are sha512-verified.
   envtest:
     name: envtest (Kubernetes ${{ matrix.minor }})
-    needs: changes
+    needs: [changes, kube-matrix]
     if: >-
-      !cancelled() &&
+      !cancelled() && needs.kube-matrix.result == 'success' &&
       (needs.changes.outputs.e2e == 'true' || needs.changes.result == 'skipped')
     runs-on: ubuntu-latest
     timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
-        minor: ['1.24', '1.25', '1.26', '1.27', '1.28']
+        minor: ${{ fromJSON(needs.kube-matrix.outputs.envtest-minors) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
