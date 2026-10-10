@@ -2,6 +2,7 @@ package chart
 
 import (
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -63,6 +64,97 @@ func TestServerExtraArgAllowAnonymousReadIsRefused(t *testing.T) {
 	} {
 		if msg := renderErr(t, append([]string{"server.enabled=true", "server.ingestToken=t"}, sets...)...); msg != "" {
 			t.Errorf("%v: %s", sets, msg)
+		}
+	}
+}
+
+// Whichever of the two flags the chart passes, an argument in
+// server.extraArgs may not contradict it: serve refuses both flags together
+// (the pod would crash-loop), and a "=false" of the one the chart passes
+// would undo it. The flag the chart did not pass may be set false, which is
+// the default and changes nothing; a bare flag or =true is a contradiction.
+func TestServerExtraArgReadFlagsMustNotContradictTheChart(t *testing.T) {
+	const (
+		open   = "--allow-anonymous-read"
+		closed = "--require-read-credential"
+	)
+	base := []string{"server.enabled=true", "server.ingestToken=t"}
+	modes := []struct {
+		name string
+		sets []string
+		// own is the flag the chart passes in this mode ("" with a read token).
+		own, other string
+	}{
+		{"closed (no read token)", nil, closed, open},
+		{"open (server.allowAnonymousRead)", []string{"server.allowAnonymousRead=true"}, open, closed},
+		{"open (server.ingress.allowAnonymousRead)", []string{"server.ingress.allowAnonymousRead=true"}, open, closed},
+		{"read token", []string{"server.readToken=r"}, "", ""},
+	}
+	trues := []string{"", "=true", "=1", "=t", "=T", "=TRUE", "=True"}
+	falses := []string{"=false", "=0", "=f", "=F", "=FALSE", "=False"}
+	for _, m := range modes {
+		render := func(args ...string) string {
+			sets := append(slices.Clone(base), m.sets...)
+			for i, a := range args {
+				sets = append(sets, "server.extraArgs["+strconv.Itoa(i)+"]="+a)
+			}
+			return renderErr(t, sets...)
+		}
+		t.Run(m.name, func(t *testing.T) {
+			if m.other != "" {
+				for _, v := range trues {
+					msg := render(m.other + v)
+					if msg == "" {
+						t.Errorf("extraArgs %s%s contradicts the chart's %s and must fail the render", m.other, v, m.own)
+					} else if !strings.Contains(msg, m.other) || !strings.Contains(msg, m.own) {
+						t.Errorf("extraArgs %s%s: render error %q should name both %s and %s", m.other, v, msg, m.other, m.own)
+					}
+				}
+				for _, v := range falses {
+					if msg := render(m.other + v); msg != "" {
+						t.Errorf("extraArgs %s%s is the default and harmless, but the render failed: %s", m.other, v, msg)
+					}
+				}
+				// Undoing the chart's own flag leaves neither: an open API the
+				// listener refuses, or a closed one that depends on the database.
+				for _, v := range falses {
+					if msg := render(m.own + v); msg == "" {
+						t.Errorf("extraArgs %s%s would undo the flag the chart passes and must fail the render", m.own, v)
+					}
+				}
+				// Repeating the chart's own flag is harmless.
+				for _, v := range trues {
+					if msg := render(m.own + v); msg != "" {
+						t.Errorf("extraArgs %s%s repeats the chart's own flag, but the render failed: %s", m.own, v, msg)
+					}
+				}
+				return
+			}
+			// With a read token the chart passes neither: either may be set
+			// alone (true or false), not both true.
+			for _, f := range []string{open, closed} {
+				for _, v := range append(slices.Clone(trues), falses...) {
+					if msg := render(f + v); msg != "" {
+						t.Errorf("extraArgs %s%s with a read token: %s", f, v, msg)
+					}
+				}
+			}
+			if msg := render(open, closed); msg == "" {
+				t.Errorf("extraArgs with both %s and %s must fail the render: serve refuses the pair", open, closed)
+			}
+			if msg := render(open+"=true", closed+"=1"); msg == "" {
+				t.Errorf("extraArgs with both flags true (=true, =1) must fail the render")
+			}
+			if msg := render(open+"=false", closed); msg != "" {
+				t.Errorf("extraArgs %s=false with %s: %s", open, closed, msg)
+			}
+		})
+	}
+	// Whatever the mode, both flags true in extraArgs is a contradiction.
+	for _, m := range modes {
+		sets := append(append(slices.Clone(base), m.sets...), "server.extraArgs[0]="+open, "server.extraArgs[1]="+closed)
+		if renderErr(t, sets...) == "" {
+			t.Errorf("%s: both flags in extraArgs must fail the render", m.name)
 		}
 	}
 }

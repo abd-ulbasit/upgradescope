@@ -137,7 +137,8 @@ spec:
             - --tls-key-file=/etc/upgradescope/tls/tls.key
             {{- end }}
             # The names serve answers for when it checks the Host (a trusted
-            # team header, or a loopback --listen): the Service's, which the
+            # team header, a loopback --listen, or an anonymous request to an
+            # open read API): the Service's, which the
             # in-chart agent pushes to, the Ingress host and
             # server.allowedHosts. Probes and scrapes of the pod's IP need
             # none: the guard answers for the address a request arrives on.
@@ -168,10 +169,39 @@ spec:
             {{- end }}
             - {{ printf "--optional-secret-file=%s" (join "," $names) | quote }}
             {{- end }}
+            {{- /* The chart passes at most one of --allow-anonymous-read and
+                   --require-read-credential, and serve refuses both together.
+                   An extra argument may not contradict the one the chart passes
+                   (the pod would crash-loop, or the flag be undone), nor set both
+                   true itself. The flag the chart did not pass may be set false
+                   (its default). */}}
+            {{- $allowTrue := false }}
+            {{- $requireTrue := false }}
+            {{- range .Values.server.extraArgs }}
+            {{- if eq (include "upgradescope.boolFlagArg" (dict "arg" (toString .) "flag" "allow-anonymous-read")) "true" }}{{ $allowTrue = true }}{{ end }}
+            {{- if eq (include "upgradescope.boolFlagArg" (dict "arg" (toString .) "flag" "require-read-credential")) "true" }}{{ $requireTrue = true }}{{ end }}
+            {{- end }}
+            {{- if and $allowTrue $requireTrue }}
+            {{- fail "server.extraArgs sets both --allow-anonymous-read and --require-read-credential, which serve refuses together: one opens the read API, the other keeps it closed. Keep one" }}
+            {{- end }}
             {{- range .Values.server.extraArgs }}
             {{- $arg := toString . }}
-            {{- if and (or (eq $arg "--allow-anonymous-read") (hasPrefix "--allow-anonymous-read=" $arg)) (not (include "upgradescope.readTokenEnabled" $)) (not (include "upgradescope.readAnonymous" $)) }}
+            {{- $allow := include "upgradescope.boolFlagArg" (dict "arg" $arg "flag" "allow-anonymous-read") }}
+            {{- $require := include "upgradescope.boolFlagArg" (dict "arg" $arg "flag" "require-read-credential") }}
+            {{- if include "upgradescope.readAnonymous" $ }}
+            {{- if eq $require "true" }}
+            {{- fail "server.extraArgs sets --require-read-credential, but the chart passes --allow-anonymous-read (server.allowAnonymousRead or server.ingress.allowAnonymousRead), and serve refuses both. Remove the argument to keep the read API open, or unset the opt-in to close it" }}
+            {{- end }}
+            {{- if eq $allow "false" }}
+            {{- fail "server.extraArgs sets --allow-anonymous-read=false, but server.allowAnonymousRead (or server.ingress.allowAnonymousRead) opts into an open read API and the chart passes --allow-anonymous-read: serve would refuse to listen on a non-loopback address. Unset the opt-in to close the read API instead" }}
+            {{- end }}
+            {{- else if not (include "upgradescope.readTokenEnabled" $) }}
+            {{- if eq $allow "true" }}
             {{- fail "server.extraArgs sets --allow-anonymous-read, but with no read token the chart passes --require-read-credential, which serve refuses together with it. Set server.allowAnonymousRead=true to open the read API (and remove the argument), or remove the argument to keep it closed" }}
+            {{- end }}
+            {{- if eq $require "false" }}
+            {{- fail "server.extraArgs sets --require-read-credential=false, but with no read token the chart passes --require-read-credential to keep the read API closed whatever the database holds, and the argument would undo it. Remove the argument, or set server.allowAnonymousRead=true to open the read API" }}
+            {{- end }}
             {{- end }}
             {{- range $key := concat $secretFiles.required $secretFiles.optional }}
             {{- $flag := include "upgradescope.serverSecretFlag" $key }}

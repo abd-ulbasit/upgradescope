@@ -81,6 +81,17 @@ $ upgradescope tokens create --read --teams '*' --db upgradescope.db
 After the database is lost, mint again. `/healthz` and `/readyz` need no
 credential.
 
+In the chart the flags are the chart's to choose: `server.extraArgs` may not
+contradict them. With no read token the chart passes
+`--require-read-credential` (or `--allow-anonymous-read` when
+`server.allowAnonymousRead` or `server.ingress.allowAnonymousRead` opts in),
+and `serve` refuses the two flags together, so the render fails on an
+`extraArgs` entry that sets the other one true (`--allow-anonymous-read`,
+`--allow-anonymous-read=true`), that sets the one the chart passes false
+(`--require-read-credential=false` would undo it), or that sets both. The
+other flag set false (`--allow-anonymous-read=false`) is its default and is
+accepted.
+
 `--read-token` must differ from `--ingest-token` (and both from
 `--admin-token`): `serve` refuses to start otherwise, since one bearer
 would let every agent read the whole fleet and every reader push as any
@@ -103,8 +114,8 @@ request. So `serve` answers a request only when its Host names one of the
 names below, when it **listens on loopback**, when **`--trust-team-header`
 is set**, or when **the read API is open and the request presents no bearer**
 (an anonymous read; decided on each request, so minting a read token ends it
-without a restart, and a store that cannot say whether the API is open is
-treated as open). The names:
+without a restart, within a second of the mint: see below; and a store that
+cannot say whether the API is open is treated as open). The names:
 
 - `localhost`, or a loopback address (`127.0.0.0/8`, `::1`);
 - the address the request arrived on, as an IP literal: the kubelet's
@@ -119,6 +130,17 @@ treated as open). The names:
 Any port matches: a rebinding page needs a name its owner controls, and
 the port differs from the listen port wherever a tunnel or a Service
 maps it (`kubectl port-forward 9000:8080` sends `Host: localhost:9000`).
+On an open read API the answer to "is a read token minted yet?" is a store
+query, so `serve` keeps "no" for one second (a monotonic clock, concurrent
+requests sharing one query) instead of asking on every anonymous request
+whose Host it does not answer for, `/`, assets and probes included. A read
+token minted by another process (`tokens create --read`) therefore closes
+the API to anonymous reads, and ends the Host check for them, within that
+second, not on the very next request; the token itself is looked up on
+every request and works at once. "Yes" is kept for good (the rows are only
+ever revoked), an error from the store is never kept, and
+`--require-read-credential` or `--read-token` never ask.
+
 Every other request gets `421 Misdirected Request` before any route,
 token, team header or scope is looked at, `/healthz`, ingest and the
 dashboard included. Each refusal is counted in `/metrics`
@@ -169,11 +191,15 @@ keeps each one's sha256 hash and its first 8 characters (which
 tokens. They live in a table of their own: a read token never pushes, and
 an ingest token never reads. The commands take the same `--db` or
 `--db-url` as `serve`, and the server looks a token up on every request,
-so one minted or revoked takes effect at once, without a restart.
+so one minted or revoked takes effect at once, without a restart (the
+first one closes the API to anonymous reads within a second: see
+[the Host check](#the-host-check-dns-rebinding)).
 
 - **Minting the first read token closes the read API, while this database
   lasts.** A server that ran open (on loopback, or with
-  `--allow-anonymous-read`) needs a credential from then on. Rows are only
+  `--allow-anonymous-read`) needs a credential from then on, within a second
+  of the mint (the server keeps its "no read token yet" answer that long).
+  Rows are only
   ever revoked, never deleted, so revoking the last one does not open the
   read API again. The rows are in the database, though: a lost, emptied or
   restored one has none, and the API is open again after the next start.

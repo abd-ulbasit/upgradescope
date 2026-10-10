@@ -502,6 +502,12 @@ server:
   # need nothing.
   allowedHosts: []
   # -- Extra `upgradescope serve` flags, e.g. ["--max-snapshot-bytes=41943040"].
+  # Not the read-API flags the chart chooses: the render fails on
+  # --allow-anonymous-read (true) while it passes --require-read-credential,
+  # on --require-read-credential (true) while it passes
+  # --allow-anonymous-read, on either set false when it is the one the chart
+  # passes, and on both set true; serve refuses the pair. The other flag set
+  # false is accepted.
   extraArgs: []
   extraEnv: []
   extraVolumes: []

@@ -263,6 +263,23 @@ the database holds, and reads are 401 until a read token is minted (#295).
 {{- if and (not (include "upgradescope.readTokenEnabled" .)) (or .Values.server.allowAnonymousRead .Values.server.ingress.allowAnonymousRead) -}}true{{- end -}}
 {{- end -}}
 
+{{/*
+Does the extra argument ARG set the boolean flag --FLAG? Pass
+(dict "arg" "--x=false" "flag" "x"). Output: "" when ARG is not that flag,
+"false" when it sets it to a value serve reads as false (strconv.ParseBool:
+0, f, F, false, FALSE, False), "true" otherwise: the bare flag, any true
+value, and (so the render errs on the side of refusing) a value serve would
+reject anyway.
+*/}}
+{{- define "upgradescope.boolFlagArg" -}}
+{{- $f := printf "--%s" .flag -}}
+{{- if eq .arg $f -}}
+true
+{{- else if hasPrefix (printf "%s=" $f) .arg -}}
+{{- if has (trimPrefix (printf "%s=" $f) .arg) (list "0" "f" "F" "false" "FALSE" "False") -}}false{{- else -}}true{{- end -}}
+{{- end -}}
+{{- end -}}
+
 {{/* Does the server get an admin token? Non-empty string = yes. */}}
 {{- define "upgradescope.adminTokenEnabled" -}}
 {{- if and .Values.server.adminTokenFromSecret (not .Values.server.existingSecret) -}}

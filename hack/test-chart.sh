@@ -286,11 +286,45 @@ helm template upgradescope "$CHART" --namespace upgradescope \
   --set server.enabled=true --set server.ingestToken=t \
   --set server.readToken=r --set server.allowAnonymousRead=true > "$TMP/open-token.yaml"
 assert_not_contains "$TMP/open-token.yaml" '--allow-anonymous-read' "a read token wins over the opt-in"
-if helm template upgradescope "$CHART" --set server.enabled=true --set server.ingestToken=t \
-  --set 'server.extraArgs[0]=--allow-anonymous-read' >/dev/null 2>&1; then
-  fail "--allow-anonymous-read in extraArgs with the read API closed should fail the render (serve refuses both flags)"
+# server.extraArgs may not contradict the read-API flag the chart passes, nor
+# set both flags: serve refuses --allow-anonymous-read together with
+# --require-read-credential (the pod would crash-loop). The flag the chart did
+# not pass may be set false. extra_arg_renders MODE_SET... ARG: does the render
+# succeed with ARG as server.extraArgs[0]?
+extra_arg_renders() {
+  local arg=${!#} sets=("${@:1:$#-1}")
+  helm template upgradescope "$CHART" --set server.enabled=true --set server.ingestToken=t \
+    "${sets[@]}" --set "server.extraArgs[0]=$arg" >/dev/null 2>&1
+}
+# expect_extra_arg ok|refused DESC MODE_SET... ARG
+expect_extra_arg() {
+  local want=$1 desc=$2; shift 2
+  if extra_arg_renders "$@"; then
+    [ "$want" = ok ] && pass "$desc" || fail "$desc: should fail the render"
+  else
+    [ "$want" = refused ] && pass "$desc" || fail "$desc: should render"
+  fi
+}
+CLOSED=(--set server.persistence.enabled=true)       # no read token, no opt-in: the chart passes --require-read-credential
+OPENED=(--set server.allowAnonymousRead=true)        # the chart passes --allow-anonymous-read
+TOKENED=(--set server.readToken=r)                   # the chart passes neither
+expect_extra_arg refused "closed: extraArgs --allow-anonymous-read"                 "${CLOSED[@]}" --allow-anonymous-read
+expect_extra_arg refused "closed: extraArgs --allow-anonymous-read=true"            "${CLOSED[@]}" --allow-anonymous-read=true
+expect_extra_arg ok      "closed: extraArgs --allow-anonymous-read=false is harmless" "${CLOSED[@]}" --allow-anonymous-read=false
+expect_extra_arg ok      "closed: extraArgs --require-read-credential repeats the chart" "${CLOSED[@]}" --require-read-credential
+expect_extra_arg refused "closed: extraArgs --require-read-credential=false would undo it" "${CLOSED[@]}" --require-read-credential=false
+expect_extra_arg refused "open: extraArgs --require-read-credential"                "${OPENED[@]}" --require-read-credential
+expect_extra_arg refused "open: extraArgs --require-read-credential=true"           "${OPENED[@]}" --require-read-credential=true
+expect_extra_arg ok      "open: extraArgs --require-read-credential=false is harmless" "${OPENED[@]}" --require-read-credential=false
+expect_extra_arg ok      "open: extraArgs --allow-anonymous-read repeats the chart" "${OPENED[@]}" --allow-anonymous-read
+expect_extra_arg refused "open: extraArgs --allow-anonymous-read=false would undo it" "${OPENED[@]}" --allow-anonymous-read=false
+expect_extra_arg ok      "read token: extraArgs --allow-anonymous-read alone"       "${TOKENED[@]}" --allow-anonymous-read
+expect_extra_arg ok      "read token: extraArgs --require-read-credential alone"    "${TOKENED[@]}" --require-read-credential
+if helm template upgradescope "$CHART" --set server.enabled=true --set server.ingestToken=t --set server.readToken=r \
+  --set 'server.extraArgs[0]=--allow-anonymous-read' --set 'server.extraArgs[1]=--require-read-credential' >/dev/null 2>&1; then
+  fail "both read-API flags in extraArgs should fail the render (serve refuses the pair)"
 else
-  pass "extraArgs --allow-anonymous-read is refused while the chart closes the read API"
+  pass "extraArgs with both read-API flags is refused"
 fi
 if helm template upgradescope "$CHART" --set server.enabled=true --set server.ingestToken=t \
   --set metrics.serviceMonitor.enabled=true >/dev/null 2>&1; then
