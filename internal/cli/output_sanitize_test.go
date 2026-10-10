@@ -419,7 +419,7 @@ func TestMCPScanSuppressWarningEscapesObjectNames(t *testing.T) {
 	t.Cleanup(func() { runMCPScan = orig })
 
 	var stderr bytes.Buffer
-	if _, err := mcpScanner(mcpOptions{}, &stderr)(context.Background(), mcp.ScanRequest{Targets: []string{"1.38"}}); err != nil {
+	if _, err := mcpScanner(mcpOptions{kubecontext: "test"}, &stderr)(context.Background(), mcp.ScanRequest{Targets: []string{"1.38"}}); err != nil {
 		t.Fatal(err)
 	}
 	out := stderr.String()

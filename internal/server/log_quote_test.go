@@ -38,6 +38,9 @@ func TestOutboxLogsQuoteClusterNames(t *testing.T) {
 		{ID: 2, Attempts: outboxMaxAttempts, CreatedAt: s.now()},                // last attempt
 		{ID: 3, Attempts: 1, CreatedAt: s.now().Add(-outboxMaxAge - time.Hour)}, // past its lifetime
 	} {
+		// Claimed with a lease that outlasts the attempt, as ClaimOutbox
+		// leaves it, so deliver attempts it rather than putting it back.
+		m.NextAttemptAt = s.now().Add(s.outboxLease)
 		m.Sink, m.Payload = s.sinks[0].name, payload
 		s.deliver(context.Background(), m)
 	}
