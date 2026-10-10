@@ -3,11 +3,11 @@ package collect
 import (
 	"bytes"
 	"encoding/json"
+	"regexp"
 	"strconv"
 	"strings"
 
 	yaml "go.yaml.in/yaml/v3"
-	sigsyaml "sigs.k8s.io/yaml"
 )
 
 // treeJSONConverter makes kubectl's YAML-to-JSON step (apimachinery's
@@ -23,8 +23,10 @@ import (
 //   - The two share a scanner and parser, apart from how they keep
 //     comments, which does not touch the tree. What differs is how a plain
 //     scalar is typed (YAML 1.1 reads yes, no, on and off as booleans, and
-//     numbers many ways), so that is done as v2 does it (v2Scalar), or put
-//     to kubectl's decoder itself (ask).
+//     numbers many ways), so that is done as v2 does it (v2Scalar and
+//     v2Number: v2's own resolve, with the same standard-library calls),
+//     never by asking kubectl's decoder: a question per scalar costs more
+//     than the second parse it saves (see the scale guide).
 //   - Anything else that could change the reading is left to kubectl's
 //     decoder: anchors, aliases and tags, merge keys, keys that are not
 //     strings, duplicate keys, and text the line-by-line reader of
@@ -34,33 +36,11 @@ import (
 // sigs.k8s.io/yaml's on documents of every kind this answers or declines,
 // and FuzzTreeJSONMatchesKubectl on arbitrary text.
 type treeJSONConverter struct {
-	// oracle remembers what kubectl's own decoder made of a plain
-	// scalar that v2 may type as a number (nil when it could not be
-	// typed), by the scalar's text.
-	oracle map[string]*oracleAnswer
-	// asked counts the questions put to kubectl's decoder for the
-	// document in hand.
-	asked int
 	// answered and declined count the documents the converter made JSON of
 	// and left to kubectl's decoder: what a test reads to say how often
 	// the shortcut applies.
 	answered, declined int
 }
-
-// oracleAnswer is the JSON kubectl's decoder makes of one plain scalar.
-type oracleAnswer struct {
-	json  []byte
-	isStr bool   // json is a string literal...
-	str   string // ...with this value
-}
-
-// maxOracleQuestions bounds how many distinct plain scalars of one document
-// are put to kubectl's decoder one by one (each costs about what decoding a
-// tiny document does); a document with more is decoded whole by it.
-const maxOracleQuestions = 256
-
-// maxOracleEntries bounds the converter's memory of answers.
-const maxOracleEntries = 4096
 
 // json returns the JSON of the document text, whose first node is root.
 func (c *treeJSONConverter) json(root *yaml.Node, text []byte) ([]byte, bool) {
@@ -77,7 +57,6 @@ func (c *treeJSONConverter) convert(root *yaml.Node, text []byte) ([]byte, bool)
 	if !readsTheSame(text) {
 		return nil, false
 	}
-	c.asked = 0
 	v, ok := c.value(root)
 	if !ok {
 		return nil, false
@@ -222,12 +201,11 @@ func (c *treeJSONConverter) scalar(n *yaml.Node) (any, bool) {
 // quote's opposite, anything non-ASCII) makes a string. y, n, t, f, o and ~
 // start the words YAML 1.1 reads as booleans and null (v2's resolveMap).
 // + - . and the digits start the numbers, which v2 reads many ways (base
-// 2/8/16, underscores, floats, timestamps that stay strings). A scalar with
-// a byte other than a letter, a digit or one of _ . + - cannot be any of
-// them (v2 tries ParseInt, ParseUint, a float pattern, ParseFloat and a
-// timestamp that stays a string, and none accepts such a byte), so it is a
-// string. A decimal integer is read here, and anything else is put to
-// kubectl's own decoder.
+// 2/8/16, underscores, floats, timestamps that stay strings): v2Number. A
+// scalar with a byte other than a letter, a digit or one of _ . + - cannot
+// be any of them (v2 tries ParseInt, ParseUint, a float pattern, ParseFloat
+// and a timestamp that stays a string, and none accepts such a byte), so it
+// is a string.
 func (c *treeJSONConverter) v2Scalar(s string) (any, bool) {
 	if s == "" {
 		return nil, true
@@ -247,63 +225,65 @@ func (c *treeJSONConverter) v2Scalar(s string) (any, bool) {
 		if !numberChars(s) {
 			return s, true
 		}
-		if v, ok := decimalInt(s); ok {
-			return v, true
-		}
-		return c.ask(s)
+		return v2Number(s)
 	}
 	return s, true
 }
 
-// decimalInt reads 0 or an optionally negative decimal integer without a
-// leading zero, of at most 18 digits (so it fits an int64 and a JSON number
-// exactly): what v2 reads as an int, and every parser the same.
-func decimalInt(s string) (int64, bool) {
-	d := s
-	if d[0] == '-' {
-		d = d[1:]
-	}
-	if d == "" || len(d) > 18 || (d[0] == '0' && len(s) > 1) {
-		return 0, false
-	}
-	for i := 0; i < len(d); i++ {
-		if d[i] < '0' || d[i] > '9' {
-			return 0, false
-		}
-	}
-	v, err := strconv.ParseInt(s, 10, 64)
-	return v, err == nil
-}
+// yamlStyleFloat is the pattern go-yaml v2 (resolve.go, v2.4.4) requires
+// before it reads a scalar as a float.
+var yamlStyleFloat = regexp.MustCompile(`^[-+]?(\.[0-9]+|[0-9]+(\.[0-9]*)?)([eE][-+]?[0-9]+)?$`)
 
-// ask puts a plain scalar that starts like a number to kubectl's own
-// decoder, as a document of its own, and returns what it made of it: a
-// number as raw JSON, a string as a string. An answer that is neither
-// (null, a boolean, an error) or a string that is not the text itself is
-// not answered.
-func (c *treeJSONConverter) ask(s string) (any, bool) {
-	a, seen := c.oracle[s]
-	if !seen {
-		if c.asked++; c.asked > maxOracleQuestions {
-			return nil, false
-		}
-		a = askKubectl(s)
-		if c.oracle == nil {
-			c.oracle = map[string]*oracleAnswer{}
-		}
-		if len(c.oracle) < maxOracleEntries {
-			c.oracle[s] = a
-		}
-	}
-	switch {
-	case a == nil:
+// v2Number types a plain scalar that starts with + - . or a digit and has
+// only letters, digits and _ . + - as go-yaml v2's resolve does, in the same
+// order and with the same standard-library calls, so the value (and then the
+// JSON) is the same: an int64 or uint64, a float64, or the text itself where
+// v2 reads a string (a timestamp too). It reports false for the values JSON cannot hold, which
+// kubectl's decoder fails on: .nan, .inf and their signed forms.
+//
+// This is a copy of what v2's resolve does, so it is held to
+// sigs.k8s.io/yaml by TestV2Number_MatchesKubectl over a generated set of
+// scalars, by TestTreeJSON_* and the fuzz target, and
+// TestV2Number_TracksV2Version names the v2 version it was checked against.
+func v2Number(s string) (any, bool) {
+	switch s {
+	case ".nan", ".NaN", ".NAN", ".inf", ".Inf", ".INF", "+.inf", "+.Inf", "+.INF", "-.inf", "-.Inf", "-.INF":
 		return nil, false
-	case a.isStr:
-		if a.str != s {
-			return nil, false
-		}
-		return a.str, true
 	}
-	return json.RawMessage(a.json), true
+	if s[0] == '.' {
+		if f, err := strconv.ParseFloat(s, 64); err == nil {
+			return f, true
+		}
+		return s, true
+	}
+	// v2 tries a timestamp here, "2001-12-14" and the like, and hands it on as
+	// the string it is; no number is written that way, so it falls through to
+	// the string at the end all the same.
+	plain := strings.ReplaceAll(s, "_", "")
+	if i, err := strconv.ParseInt(plain, 0, 64); err == nil {
+		return i, true
+	}
+	if u, err := strconv.ParseUint(plain, 0, 64); err == nil {
+		return u, true
+	}
+	if yamlStyleFloat.MatchString(plain) {
+		if f, err := strconv.ParseFloat(plain, 64); err == nil {
+			return f, true
+		}
+	}
+	if strings.HasPrefix(plain, "0b") {
+		if i, err := strconv.ParseInt(plain[2:], 2, 64); err == nil {
+			return i, true
+		}
+		if u, err := strconv.ParseUint(plain[2:], 2, 64); err == nil {
+			return u, true
+		}
+	} else if strings.HasPrefix(plain, "-0b") {
+		if i, err := strconv.ParseInt("-"+plain[3:], 2, 64); err == nil {
+			return i, true
+		}
+	}
+	return s, true
 }
 
 // numberChars reports whether s has only letters, digits and _ . + -: the
@@ -318,25 +298,4 @@ func numberChars(s string) bool {
 		}
 	}
 	return true
-}
-
-// askKubectl returns the JSON sigs.k8s.io/yaml makes of s alone, which is
-// what the whole-document conversion makes of that scalar; nil when it
-// fails or makes anything but a number or a string.
-func askKubectl(s string) *oracleAnswer {
-	raw, err := sigsyaml.YAMLToJSON([]byte(s))
-	if err != nil || len(raw) == 0 {
-		return nil
-	}
-	switch raw[0] {
-	case '"':
-		var str string
-		if json.Unmarshal(raw, &str) != nil {
-			return nil
-		}
-		return &oracleAnswer{json: raw, isStr: true, str: str}
-	case '-', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9':
-		return &oracleAnswer{json: raw}
-	}
-	return nil
 }

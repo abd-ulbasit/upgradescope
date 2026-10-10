@@ -2,14 +2,18 @@ package collect
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"math/rand/v2"
+	"os"
+	"regexp"
 	"strings"
 	"testing"
 
 	yaml "go.yaml.in/yaml/v3"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilyaml "k8s.io/apimachinery/pkg/util/yaml"
+	sigsyaml "sigs.k8s.io/yaml"
 )
 
 // kubectlJSON is the JSON kubectl's decoder makes of one YAML document's
@@ -71,6 +75,7 @@ var treeJSONScalars = []string{
 	".inf", ".Inf", ".INF", "-.inf", "+.inf", ".nan", ".NaN", ".NAN", ".", "..", "-", "+", "1.2.3", "10.0.0.0/8", "8080/TCP",
 	"80:8080", "12:30", "1:2:3", "2001-12-14", "2001-12-14t21:59:43.10-05:00", "2001-12-14 21:59:43.10", "2001-1-1", "2001-12-14T21:59:43Z",
 	"--events-addr=http://x.svc.cluster.local./", "--log-level=info", "-v", "--", ".status.conditions[?(@.type==\"Ready\")].status", ".a.b", "-a b", "+a:b", "1:", "0x", "1e", "1e+", "0b", "-0b", "0b2", "1_", "_1", "1.2.3.4", "1,000", "1 000",
+	"+inf", "-inf", "inf", "+Inf", "-Infinity", "+nan", "0x1p-2", "0x1.8p1", "-0x1p3", "1_0.5", ".5e3", "5.e3", "1e3_0", "0b-1", "0b+1", "-0b1", "0b1_1", "0o1_7", "0_7", "0b", "0b_", "+0x1F", "-0x1f", ".5.5", "1.5.", "6.02e23", "1e400", "-1e400", "1e-400", "0.1", "-0.0", "1.0e0", "123456789.123456789", "9007199254740993", "9007199254740993.0", "1.7976931348623157e308",
 	"100m", "128Mi", "50%", "1,2", "30 seconds", "1 2", "5s", "0.1.0", "v1.2.3", "1.2.3-rc.1+build", "-1.5", "-x", "+x", ".x", "<<", "<",
 	"name", "Name", "Type", "The name of the thing", "yes please", "on-prem", "no_such", "nullable", "Nothing", "trueish", "falsey", "oFF",
 	"t", "T", "f", "F", "o", "O", "yEs", "~x", "é", "日本語", "a/b", "http://x", "x-y", "*", "&", "!", "%", "@",
@@ -260,29 +265,101 @@ func TestTreeJSON_RandomDocuments(t *testing.T) {
 	}
 }
 
-// TestTreeJSON_OracleQuestionsAreBounded: a document of many distinct
-// numeric-looking scalars is declined past the bound, not put to kubectl's
-// decoder scalar by scalar without end.
-func TestTreeJSON_OracleQuestionsAreBounded(t *testing.T) {
-	var b strings.Builder
-	for i := range 3 * maxOracleQuestions {
-		fmt.Fprintf(&b, "- 1.%d\n", i)
-	}
+// checkV2Scalar fails unless v2Scalar, when it answers for the plain scalar
+// s, makes the JSON go-yaml v2 and sigs.k8s.io/yaml make of it; it reports
+// whether it answered. s must read as one plain scalar in a block mapping.
+func checkV2Scalar(t testing.TB, s string) (answered bool) {
+	t.Helper()
 	var conv treeJSONConverter
-	root := treeRoot(b.String())
-	if _, ok := conv.json(root, []byte(b.String())); ok {
-		t.Fatal("answered a document of more distinct numeric scalars than the bound")
+	v, ok := conv.v2Scalar(s)
+	want, err := sigsyaml.YAMLToJSON([]byte("k: " + s + "\n"))
+	if !ok {
+		if err == nil {
+			t.Fatalf("declined %q, which kubectl's decoder makes %s of", s, want)
+		}
+		return false
 	}
-	if conv.asked != maxOracleQuestions+1 {
-		t.Errorf("asked %d times, want %d", conv.asked, maxOracleQuestions+1)
+	if err != nil {
+		if treeRoot("k: "+s+"\n") == nil {
+			return false // not a plain scalar there ("-" starts a sequence), for either reader
+		}
+		t.Fatalf("answered %#v for %q, which kubectl's decoder fails on: %v", v, s, err)
 	}
-	// The same scalars repeated are asked once each.
-	b.Reset()
-	for range 3 * maxOracleQuestions {
-		b.WriteString("- 1.5\n")
+	got, err := json.Marshal(map[string]any{"k": v})
+	if err != nil || !bytes.Equal(got, want) {
+		t.Fatalf("%q: got %s (%v), kubectl's decoder makes %s", s, got, err, want)
 	}
-	if _, ok := conv.json(treeRoot(b.String()), []byte(b.String())); !ok {
-		t.Error("declined a document of one repeated scalar")
+	return true
+}
+
+// TestV2Number_MatchesKubectl: every scalar of up to four bytes from the
+// alphabet of the number syntaxes, and random longer ones, and dates and
+// versions, are typed as go-yaml v2 types them (v2Number is a copy of what
+// its resolve does).
+func TestV2Number_MatchesKubectl(t *testing.T) {
+	const alphabet = "0179.-+_exboapE"
+	total, answered := 0, 0
+	check := func(s string) {
+		total++
+		if checkV2Scalar(t, s) {
+			answered++
+		}
+	}
+	var gen func(prefix string, n int)
+	gen = func(prefix string, n int) {
+		if prefix != "" {
+			check(prefix)
+		}
+		if n == 0 {
+			return
+		}
+		for i := 0; i < len(alphabet); i++ {
+			gen(prefix+alphabet[i:i+1], n-1)
+		}
+	}
+	gen("", 4)
+	for _, s := range treeJSONScalars {
+		if !strings.ContainsAny(s, "\n\"'#&*!|>%@`{}[],:? ") {
+			check(s)
+		}
+	}
+	rng := rand.New(rand.NewPCG(285, 3))
+	random := 100000
+	if testing.Short() {
+		random = 10000
+	}
+	dated := []string{"2001", "2001-", "12", "1", "-", "T", "t", ".", "14", "21", "10", "Z", "0", "+", "5", "_", "e", "x", "b"}
+	for range random {
+		var b strings.Builder
+		if rng.IntN(2) == 0 {
+			for range 5 + rng.IntN(16) {
+				b.WriteByte(alphabet[rng.IntN(len(alphabet))])
+			}
+		} else {
+			for range 1 + rng.IntN(8) {
+				b.WriteString(dated[rng.IntN(len(dated))])
+			}
+		}
+		check(b.String())
+	}
+	t.Logf("%d scalars, %d answered", total, answered)
+}
+
+// go-yaml v2's resolve is copied into v2Number, so a new version of it must
+// be read again before the copy is trusted: this fails when the version the
+// module selects (go.mod) is not the one checked.
+func TestV2Number_TracksV2Version(t *testing.T) {
+	const checked = "v2.4.4"
+	mod, err := os.ReadFile("../../go.mod")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := regexp.MustCompile(`(?m)^\s*go\.yaml\.in/yaml/v2 (\S+)`).FindSubmatch(mod)
+	if m == nil {
+		t.Fatal("go.mod does not select go.yaml.in/yaml/v2; is the module still in the build?")
+	}
+	if string(m[1]) != checked {
+		t.Fatalf("go.mod selects go.yaml.in/yaml/v2 %s, v2Number was checked against %s: read resolve.go of the new version, update v2Number if it changed, run TestV2Number_MatchesKubectl, then change this version", m[1], checked)
 	}
 }
 
