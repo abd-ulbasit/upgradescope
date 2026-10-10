@@ -65,7 +65,11 @@ const (
 // The cache holds the distinct (namespace, image) pairs and the distinct
 // labelled pods among the pods outside kube-system, never the pods, so it
 // is as big as the cluster's variety of images, at most what one pass
-// retains while it matches.
+// retains while it matches. A collection that lists every pod drops the
+// held pass before its first list (forget), so the old pass is never held
+// beside the new one: the memory during a full pass is the evidence that
+// pass reads plus the deduplicated copy record makes of it at the end,
+// and a pass that fails at any page leaves nothing held.
 //
 // Every <= 1 reuses nothing, as a nil *PodPassCache does, which is what a
 // one-shot scan wants. Not safe for concurrent use; one collection at a
@@ -122,7 +126,8 @@ func (c *PodPassCache) reuse(sig string) (images []nsImage, labelled []labelledP
 	return c.images, c.labels, max(1, int64(age/time.Second)), true
 }
 
-// forget drops the held pass: the next collection lists every pod.
+// forget drops the held pass: the next collection lists every pod. The
+// collector calls it before it lists the pods for a new pass.
 func (c *PodPassCache) forget() {
 	if c == nil {
 		return
@@ -131,9 +136,10 @@ func (c *PodPassCache) forget() {
 }
 
 // record keeps the evidence of a full pass that began at start and read
-// every pod, taken with the releases and charts of signature sig, dropping the kube-system pods' (every collection reads those)
-// and, as matchAddOns reads a repeat the same as the first, repeats of a
-// pair or a labelled pod already seen.
+// every pod, taken with the releases and charts of signature sig, dropping
+// the kube-system pods' (every collection reads those) and, as matchAddOns
+// reads a repeat the same as the first, repeats of a pair or a labelled
+// pod already seen.
 func (c *PodPassCache) record(ev addOnEvidence, start time.Time, sig string) {
 	if !c.enabled() {
 		return

@@ -151,6 +151,13 @@ func collectAddOnsFrom(ctx context.Context, kube kubernetes.Interface, addons []
 		}
 	}
 	passStart := pass.clock()
+	if listPods {
+		// The held pass is of no use from here on, whatever the list does:
+		// drop it before reading the new one, so the peak is the new pass
+		// alone and never the old and the new together, and a pass that
+		// fails part-way leaves nothing held.
+		pass.forget()
+	}
 	for listPods {
 		pods, err := kube.CoreV1().Pods(metav1.NamespaceAll).List(ctx, opts)
 		if err != nil && opts.Continue == "" && opts.FieldSelector != "" && apierrors.IsBadRequest(err) {

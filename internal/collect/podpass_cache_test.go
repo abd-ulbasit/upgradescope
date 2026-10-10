@@ -302,6 +302,65 @@ func TestPodPassFailureDropsTheEarlierPass(t *testing.T) {
 	}
 }
 
+// A collection that lists every pod drops the held pass before its first
+// list, not when the new pass is recorded: the old pass is never held beside
+// the new evidence, and a pass that fails at any page, or is cancelled,
+// leaves nothing held.
+func TestPodPassOldPassIsDroppedBeforeTheNewOneIsRead(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		failAt  string // "": the pass succeeds; "first" or "later" page
+		wantNew bool
+	}{
+		{"complete", "", true},
+		{"fails on the first page", "first", false},
+		{"fails on a later page", "later", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cs, disc := podFixture()
+			srv := servePods(cs, append(tickPods(), appPod("nginx-2", "example.com/app:v1"), appPod("nginx-3", "example.com/app:v2"))...)
+			srv.perPage = 1
+			k := loadKB(t)
+			pass, clk := newPassCache(2, time.Hour)
+			clients := Clients{Kube: cs, Discovery: disc}
+
+			Collect(context.Background(), clients, k, Options{PodPass: pass}) // pass
+			Collect(context.Background(), clients, k, Options{PodPass: pass}) // reuse
+			if !pass.Held() {
+				t.Fatal("no pass held")
+			}
+			clk.t = clk.t.Add(time.Minute)
+
+			// Each list of the other namespaces says whether a pass was held
+			// when it was made.
+			var heldDuring []bool
+			srv.failList = func(_ int, ns string, o metav1.ListOptions) error {
+				if ns != "" {
+					return nil
+				}
+				heldDuring = append(heldDuring, pass.Held())
+				if (tc.failAt == "first" && o.Continue == "") || (tc.failAt == "later" && o.Continue != "") {
+					return errors.New("etcdserver: request timed out")
+				}
+				return nil
+			}
+			Collect(context.Background(), clients, k, Options{PodPass: pass}) // pass (count reached)
+
+			if len(heldDuring) == 0 {
+				t.Fatal("the second collection did not list the pods")
+			}
+			for i, h := range heldDuring {
+				if h {
+					t.Errorf("list %d of the pass was made with the earlier pass still held", i+1)
+				}
+			}
+			if pass.Held() != tc.wantNew {
+				t.Errorf("Held() after the pass = %v, want %v", pass.Held(), tc.wantNew)
+			}
+		})
+	}
+}
+
 // Without versions' list of the kube-system pods the add-ons list every
 // pod, kube-system included, and the held pass does not hold those pods:
 // that collection lists everything and reuses nothing.
