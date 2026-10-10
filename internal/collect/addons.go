@@ -632,13 +632,18 @@ func matchAddOns(ev addOnEvidence, addons []registry.AddOn) ([]inventory.AddOnIn
 					claims = []imageClaim{c}
 				}
 			}
-			// An image that names no version (a digest, ":latest") is the
-			// version its pods' labels give the same add-on (#301), the
-			// oldest where pods sharing the image differ. A tag always
-			// decides; a component image's line is never guessed.
-			for i, c := range claims {
-				if c.version == "" && c.byTag {
-					claims[i].version = labelVersion[nsImageAddOn{img, c.id}]
+			// An image whose tag names no version (a digest, ":latest") is
+			// the version its pods' labels give the same add-on (#301), the
+			// oldest where pods sharing the image differ. That holds for
+			// untaggedClaim's result too, which carries only the first
+			// pod's label, so a newer label on the pod that sorts first
+			// cannot hide an older one. A parsed tag is never touched, and
+			// a component image's line is never guessed.
+			if versionFromTag(ref.tag) == "" {
+				for i, c := range claims {
+					if c.byTag {
+						claims[i].version = labelVersion[nsImageAddOn{img, c.id}]
+					}
 				}
 			}
 			settled[img] = claims

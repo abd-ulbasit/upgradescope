@@ -825,6 +825,40 @@ func TestMatchAddOnsImageWithoutVersionTakesLabelVersion(t *testing.T) {
 	}
 }
 
+// The oldest version across pods holds on the untaggedClaim path too: a
+// digest-only rancher/nginx-ingress-controller that its pods' labels claim
+// for rke2-ingress-nginx takes the oldest of their version labels, in any
+// pod order, so a stale or forged newer label on the pod that sorts first
+// cannot hide the older line (AO-09, #301).
+func TestMatchAddOnsUntaggedClaimTakesTheOldestLabelVersion(t *testing.T) {
+	addons, err := registry.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	const digest = "rancher/nginx-ingress-controller@sha256:5b161f051d017e55d358435f295f5e9a297e66158f136321d9b04520ec6c48a3"
+	rke2 := func(version string) map[string]string {
+		return map[string]string{"app.kubernetes.io/name": "rke2-ingress-nginx", "app.kubernetes.io/version": version}
+	}
+	for _, order := range [][]string{{"1.12.6", "1.10.1"}, {"1.10.1", "1.12.6"}} {
+		var ev addOnEvidence
+		for _, v := range order {
+			ev.addPod("kube-system", rke2(v), []string{digest})
+		}
+		want := []inventory.AddOnInstance{{ID: "rke2-ingress-nginx", Version: "1.10.1", Namespaces: []string{"kube-system"}, Source: "image"}}
+		if got, _ := matchAddOns(ev, addons); !reflect.DeepEqual(got, want) {
+			t.Errorf("one digest, version labels %v: got %+v, want the older 1.10.1", order, got)
+		}
+	}
+	// A pod that names the add-on without a version does not blank it.
+	var ev addOnEvidence
+	ev.addPod("kube-system", map[string]string{"app.kubernetes.io/name": "rke2-ingress-nginx"}, []string{digest})
+	ev.addPod("kube-system", rke2("1.10.1"), []string{digest})
+	want := []inventory.AddOnInstance{{ID: "rke2-ingress-nginx", Version: "1.10.1", Namespaces: []string{"kube-system"}, Source: "image"}}
+	if got, _ := matchAddOns(ev, addons); !reflect.DeepEqual(got, want) {
+		t.Errorf("one pod without a version label: got %+v, want 1.10.1", got)
+	}
+}
+
 // manyLabelledPods is n pods of one namespace running one digest-only
 // (or :latest) add-on image, each labelled with the add-on's name and a
 // version, as a DaemonSet of a digest-pinned add-on is (#301).
