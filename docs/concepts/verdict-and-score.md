@@ -78,7 +78,7 @@ the reason `files mode`.
 `ready` means that no blocker was found among what the engine judges, and
 that every required check ran. The engine judges the `apiVersion` and `kind`
 of each object against the API lifecycle data, and the in-tree volume
-plugins that pods and PersistentVolumes name ([Volume plugins](volume-plugins.md)).
+plugins that pods, PersistentVolumes and StorageClasses name ([Volume plugins](volume-plugins.md)).
 It does **not** assess other field-level removals inside an API that is
 still served: an object that uses the seccomp alpha annotations,
 `Service.spec.externalIPs` or `beta.kubernetes.io/os` scans as `ready` with a
@@ -107,7 +107,7 @@ target.
 | `unknown-api` | — | — | An object of a built-in API group (core, or any group the generator's scheme registers (`k8s.io/api` plus the apiextensions and apiregistration schemes), such as `imagepolicy.k8s.io`) at a version or kind the knowledge base does not know, such as the typo `apps/v1beta9`: whether the target serves it was not assessed. API groups of CRDs produce nothing. |
 | `support-lifecycle` | A cluster on EKS, GKE or AKS whose Kubernetes minor is past the provider's standard support (in extended support, or out of support). **Whatever the target.** | Standard support for the minor ends within 90 days. | — |
 | `crd-version` | Custom resources at a version their CRD does not serve (`served: false`, or no longer listed): the apiserver rejects them. **Whatever the target.** | Custom resources written through a version the CRD marks `deprecated: true`; a `status.storedVersions` entry the CRD no longer serves. | A deprecated CRD version nothing was found using. |
-| `volume-plugin` | A pod, pod template or PersistentVolume names an in-tree volume plugin removed with no migration path at or before the target (`glusterfs`, `cephfs`, `rbd`; `gitRepo`, disabled from 1.33): pods naming it do not start. | Such a plugin removed in the minor after the target; a plugin served only through CSI migration at the target (`awsElasticBlockStore`, `gcePersistentDisk`, ...), naming the CSI driver that must be installed. Never a blocker, since a cluster with the driver is fine. | A plugin deprecated only (`flexVolume`), or whose removal or CSI-only minor is later. See [in-tree volume plugins](volume-plugins.md). |
+| `volume-plugin` | A pod, pod template or PersistentVolume names an in-tree volume plugin removed with no migration path at or before the target (`glusterfs`, `cephfs`, `rbd`; `gitRepo`, disabled from 1.33), or a StorageClass names its in-tree provisioner (`kubernetes.io/rbd`): pods naming it, or mounting a claim bound to such a PersistentVolume, do not start, and the class's new claims are not provisioned. | Such a plugin removed in the minor after the target; a plugin served only through CSI migration at the target (`awsElasticBlockStore`, `gcePersistentDisk`, ...), naming the CSI driver that must be installed. Never a blocker, since a cluster with the driver is fine. | A plugin deprecated only (`flexVolume`), or whose removal or CSI-only minor is later. See [in-tree volume plugins](volume-plugins.md). |
 
 [Version skew](version-skew.md) has the skew rules; the
 [add-on registry](addon-registry.md) the EOL data, and

@@ -144,6 +144,12 @@ var goldenParams = map[string]struct{ target, now string }{
 	// Live pods by namespace, with teams: gitRepo warns at 1.32, the minor
 	// before it is disabled; glusterfs blocks; awsElasticBlockStore warns.
 	"volume-plugins-live": {"1.32", "2026-06-10T00:00:00Z"},
+	// #362: live PersistentVolumes and a StorageClass, named. At 1.31 the
+	// rbd PersistentVolume bound to a claim in data, the unbound one and
+	// the kubernetes.io/rbd StorageClass block (cluster-scoped for the two
+	// with no namespace); the awsElasticBlockStore PersistentVolume and pod
+	// warn.
+	"volume-plugins-live-pv": {"1.31", "2026-06-10T00:00:00Z"},
 }
 
 // canonical re-marshals JSON with sorted keys + fixed indent so byte
