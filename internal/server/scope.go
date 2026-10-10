@@ -425,12 +425,18 @@ func (s *Server) readScope(w http.ResponseWriter, r *http.Request) (readScope, b
 	if sc, ok := s.proxyScope(r); ok {
 		return sc, true
 	}
+	if bearerToken(r) != "" {
+		// An unknown credential: whether the API is open does not matter,
+		// and is not asked (no store query for it).
+		errJSON(w, http.StatusUnauthorized, "invalid or missing bearer token")
+		return readScope{}, false
+	}
 	open, err := s.readOpen(r.Context())
 	if err != nil {
 		internalErr(w, "listing read tokens", err)
 		return readScope{}, false
 	}
-	if open && bearerToken(r) == "" {
+	if open {
 		return fleetScope, true
 	}
 	errJSON(w, http.StatusUnauthorized, "invalid or missing bearer token")
