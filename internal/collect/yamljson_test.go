@@ -177,6 +177,13 @@ spec:
 		{"no final newline", false, "k: |\n  a"},
 		{"carriage returns", false, "k: v\r\nj: |\r\n  a\r\n"},
 		{"UTF-16 mark", false, "\xff\xfe00"},
+		// go-yaml reads NEL, LS and PS as line breaks, so a "!" after one starts
+		// a node: v3 types "! 12" as an integer, v2 keeps a string.
+		{"tag after a next-line break", false, "k:\u0085  ! 12\n"},
+		{"tag after a line separator", false, "k:\u2028  ! 12\n"},
+		{"tag after a paragraph separator", false, "k:\u2029  ! 12\n"},
+		{"hex tag after a line separator", false, "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name:\u2028    ! 0x1F\n"},
+		{"line separator in a value", false, "k: a\u2028b\n"},
 		{"a block scalar", true, "k: |\n  a\n"},
 		{"anchors", false, "a: &x {k: v}\nb: *x\n"},
 		{"anchor without alias", false, "a: &x {k: v}\n"},
@@ -373,6 +380,7 @@ func FuzzTreeJSONMatchesKubectl(f *testing.F) {
 	for _, s := range []string{
 		"apiVersion: v1\nkind: ConfigMap\ndata: {a: 1, b: [x, 2.5, true]}\n",
 		"a: &x [1]\nb: *x\n", "<<: {a: 1}\n", "? a\n: b\n", "- - - 1\n", "k: !!int '5'\n", "a: 1\n...\nb: 2\n",
+		"k:\u2028  ! 12\n", "k:\u0085  ! 12\n", "k:\u2029  ! 12\n", "k:\u2028  ! 0x1F\n",
 	} {
 		f.Add(s)
 	}

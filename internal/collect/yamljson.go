@@ -69,7 +69,7 @@ func (c *treeJSONConverter) convert(root *yaml.Node, text []byte) ([]byte, bool)
 }
 
 // readsTheSame reports whether go-yaml v3, reading text as the walk does,
-// sees what v2 sees when kubectl's decoder reads it. Three things differ in
+// sees what v2 sees when kubectl's decoder reads it. Four things differ in
 // the text itself, not in the parsers:
 //
 //   - kubectl's decoder reads text a line at a time and ends every line
@@ -79,6 +79,11 @@ func (c *treeJSONConverter) convert(root *yaml.Node, text []byte) ([]byte, bool)
 //     left to it.
 //   - A line that starts with "---" is a document separator to it, which
 //     text from the walk's own splitting never holds.
+//   - go-yaml reads U+0085 (NEL), U+2028 (LS) and U+2029 (PS) as line
+//     breaks, as well as "\n", and the "!" scan below finds a node's start
+//     by the line it is on. Text with any of the three is left to kubectl's
+//     decoder rather than have the scan count them, since a value that holds
+//     one is rare.
 //   - An explicit tag shows in the tree, but the bare "!" (a non-specific
 //     tag, which makes a plain scalar a string for v2) does not: v3 reads
 //     "! 12" as the integer. So text with a "!" where YAML puts a tag, at
@@ -86,6 +91,9 @@ func (c *treeJSONConverter) convert(root *yaml.Node, text []byte) ([]byte, bool)
 func readsTheSame(text []byte) bool {
 	if len(text) == 0 || text[len(text)-1] != '\n' || bytes.IndexByte(text, '\r') >= 0 ||
 		bytes.HasPrefix(text, []byte("---")) || bytes.Contains(text, []byte("\n---")) {
+		return false
+	}
+	if bytes.Contains(text, []byte("\u0085")) || bytes.Contains(text, []byte("\u2028")) || bytes.Contains(text, []byte("\u2029")) {
 		return false
 	}
 	if len(text) >= 2 && (text[0] == 0xFF && text[1] == 0xFE || text[0] == 0xFE && text[1] == 0xFF) {

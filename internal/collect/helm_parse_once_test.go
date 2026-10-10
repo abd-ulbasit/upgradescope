@@ -202,6 +202,26 @@ func TestParseOnce_CorpusStreamsMatchTwoParses(t *testing.T) {
 	}
 }
 
+// TestParseOnce_UnicodeLineBreaksMatchTwoParses: go-yaml reads NEL, LS and
+// PS as line breaks, so a bare "!" after one starts a node that v3 types and
+// v2 keeps a string. A converter that missed them gave other JSON, and
+// problems the second parse did not (review of #285).
+func TestParseOnce_UnicodeLineBreaksMatchTwoParses(t *testing.T) {
+	for _, br := range []string{"\u0085", "\u2028", "\u2029"} {
+		for i, text := range []string{
+			"k:" + br + "  ! 12\n",
+			"apiVersion: v1\nkind:" + br + "  ! 12\nmetadata: {name: a}\n",
+			"apiVersion:" + br + "  ! 1\nkind: X\nmetadata: {name: a}\n",
+			"apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name:" + br + "    ! 0x1F\n",
+			"apiVersion: v1\nkind: ConfigMap\nmetadata: {name: a}\ndata:\n  k: a" + br + "b\n  l: |\n    x" + br + "y\n",
+		} {
+			name := fmt.Sprintf("break %U case %d", []rune(br)[0], i)
+			requireSameStream(t, name, text)
+			requireSameStream(t, name+" in a manifest", manifestOf(helmDocs[0], text, helmDocs[1]))
+		}
+	}
+}
+
 func TestParseOnce_EveryHelmDocumentMatchesTwoParses(t *testing.T) {
 	for i, d := range helmDocs {
 		name := fmt.Sprintf("document %d", i)
@@ -261,7 +281,11 @@ func TestParseOnce_RandomManifestsMatchTwoParses(t *testing.T) {
 	pad := "apiVersion: v1\nkind: ConfigMap\nmetadata: {name: pad}\ndata:\n  blob: |\n" + strings.Repeat("    "+strings.Repeat("x", 76)+"\n", 6000) // about 0.5 MiB
 	rng := rand.New(rand.NewPCG(285, 2))
 	rounds := 300
-	if testing.Short() {
+	if testing.Short() || raceEnabled {
+		// The race detector makes the 300 rounds take minutes (186 s on a
+		// loaded Mac) against the package's 10-minute test timeout; the
+		// rounds without it hold the equivalence, and these run the same
+		// code for races.
 		rounds = 60
 	}
 	for i := range rounds {
@@ -470,8 +494,8 @@ func numberDenseStream(size int) []byte {
 // twice, and none of it is left to kubectl's decoder. CPU time is noisy on a
 // loaded machine, so the bar is generous: the saving measured is about half.
 func TestParseOnce_NumberDenseStreamIsNotSlower(t *testing.T) {
-	if testing.Short() || processCPU() == 0 {
-		t.Skip("a CPU timing test")
+	if testing.Short() || raceEnabled || processCPU() == 0 {
+		t.Skip("a CPU timing test (the race detector's overhead is not the code's)")
 	}
 	data := numberDenseStream(256 << 10)
 	if a, d := answerRate(string(data)); a == 0 || d != 0 {
@@ -589,6 +613,9 @@ func FuzzParseOnceMatchesTwoParses(f *testing.F) {
 		f.Add(d)
 	}
 	f.Add(manifestOf(helmDocs[:6]...))
+	f.Add("apiVersion: v1\nkind:\u2028  ! 12\nmetadata: {name: a}\n")
+	f.Add("apiVersion:\u2029  ! 1\nkind: X\nmetadata: {name: a}\n")
+	f.Add("apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name:\u0085    ! 0x1F\n")
 	f.Fuzz(func(t *testing.T, text string) {
 		requireSameStream(t, "fuzz", text)
 	})
