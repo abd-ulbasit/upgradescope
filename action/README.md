@@ -125,11 +125,25 @@ jobs:
           fail-on: blocker
           version: v0.2.0
       - uses: github/codeql-action/upload-sarif@v4
-        if: ${{ !cancelled() && steps.gate.outputs.sarif-file != '' }}  # also when the gate failed
+        # Also when the gate failed. Not on a fork PR: its token is read-only.
+        if: >-
+          ${{ !cancelled() && steps.gate.outputs.sarif-file != ''
+          && (github.event_name != 'pull_request'
+          || github.event.pull_request.head.repo.full_name == github.repository) }}
         with:
           sarif_file: ${{ steps.gate.outputs.sarif-file }}
           category: upgradescope
 ```
+
+On a pull request from a fork the token is read-only, so the `if:` above skips
+the upload there: the gate still runs and fails the job only for the gate, and
+the step summary and annotations are the report. A pull request that
+Dependabot opens has a read-only token as well, with the head repository
+being yours, so the guard does not skip it; add
+`&& github.actor != 'dependabot[bot]'` to the condition if the gate runs on
+those. Do not use
+`pull_request_target` to get the upload back: it would run the gate on files
+the pull request controls with a write token.
 
 Code scanning shows an alert on a pull request's diff only when the file it
 sits on is committed to the repository. This example renders into
@@ -382,7 +396,7 @@ commit worked there; now it must be a release tag, `latest` or
 
 | Output | |
 |---|---|
-| `sarif-file` | Path to the SARIF report. It is complete when the gate fails, so upload it with `if: ${{ !cancelled() && steps.gate.outputs.sarif-file != '' }}`. It is set only when the gate exits 0 or 2, and not when the scan itself failed (exit 1) or was killed, so that guard skips the upload instead of failing on an empty file. |
+| `sarif-file` | Path to the SARIF report. It is complete when the gate fails, so upload it with the `if:` in the example above (`!cancelled() && steps.gate.outputs.sarif-file != ''`, plus the fork guard). It is set only when the gate exits 0 or 2, and not when the scan itself failed (exit 1) or was killed, so that condition skips the upload instead of failing on an empty file. |
 | `report-json` | Path to the JSON report, the same as `upgradescope scan --output json`. |
 | `verdict` | `ready`, `blocked` or `unknown`. `unknown` means no blocker was found but a required check could not run. |
 | `ready` | `true` when the verdict is `ready`, otherwise `false`. |
