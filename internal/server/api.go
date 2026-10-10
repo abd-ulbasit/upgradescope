@@ -843,7 +843,7 @@ func writeUIDConflict(w http.ResponseWriter, conflict *store.ClusterUIDConflictE
 		"cluster name %q is registered to clusterId %s, but this push comes from clusterId %s. "+
 			"If this is a different cluster, give its agent a distinct --cluster-name (chart value clusterName). "+
 			"If the cluster was rebuilt, remove the old record (and its history) with "+
-			"'upgradescope clusters delete %s --server <this server>' (admin token), then push again; the delete also removes the name's "+
+			"'upgradescope clusters delete %s --server-url <this server>' (admin token), then push again; the delete also removes the name's "+
 			"per-cluster ingest tokens, so mint a new one with 'upgradescope tokens create %s' if the agent used one",
 		conflict.Name, conflict.StoredUID, conflict.PushedUID, conflict.Name, conflict.Name))
 }
