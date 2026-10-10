@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -58,8 +59,10 @@ func TestPostgresEvaluationReadsUseIndexes(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer conn.Close()
-	if _, err := conn.ExecContext(ctx, `SET enable_seqscan = off`); err != nil {
-		t.Fatal(err)
+	for _, set := range []string{`SET enable_seqscan = off`, `SET enable_bitmapscan = off`} {
+		if _, err := conn.ExecContext(ctx, set); err != nil {
+			t.Fatal(err)
+		}
 	}
 	plan := func(query string, args ...any) string {
 		t.Helper()
@@ -160,9 +163,12 @@ func TestMigration0009BackfillsPostgres(t *testing.T) {
 // SELECT of retention's evaluation DELETE ordered by (created_at, id)
 // walks idx_evaluations_created_at (migration 0010) bounded by the cutoff
 // and needs no sort of the old rows, so a run with nothing to delete reads
-// the oldest index entries and no report. Sequential scans are switched
-// off so the empty tables cannot make one cheaper than the index. The
-// statement's other subqueries may plan as they like.
+// the oldest index entries and no report. Sequential and bitmap scans are
+// switched off: on the test's near-empty tables the planner may otherwise
+// prefer a bitmap scan of the same index plus a sort (which also reads only
+// the rows the index matches), and the point here is that the index serves
+// the drain's (created_at, id) order. The statement's other subqueries may
+// plan as they like.
 func TestPostgresPruneEvaluationDrainUsesCreatedAtIndex(t *testing.T) {
 	ctx := context.Background()
 	p, err := OpenPostgres(pgTestSchema(t, "drainplan"))
@@ -175,8 +181,10 @@ func TestPostgresPruneEvaluationDrainUsesCreatedAtIndex(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer conn.Close()
-	if _, err := conn.ExecContext(ctx, `SET enable_seqscan = off`); err != nil {
-		t.Fatal(err)
+	for _, set := range []string{`SET enable_seqscan = off`, `SET enable_bitmapscan = off`} {
+		if _, err := conn.ExecContext(ctx, set); err != nil {
+			t.Fatal(err)
+		}
 	}
 	rows, err := conn.QueryContext(ctx, `EXPLAIN `+pgDialect.evaluationDrain(), tBase.UTC(), pruneBatchRows)
 	if err != nil {
@@ -198,9 +206,14 @@ func TestPostgresPruneEvaluationDrainUsesCreatedAtIndex(t *testing.T) {
 	if !strings.Contains(plan, "Index Scan using idx_evaluations_created_at") && !strings.Contains(plan, "Index Only Scan using idx_evaluations_created_at") {
 		t.Errorf("plan = %q, want an index scan on idx_evaluations_created_at", plan)
 	}
+	// No sort on the drain's order columns at all: a sort by created_at
+	// means the index's order went unused, and a sort by id means the drain
+	// is ordered by id again (#297's bug), which the index cannot serve. The
+	// other subqueries group by cluster_id and target, which this ignores.
+	sortsDrain := regexp.MustCompile(`created_at|\.id(,|$)`)
 	for _, line := range lines {
-		if strings.HasPrefix(line, "Sort Key:") && strings.Contains(line, "created_at") {
-			t.Errorf("plan = %q: sorts by created_at, want the index's order", plan)
+		if strings.HasPrefix(line, "Sort Key:") && sortsDrain.MatchString(line) {
+			t.Errorf("plan = %q: %q, want the drain read in idx_evaluations_created_at's order with no sort", plan, line)
 		}
 	}
 }
