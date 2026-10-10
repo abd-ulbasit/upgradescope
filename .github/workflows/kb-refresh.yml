@@ -9,22 +9,61 @@ name: kb-refresh
 #    tidies go.mod and rewrites internal/kb/data/apilifecycle.json;
 #  - registry: sync registry entries against the live endoflife.date API.
 # Each opens (or updates) its own PR; CI on the PR re-validates everything.
-# If any job fails, report-failure opens or comments on the
+# If anything fails, report-failure opens or comments on the
 # "kb-refresh is failing" issue, so a broken refresh is never silent.
 #
-# Each pipeline is two jobs (#244). The first runs the code: `go get` pulls
-# the newest k8s.io modules and whatever versions they require, and
-# `make gen-kb` and `go test` link and run them, with no human review of
-# that code before it executes. So that job holds only contents: read, keeps
-# no token in its checkout (persist-credentials: false), uses no Go cache a
-# later job could restore, and hands over nothing but a patch of the paths
-# its PR may change, as an artifact. The second job (*-pr) holds the write
-# permissions and runs no repository or dependency code: it checks the
-# patch touches only those paths (no renames, no symlinks), applies it with
-# git, and runs create-pull-request and the approval step. Code in the first
-# job could otherwise read the job's token from the checkout or the runner's
-# memory and move the floating v0 tag or replace release assets.
-# hack/kb-refresh-ci_test.sh pins this split.
+# This workflow runs on main (the schedule only ever does) and builds
+# nothing (#244, #273). The stages, per pipeline where it says so:
+#  0. stage points the branch bot/kb-refresh-build at main's head (it is
+#     deleted and created again, never moved, so a leftover branch at an
+#     older main cannot block it). gh only: no checkout, no repository or
+#     dependency code.
+#  1. <pipeline>-run dispatches kb-refresh-build.yml on that branch FOR ONE
+#     PIPELINE and waits for that run. The build workflow is the only place
+#     unreviewed code executes: `go get` pulls the newest k8s.io modules and
+#     whatever versions they require, and `make gen-kb`, `go test` and
+#     `make eol-sync` link and run them, with no human review of that code
+#     before it executes. The run's ref is not main, so a poisoned Actions
+#     cache entry (any job can write one with the runner's token, whatever
+#     its permissions) lands in that branch's cache scope, which main's CI
+#     and a tag's release run never restore (IR-22). Each pipeline has a run
+#     of its own, so its artifact store holds that pipeline's artifact only:
+#     unreviewed code can reach its own run's artifact store through the
+#     runner's token, and in a shared run it could upload the other
+#     pipeline's artifact name first or replace it afterwards (IR-23). The
+#     run jobs hold actions: write (the dispatch, and cancelling a hung run)
+#     and contents: read, and run gh only.
+#  2. <pipeline>-verify checks the run through the API BEFORE downloading
+#     from it (the workflow file, branch, commit, event, repository and head
+#     repository, run name, that it completed with conclusion success, that
+#     only this pipeline's build and the seal job ran, and that its
+#     artifacts are exactly this pipeline's), reads the patch's sha256 from
+#     the seal job's log (the seal job runs after the build job, runs no
+#     repository code, and its log is a place the build job cannot write),
+#     downloads the artifact BY RUN ID with a read-only token (this job holds
+#     actions: read and contents: read only), recomputes the sha256 and
+#     refuses on a mismatch, and uploads the checked patch again under
+#     kb-refresh-<pipeline>-verified in THIS run, where no unreviewed code
+#     has ever run.
+#  3. The *-pr jobs hold the write permissions and run no repository or
+#     dependency code. Each downloads its pipeline's verified patch from this
+#     run (no run id, no token), checks the patch touches only its PR's paths
+#     (no renames, no symlinks), applies it with git, and runs
+#     create-pull-request and the approval step.
+#  4. cleanup deletes the staging branch; report-failure opens or comments on
+#     the "kb-refresh is failing" issue when anything above failed.
+# Code in the unreviewed run could otherwise read a write token from its
+# checkout or the runner's memory and move the floating v0 tag or replace
+# release assets, or write main's cache. hack/kb-refresh-ci_test.sh and
+# hack/kb-refresh-scope_test.sh pin this.
+#
+# Re-running. Each -run job fixes the name it gave its build run
+# (github.run_id and run_attempt at that time) and hands it on as an output,
+# so "Re-run failed jobs" on a failed <p>-verify checks the run that was
+# dispatched, not a run named for the later attempt number. A failed <p>-run
+# job cannot be re-run alone: cleanup has deleted the staging branch and
+# stage, which succeeded, is not re-run; and the build run's artifacts are
+# kept one day. In both cases use "Re-run all jobs".
 #
 # How the bot PRs get CI without a PAT or App secret (#11).
 # create-pull-request pushes the bot branch and opens the PR with this run's
@@ -64,57 +103,232 @@ on:
 permissions:
   contents: read
 
+# One refresh at a time: stage points one staging branch at one commit.
+concurrency:
+  group: kb-refresh
+  cancel-in-progress: false
+
 jobs:
-  api-lifecycle:
+  # Stage 0: point the staging branch at main's head. gh only; no checkout
+  # and no repository or dependency code runs here.
+  stage:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     permissions:
-      contents: read
+      contents: write # create bot/kb-refresh-build at main's head
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      SHA: ${{ github.sha }}
+      BUILD_BRANCH: bot/kb-refresh-build
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Point the staging branch at main's head
+        run: |
+          set -euo pipefail
+          ref="heads/$BUILD_BRANCH"
+          # Deleted and created again, not moved: a leftover branch (cleanup
+          # is fail-soft) at an older main could otherwise be refused when
+          # moving it onto a commit that changed .github/workflows, which a
+          # GITHUB_TOKEN may not do without the workflows permission.
+          # Only a 404 means the branch is absent; any other error (a 5xx, a
+          # rate limit) stops here instead of being read as "absent" and
+          # failing later on the create with "Reference already exists".
+          if err=$(gh api "repos/$GH_REPO/git/ref/$ref" 2>&1 >/dev/null); then
+            gh api -X DELETE "repos/$GH_REPO/git/refs/$ref" >/dev/null
+          elif grep -q 'HTTP 404' <<<"$err"; then
+            echo "$BUILD_BRANCH does not exist yet"
+          else
+            echo "::error::could not look up $BUILD_BRANCH: $err"
+            exit 1
+          fi
+          gh api -X POST "repos/$GH_REPO/git/refs" -f ref="refs/$ref" -f sha="$SHA" >/dev/null
+          echo "$BUILD_BRANCH is at $SHA"
+
+  # Stage 1, api-lifecycle: dispatch the unreviewed build for this pipeline on the
+  # staging branch and wait for its run. gh only; no checkout and no
+  # repository or dependency code runs here.
+  api-lifecycle-run:
+    needs: stage
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    permissions:
+      actions: write # dispatch kb-refresh-build.yml; cancel the run if it hangs
+      contents: read
+    outputs:
+      request: ${{ steps.run.outputs.request }} # the name the verify job looks for, fixed here so a re-run of that job checks this dispatch
+      run-id: ${{ steps.run.outputs.run-id }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      SHA: ${{ github.sha }}
+      PIPELINE: api-lifecycle
+      REQUEST: ${{ github.run_id }}-${{ github.run_attempt }}
+      BUILD_BRANCH: bot/kb-refresh-build
+    steps:
+      - name: Run the unreviewed api-lifecycle build on the staging branch
+        id: run
+        run: |
+          set -euo pipefail
+          # Computed here only: the verify job reads it from this job's outputs,
+          # so re-running the verify job alone (a later attempt number) still
+          # looks for the run that was dispatched.
+          echo "request=$REQUEST" >>"$GITHUB_OUTPUT"
+          # A workflow_dispatch run takes its workflow from the ref it is
+          # dispatched on, and its cache and artifacts belong to that ref and
+          # run, not to main. This pipeline gets a run of its own, so its
+          # artifact store is not shared with the other pipeline's.
+          gh workflow run kb-refresh-build.yml --ref "$BUILD_BRANCH" -f pipeline="$PIPELINE" -f request="$REQUEST"
+          # The dispatch returns no run id: find the run by the name this
+          # run gave it (run-name) and the commit it must be at.
+          id=''
+          for attempt in $(seq 24); do
+            [ "$attempt" = 1 ] || sleep 5
+            id=$(gh run list --workflow kb-refresh-build.yml --branch "$BUILD_BRANCH" --event workflow_dispatch --limit 50 \
+              --json databaseId,displayTitle,headSha \
+              --jq 'first(.[] | select(.displayTitle == "kb-refresh-build " + env.PIPELINE + " " + env.REQUEST and .headSha == env.SHA)) | .databaseId') || id=''
+            [ -z "$id" ] || break
+          done
+          [ -n "$id" ] || { echo "::error::the dispatched kb-refresh-build run for $PIPELINE never appeared on $BUILD_BRANCH"; exit 1; }
+          echo "run-id=$id" >>"$GITHUB_OUTPUT"
+          echo "kb-refresh-build run for $PIPELINE: $GITHUB_SERVER_URL/$GH_REPO/actions/runs/$id"
+          status='' conclusion=''
+          for attempt in $(seq 240); do
+            [ "$attempt" = 1 ] || sleep 15
+            line=$(gh api "repos/$GH_REPO/actions/runs/$id" --jq '[.status, (.conclusion // "none")] | join(" ")') || { echo "reading run $id failed (attempt $attempt)"; continue; }
+            status=${line%% *} conclusion=${line#* }
+            [ "$status" != completed ] || break
+          done
+          [ "$status" = completed ] || { echo "::error::kb-refresh-build run $id ($PIPELINE) did not finish in an hour"; exit 1; }
+          [ "$conclusion" = success ] || { echo "::error::kb-refresh-build run $id ($PIPELINE) concluded $conclusion"; exit 1; }
+          echo "run $id ($PIPELINE) succeeded"
+
+      # A run still going (a timeout above) is cancelled, not left holding a
+      # runner. Fail-soft.
+      - name: Cancel an unfinished run
+        if: always()
+        continue-on-error: true
+        env:
+          ID: ${{ steps.run.outputs.run-id }}
+        run: |
+          id=$ID
+          if [ -n "$id" ] && [ "$(gh api "repos/$GH_REPO/actions/runs/$id" --jq .status || true)" != completed ]; then
+            gh run cancel "$id" || true
+          fi
+
+  # Stage 2, api-lifecycle: check the run, then take its patch. This job holds a
+  # read-only token (actions: read) and is the only one that downloads from
+  # the unreviewed run; it runs no repository or dependency code. It hands
+  # the checked patch to the api-lifecycle-pr job by uploading it again in this
+  # run, which no unreviewed code has ever run in.
+  api-lifecycle-verify:
+    needs: api-lifecycle-run
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: read # the run, its jobs, artifacts and logs; the cross-run download
+      contents: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      SHA: ${{ github.sha }}
+      PIPELINE: api-lifecycle
+      REQUEST: ${{ needs.api-lifecycle-run.outputs.request }}
+      BUILD_BRANCH: bot/kb-refresh-build
+      RUN_ID: ${{ needs.api-lifecycle-run.outputs.run-id }}
+    steps:
+      # Refuse any run that is not the one this workflow dispatched, BEFORE
+      # downloading from it.
+      - name: Check the run and read the patch's digest
+        id: check
+        run: |
+          set -euo pipefail
+          api() { gh api "repos/$GH_REPO/$1"; }
+          [ -n "$REQUEST" ] || { echo "::error::refusing run $RUN_ID: the run job handed on no request name"; exit 1; }
+          run=$(api "actions/runs/$RUN_ID")
+          problems=$(jq -r --arg id "$RUN_ID" --arg repo "$GH_REPO" --arg branch "$BUILD_BRANCH" --arg sha "$SHA" \
+            --arg title "kb-refresh-build $PIPELINE $REQUEST" '
+            [ (if ((.id | tostring) != $id) then "the run id is \(.id)" else empty end),
+              (if ((.path // "") | sub("@.*$"; "")) != ".github/workflows/kb-refresh-build.yml" then "the workflow file is \(.path)" else empty end),
+              (if .head_branch != $branch then "the branch is \(.head_branch)" else empty end),
+              (if .head_sha != $sha then "the commit is \(.head_sha)" else empty end),
+              (if .event != "workflow_dispatch" then "the event is \(.event)" else empty end),
+              (if .status != "completed" then "the status is \(.status)" else empty end),
+              (if .conclusion != "success" then "the conclusion is \(.conclusion)" else empty end),
+              (if .repository.full_name != $repo then "the repository is \(.repository.full_name)" else empty end),
+              (if .head_repository.full_name != $repo then "the head repository is \(.head_repository.full_name), not this one" else empty end),
+              (if .display_title != $title then "the run name is \(.display_title)" else empty end)
+            ] | .[]' <<<"$run")
+          if [ -n "$problems" ]; then
+            while IFS= read -r problem; do echo "::error::refusing run $RUN_ID: $problem"; done <<<"$problems"
+            exit 1
+          fi
+          # Its jobs: this pipeline's build and the seal job succeeded, and
+          # no job of the other pipeline ran.
+          jobs=$(api "actions/runs/$RUN_ID/jobs?per_page=100")
+          ok=$(jq -r --arg p "$PIPELINE" '
+            [ .jobs[] | select(.name == $p or .name == "seal") | select(.conclusion == "success") | .name ] | sort | join(" ")' <<<"$jobs")
+          want=$(printf '%s\n' "$PIPELINE" seal | sort | tr '\n' ' ' | sed 's/ $//')
+          [ "$ok" = "$want" ] || { echo "::error::refusing run $RUN_ID: its jobs that succeeded are '$ok', want '$want'"; exit 1; }
+          other=$(jq -r --arg p "$PIPELINE" '[ .jobs[] | select(.name != $p and .name != "seal" and .conclusion != "skipped") | .name ] | join(" ")' <<<"$jobs")
+          [ -z "$other" ] || { echo "::error::refusing run $RUN_ID: jobs ran that are not this pipeline's: $other"; exit 1; }
+          # Its artifacts: exactly this pipeline's, not expired.
+          arts=$(api "actions/runs/$RUN_ID/artifacts?per_page=100")
+          found=$(jq -r '[ .artifacts[] | "\(.name)\(if .expired then " (expired)" else "" end)" ] | join(" ")' <<<"$arts")
+          [ "$found" = "kb-refresh-$PIPELINE" ] || {
+            echo "::error::refusing run $RUN_ID: its artifacts are '${found:-none}', want exactly kb-refresh-$PIPELINE (an expired one means the run is too old: re-run the whole kb-refresh workflow, not only this job)"
+            exit 1
+          }
+          # The digest the seal job printed (it ran after the build job and
+          # runs no repository code): one line, for this pipeline.
+          seal=$(jq -r '[ .jobs[] | select(.name == "seal") | .id ] | first // empty' <<<"$jobs")
+          [ -n "$seal" ] || { echo "::error::refusing run $RUN_ID: no seal job"; exit 1; }
+          # A log that is not ready yet is fetched again; a fetch that keeps
+          # failing is reported as that, not as a missing digest.
+          logs=''
+          for attempt in 1 2 3; do
+            [ "$attempt" = 1 ] || sleep 10
+            logs=$(api "actions/jobs/$seal/logs") && break || logs=''
+          done
+          [ -n "$logs" ] || { echo "::error::refusing run $RUN_ID: could not fetch the seal job's log (job $seal)"; exit 1; }
+          lines=$(tr -d '\r' <<<"$logs" | grep -E "^[0-9T:.Z-]+ kb-refresh-patch-sha256 $PIPELINE [0-9a-f]{64}$" || true)
+          [ "$(wc -l <<<"$lines" | tr -d ' ')" = 1 ] && [ -n "$lines" ] || { echo "::error::refusing run $RUN_ID: the seal job's log does not hold exactly one digest line for $PIPELINE"; exit 1; }
+          echo "sha256=${lines##* }" >>"$GITHUB_OUTPUT"
+          echo "run $RUN_ID is the $PIPELINE build of $SHA on $BUILD_BRANCH; digest ${lines##* }"
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          persist-credentials: false
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version: '1.26.x'
-          # No Go cache: this job builds modules nobody reviewed, and a cache
-          # it saved could be restored by a later job that holds a token.
-          cache: false
+          # The checked run's artifact, by its run id: read-only token.
+          run-id: ${{ needs.api-lifecycle-run.outputs.run-id }}
+          github-token: ${{ github.token }}
+          name: kb-refresh-api-lifecycle
+          path: ${{ runner.temp }}/kb-refresh-api-lifecycle
 
-      - name: Bump gen-kb to the latest k8s.io/api release
-        working-directory: tools/gen-kb
+      # The downloaded patch is the one the seal job hashed.
+      - name: Check the patch against the digest
+        env:
+          DIGEST: ${{ steps.check.outputs.sha256 }}
+          DIR: ${{ runner.temp }}/kb-refresh-api-lifecycle
         run: |
-          V="$(go list -m -f '{{.Version}}' k8s.io/api@latest)"
-          echo "latest k8s.io/api: $V"
-          # The extra API modules are released in lockstep with k8s.io/api.
-          go get "k8s.io/api@$V" "k8s.io/apimachinery@$V" \
-            "k8s.io/apiextensions-apiserver@$V" "k8s.io/kube-aggregator@$V"
+          set -euo pipefail
+          [ "$(find "$DIR" -type f | wc -l | tr -d ' ')" = 1 ] || { echo "::error::the artifact is not exactly one file"; exit 1; }
+          patch="$DIR/kb-refresh-$PIPELINE.patch"
+          [ -f "$patch" ] || { echo "::error::no kb-refresh-$PIPELINE.patch in the artifact"; exit 1; }
+          got=$(sha256sum "$patch" | cut -d' ' -f1)
+          [ "$got" = "$DIGEST" ] || { echo "::error::the patch's sha256 is $got, not the $DIGEST the build run sealed; refusing it"; exit 1; }
+          echo "patch sha256 $got matches the sealed digest"
 
-      - name: Regenerate import list, go.mod and dataset
-        run: make gen-kb
-
-      # The files the dataset feeds, in the same commit (hack/kb-derived.sh).
-      - name: Regenerate what the data feeds
-        run: make kb-derived
-
-      - name: Validate the regenerated KB
-        run: |
-          go test ./internal/kb/ ./internal/engine/
-          cd tools/gen-kb && go test ./...
-
-      - name: Package the regenerated files
-        run: |
-          git add -A -- tools/gen-kb internal/kb/data deploy/chart/files/kb-rbac-rules.yaml docs/concepts/support-lifecycle.md
-          git diff --cached --binary -- tools/gen-kb internal/kb/data deploy/chart/files/kb-rbac-rules.yaml docs/concepts/support-lifecycle.md >"$RUNNER_TEMP/kb-refresh-api-lifecycle.patch"
-          git diff --cached --stat -- tools/gen-kb internal/kb/data deploy/chart/files/kb-rbac-rules.yaml docs/concepts/support-lifecycle.md
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: kb-refresh-api-lifecycle
-          path: ${{ runner.temp }}/kb-refresh-api-lifecycle.patch
+          name: kb-refresh-api-lifecycle-verified
+          path: ${{ runner.temp }}/kb-refresh-api-lifecycle/kb-refresh-api-lifecycle.patch
           if-no-files-found: error
           retention-days: 1
 
   api-lifecycle-pr:
-    needs: api-lifecycle
+    needs: api-lifecycle-verify
+    # Only the verified patch, and only for this pipeline (the other one
+    # failing does not hold this one back).
+    if: needs.api-lifecycle-verify.result == 'success'
     runs-on: ubuntu-latest
     permissions:
       contents: write # push the bot branch
@@ -124,16 +338,20 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false # create-pull-request authenticates with its own token input
+      # The patch the verify job checked and re-uploaded in THIS run. This
+      # job holds the writes, so it names no other run and no token here:
+      # the cross-run download happened in the verify job, with a read-only
+      # one.
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: kb-refresh-api-lifecycle
-          path: ${{ runner.temp }}/kb-refresh-api-lifecycle
+          name: kb-refresh-api-lifecycle-verified
+          path: ${{ runner.temp }}/kb-refresh-api-lifecycle-verified
       # The patch was made by a job that ran unreviewed code: only the
       # paths this PR may change, no renames or copies (their source could
       # be anywhere), no symlinks. git applies it; nothing else runs.
       - name: Apply the regenerated files
         env:
-          PATCH: ${{ runner.temp }}/kb-refresh-api-lifecycle/kb-refresh-api-lifecycle.patch
+          PATCH: ${{ runner.temp }}/kb-refresh-api-lifecycle-verified/kb-refresh-api-lifecycle.patch
         run: |
           [ -f "$PATCH" ] || { echo "::error::no patch in the kb-refresh-api-lifecycle artifact"; exit 1; }
           if [ ! -s "$PATCH" ]; then
@@ -241,40 +459,192 @@ jobs:
             manual "No pull_request run for $BRANCH at $HEAD_SHA could be listed within five minutes." "gh api -X POST repos/$GH_REPO/actions/runs/<id>/approve for each"
           fi
 
-  registry:
+
+  # Stage 1, registry: dispatch the unreviewed build for this pipeline on the
+  # staging branch and wait for its run. gh only; no checkout and no
+  # repository or dependency code runs here.
+  registry-run:
+    needs: stage
     runs-on: ubuntu-latest
+    timeout-minutes: 75
     permissions:
+      actions: write # dispatch kb-refresh-build.yml; cancel the run if it hangs
       contents: read
+    outputs:
+      request: ${{ steps.run.outputs.request }} # the name the verify job looks for, fixed here so a re-run of that job checks this dispatch
+      run-id: ${{ steps.run.outputs.run-id }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      SHA: ${{ github.sha }}
+      PIPELINE: registry
+      REQUEST: ${{ github.run_id }}-${{ github.run_attempt }}
+      BUILD_BRANCH: bot/kb-refresh-build
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version: '1.26.x'
-          cache: false # tools/eol-sync has no dependencies; nothing to cache
-
-      - name: Sync registry with endoflife.date
-        run: make eol-sync
-
-      # The doc examples the registry feeds, in the same patch (hack/kb-derived.sh).
-      - name: Regenerate what the data feeds
-        run: make kb-derived
-
-      - name: Package the regenerated files
+      - name: Run the unreviewed registry build on the staging branch
+        id: run
         run: |
-          git add -A -- registry/data docs/concepts/support-lifecycle.md
-          git diff --cached --binary -- registry/data docs/concepts/support-lifecycle.md >"$RUNNER_TEMP/kb-refresh-registry.patch"
-          git diff --cached --stat -- registry/data docs/concepts/support-lifecycle.md
+          set -euo pipefail
+          # Computed here only: the verify job reads it from this job's outputs,
+          # so re-running the verify job alone (a later attempt number) still
+          # looks for the run that was dispatched.
+          echo "request=$REQUEST" >>"$GITHUB_OUTPUT"
+          # A workflow_dispatch run takes its workflow from the ref it is
+          # dispatched on, and its cache and artifacts belong to that ref and
+          # run, not to main. This pipeline gets a run of its own, so its
+          # artifact store is not shared with the other pipeline's.
+          gh workflow run kb-refresh-build.yml --ref "$BUILD_BRANCH" -f pipeline="$PIPELINE" -f request="$REQUEST"
+          # The dispatch returns no run id: find the run by the name this
+          # run gave it (run-name) and the commit it must be at.
+          id=''
+          for attempt in $(seq 24); do
+            [ "$attempt" = 1 ] || sleep 5
+            id=$(gh run list --workflow kb-refresh-build.yml --branch "$BUILD_BRANCH" --event workflow_dispatch --limit 50 \
+              --json databaseId,displayTitle,headSha \
+              --jq 'first(.[] | select(.displayTitle == "kb-refresh-build " + env.PIPELINE + " " + env.REQUEST and .headSha == env.SHA)) | .databaseId') || id=''
+            [ -z "$id" ] || break
+          done
+          [ -n "$id" ] || { echo "::error::the dispatched kb-refresh-build run for $PIPELINE never appeared on $BUILD_BRANCH"; exit 1; }
+          echo "run-id=$id" >>"$GITHUB_OUTPUT"
+          echo "kb-refresh-build run for $PIPELINE: $GITHUB_SERVER_URL/$GH_REPO/actions/runs/$id"
+          status='' conclusion=''
+          for attempt in $(seq 240); do
+            [ "$attempt" = 1 ] || sleep 15
+            line=$(gh api "repos/$GH_REPO/actions/runs/$id" --jq '[.status, (.conclusion // "none")] | join(" ")') || { echo "reading run $id failed (attempt $attempt)"; continue; }
+            status=${line%% *} conclusion=${line#* }
+            [ "$status" != completed ] || break
+          done
+          [ "$status" = completed ] || { echo "::error::kb-refresh-build run $id ($PIPELINE) did not finish in an hour"; exit 1; }
+          [ "$conclusion" = success ] || { echo "::error::kb-refresh-build run $id ($PIPELINE) concluded $conclusion"; exit 1; }
+          echo "run $id ($PIPELINE) succeeded"
+
+      # A run still going (a timeout above) is cancelled, not left holding a
+      # runner. Fail-soft.
+      - name: Cancel an unfinished run
+        if: always()
+        continue-on-error: true
+        env:
+          ID: ${{ steps.run.outputs.run-id }}
+        run: |
+          id=$ID
+          if [ -n "$id" ] && [ "$(gh api "repos/$GH_REPO/actions/runs/$id" --jq .status || true)" != completed ]; then
+            gh run cancel "$id" || true
+          fi
+
+  # Stage 2, registry: check the run, then take its patch. This job holds a
+  # read-only token (actions: read) and is the only one that downloads from
+  # the unreviewed run; it runs no repository or dependency code. It hands
+  # the checked patch to the registry-pr job by uploading it again in this
+  # run, which no unreviewed code has ever run in.
+  registry-verify:
+    needs: registry-run
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: read # the run, its jobs, artifacts and logs; the cross-run download
+      contents: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      SHA: ${{ github.sha }}
+      PIPELINE: registry
+      REQUEST: ${{ needs.registry-run.outputs.request }}
+      BUILD_BRANCH: bot/kb-refresh-build
+      RUN_ID: ${{ needs.registry-run.outputs.run-id }}
+    steps:
+      # Refuse any run that is not the one this workflow dispatched, BEFORE
+      # downloading from it.
+      - name: Check the run and read the patch's digest
+        id: check
+        run: |
+          set -euo pipefail
+          api() { gh api "repos/$GH_REPO/$1"; }
+          [ -n "$REQUEST" ] || { echo "::error::refusing run $RUN_ID: the run job handed on no request name"; exit 1; }
+          run=$(api "actions/runs/$RUN_ID")
+          problems=$(jq -r --arg id "$RUN_ID" --arg repo "$GH_REPO" --arg branch "$BUILD_BRANCH" --arg sha "$SHA" \
+            --arg title "kb-refresh-build $PIPELINE $REQUEST" '
+            [ (if ((.id | tostring) != $id) then "the run id is \(.id)" else empty end),
+              (if ((.path // "") | sub("@.*$"; "")) != ".github/workflows/kb-refresh-build.yml" then "the workflow file is \(.path)" else empty end),
+              (if .head_branch != $branch then "the branch is \(.head_branch)" else empty end),
+              (if .head_sha != $sha then "the commit is \(.head_sha)" else empty end),
+              (if .event != "workflow_dispatch" then "the event is \(.event)" else empty end),
+              (if .status != "completed" then "the status is \(.status)" else empty end),
+              (if .conclusion != "success" then "the conclusion is \(.conclusion)" else empty end),
+              (if .repository.full_name != $repo then "the repository is \(.repository.full_name)" else empty end),
+              (if .head_repository.full_name != $repo then "the head repository is \(.head_repository.full_name), not this one" else empty end),
+              (if .display_title != $title then "the run name is \(.display_title)" else empty end)
+            ] | .[]' <<<"$run")
+          if [ -n "$problems" ]; then
+            while IFS= read -r problem; do echo "::error::refusing run $RUN_ID: $problem"; done <<<"$problems"
+            exit 1
+          fi
+          # Its jobs: this pipeline's build and the seal job succeeded, and
+          # no job of the other pipeline ran.
+          jobs=$(api "actions/runs/$RUN_ID/jobs?per_page=100")
+          ok=$(jq -r --arg p "$PIPELINE" '
+            [ .jobs[] | select(.name == $p or .name == "seal") | select(.conclusion == "success") | .name ] | sort | join(" ")' <<<"$jobs")
+          want=$(printf '%s\n' "$PIPELINE" seal | sort | tr '\n' ' ' | sed 's/ $//')
+          [ "$ok" = "$want" ] || { echo "::error::refusing run $RUN_ID: its jobs that succeeded are '$ok', want '$want'"; exit 1; }
+          other=$(jq -r --arg p "$PIPELINE" '[ .jobs[] | select(.name != $p and .name != "seal" and .conclusion != "skipped") | .name ] | join(" ")' <<<"$jobs")
+          [ -z "$other" ] || { echo "::error::refusing run $RUN_ID: jobs ran that are not this pipeline's: $other"; exit 1; }
+          # Its artifacts: exactly this pipeline's, not expired.
+          arts=$(api "actions/runs/$RUN_ID/artifacts?per_page=100")
+          found=$(jq -r '[ .artifacts[] | "\(.name)\(if .expired then " (expired)" else "" end)" ] | join(" ")' <<<"$arts")
+          [ "$found" = "kb-refresh-$PIPELINE" ] || {
+            echo "::error::refusing run $RUN_ID: its artifacts are '${found:-none}', want exactly kb-refresh-$PIPELINE (an expired one means the run is too old: re-run the whole kb-refresh workflow, not only this job)"
+            exit 1
+          }
+          # The digest the seal job printed (it ran after the build job and
+          # runs no repository code): one line, for this pipeline.
+          seal=$(jq -r '[ .jobs[] | select(.name == "seal") | .id ] | first // empty' <<<"$jobs")
+          [ -n "$seal" ] || { echo "::error::refusing run $RUN_ID: no seal job"; exit 1; }
+          # A log that is not ready yet is fetched again; a fetch that keeps
+          # failing is reported as that, not as a missing digest.
+          logs=''
+          for attempt in 1 2 3; do
+            [ "$attempt" = 1 ] || sleep 10
+            logs=$(api "actions/jobs/$seal/logs") && break || logs=''
+          done
+          [ -n "$logs" ] || { echo "::error::refusing run $RUN_ID: could not fetch the seal job's log (job $seal)"; exit 1; }
+          lines=$(tr -d '\r' <<<"$logs" | grep -E "^[0-9T:.Z-]+ kb-refresh-patch-sha256 $PIPELINE [0-9a-f]{64}$" || true)
+          [ "$(wc -l <<<"$lines" | tr -d ' ')" = 1 ] && [ -n "$lines" ] || { echo "::error::refusing run $RUN_ID: the seal job's log does not hold exactly one digest line for $PIPELINE"; exit 1; }
+          echo "sha256=${lines##* }" >>"$GITHUB_OUTPUT"
+          echo "run $RUN_ID is the $PIPELINE build of $SHA on $BUILD_BRANCH; digest ${lines##* }"
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          # The checked run's artifact, by its run id: read-only token.
+          run-id: ${{ needs.registry-run.outputs.run-id }}
+          github-token: ${{ github.token }}
+          name: kb-refresh-registry
+          path: ${{ runner.temp }}/kb-refresh-registry
+
+      # The downloaded patch is the one the seal job hashed.
+      - name: Check the patch against the digest
+        env:
+          DIGEST: ${{ steps.check.outputs.sha256 }}
+          DIR: ${{ runner.temp }}/kb-refresh-registry
+        run: |
+          set -euo pipefail
+          [ "$(find "$DIR" -type f | wc -l | tr -d ' ')" = 1 ] || { echo "::error::the artifact is not exactly one file"; exit 1; }
+          patch="$DIR/kb-refresh-$PIPELINE.patch"
+          [ -f "$patch" ] || { echo "::error::no kb-refresh-$PIPELINE.patch in the artifact"; exit 1; }
+          got=$(sha256sum "$patch" | cut -d' ' -f1)
+          [ "$got" = "$DIGEST" ] || { echo "::error::the patch's sha256 is $got, not the $DIGEST the build run sealed; refusing it"; exit 1; }
+          echo "patch sha256 $got matches the sealed digest"
+
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: kb-refresh-registry
-          path: ${{ runner.temp }}/kb-refresh-registry.patch
+          name: kb-refresh-registry-verified
+          path: ${{ runner.temp }}/kb-refresh-registry/kb-refresh-registry.patch
           if-no-files-found: error
           retention-days: 1
 
   registry-pr:
-    needs: registry
+    needs: registry-verify
+    # Only the verified patch, and only for this pipeline (the other one
+    # failing does not hold this one back).
+    if: needs.registry-verify.result == 'success'
     runs-on: ubuntu-latest
     permissions:
       contents: write # push the bot branch
@@ -284,16 +654,20 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false # create-pull-request authenticates with its own token input
+      # The patch the verify job checked and re-uploaded in THIS run. This
+      # job holds the writes, so it names no other run and no token here:
+      # the cross-run download happened in the verify job, with a read-only
+      # one.
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: kb-refresh-registry
-          path: ${{ runner.temp }}/kb-refresh-registry
+          name: kb-refresh-registry-verified
+          path: ${{ runner.temp }}/kb-refresh-registry-verified
       # The patch was made by a job that ran unreviewed code: only the
       # paths this PR may change, no renames or copies (their source could
       # be anywhere), no symlinks. git applies it; nothing else runs.
       - name: Apply the regenerated files
         env:
-          PATCH: ${{ runner.temp }}/kb-refresh-registry/kb-refresh-registry.patch
+          PATCH: ${{ runner.temp }}/kb-refresh-registry-verified/kb-refresh-registry.patch
         run: |
           [ -f "$PATCH" ] || { echo "::error::no patch in the kb-refresh-registry artifact"; exit 1; }
           if [ ! -s "$PATCH" ]; then
@@ -396,9 +770,33 @@ jobs:
             manual "No pull_request run for $BRANCH at $HEAD_SHA could be listed within five minutes." "gh api -X POST repos/$GH_REPO/actions/runs/<id>/approve for each"
           fi
 
+
+  # The staging branch has done its job once both runs are over. Fail-soft.
+  cleanup:
+    needs: [stage, api-lifecycle-run, registry-run]
+    if: always() && needs.stage.result != 'skipped'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write # delete bot/kb-refresh-build
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      BUILD_BRANCH: bot/kb-refresh-build
+    steps:
+      - name: Remove the staging branch
+        continue-on-error: true
+        run: gh api -X DELETE "repos/$GH_REPO/git/refs/heads/$BUILD_BRANCH" || echo "::warning::could not delete $BUILD_BRANCH"
+
   report-failure:
-    needs: [api-lifecycle, api-lifecycle-pr, registry, registry-pr]
-    if: failure()
+    needs: [stage, api-lifecycle-run, registry-run, api-lifecycle-verify, registry-verify, api-lifecycle-pr, registry-pr, cleanup]
+    # A pipeline whose build run failed stops at its -run job (a failure to
+    # GitHub); its verify and PR jobs are then skipped, which is not.
+    if: >-
+      !cancelled() && (needs.stage.result == 'failure' ||
+      needs.api-lifecycle-run.result == 'failure' || needs.registry-run.result == 'failure' ||
+      needs.api-lifecycle-verify.result == 'failure' || needs.registry-verify.result == 'failure' ||
+      needs.api-lifecycle-pr.result == 'failure' || needs.registry-pr.result == 'failure')
     runs-on: ubuntu-latest
     permissions:
       issues: write
@@ -406,14 +804,16 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
       RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-      API_RESULT: ${{ needs.api-lifecycle.result }} / PR ${{ needs.api-lifecycle-pr.result }}
-      REGISTRY_RESULT: ${{ needs.registry.result }} / PR ${{ needs.registry-pr.result }}
+      BUILD_URLS: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ needs.api-lifecycle-run.outputs.run-id }} ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ needs.registry-run.outputs.run-id }}
+      STAGE_RESULT: ${{ needs.stage.result }}
+      API_RESULT: build ${{ needs.api-lifecycle-run.result }}, verify ${{ needs.api-lifecycle-verify.result }}, PR ${{ needs.api-lifecycle-pr.result }}
+      REGISTRY_RESULT: build ${{ needs.registry-run.result }}, verify ${{ needs.registry-verify.result }}, PR ${{ needs.registry-pr.result }}
     steps:
       - name: Open or update the tracking issue
         run: |
           title='kb-refresh is failing'
-          body="$(printf 'The weekly kb-refresh failed: %s\n\n- api-lifecycle: %s\n- registry: %s\n\nThe embedded KB stays stale until this is fixed.' \
-            "$RUN_URL" "$API_RESULT" "$REGISTRY_RESULT")"
+          body="$(printf 'The weekly kb-refresh failed: %s\n\nStaging branch: %s\nThe unreviewed build runs (api-lifecycle, registry): %s\n\n- api-lifecycle: %s\n- registry: %s\n\nThe embedded KB stays stale until this is fixed.' \
+            "$RUN_URL" "$STAGE_RESULT" "$BUILD_URLS" "$API_RESULT" "$REGISTRY_RESULT")"
           gh label create kb-refresh --color 0e8a16 \
             --description 'Automated knowledge-base refresh' --force
           number="$(gh issue list --state open --label kb-refresh --search "\"$title\" in:title" \

@@ -169,7 +169,7 @@ In scope:
   container image, the GitHub Action in `action/` (how it downloads and runs
   the binary), the CI workflows (for example, pull request workflows that can
   be abused), and the knowledge-base refresh pipeline (`tools/gen-kb`,
-  `tools/eol-sync`, `kb-refresh.yml`).
+  `tools/eol-sync`, `kb-refresh.yml` and `kb-refresh-build.yml`).
 
 Out of scope:
 

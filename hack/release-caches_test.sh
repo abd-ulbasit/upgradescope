@@ -2,9 +2,11 @@
 # No job on the release path restores a GitHub Actions cache (IR-22, #244).
 # Any job can write the cache with the runner's own token, whatever its
 # permissions: block, and a run on a tag restores entries written on main:
-# kb-refresh's job that builds freshly bumped, unreviewed modules runs on
-# main. So every job that builds, signs or publishes a release, and every
-# job of ci.yml that release.yml calls to gate it, restores nothing:
+# kb-refresh's build of freshly bumped, unreviewed modules used to run on
+# main (it now runs in a run on bot/kb-refresh-build: #273,
+# hack/kb-refresh-scope_test.sh). So every job that builds, signs or
+# publishes a release, and every job of ci.yml that release.yml calls to
+# gate it, restores nothing:
 #   - release.yml: setup-go `cache: false`; no setup-node cache; no
 #     actions/cache; setup-buildx `cache-binary: false`;
 #   - ci.yml: each such step keyed on the workflow's RESTORE_CACHES, which
