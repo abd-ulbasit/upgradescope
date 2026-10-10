@@ -647,7 +647,7 @@ Type: `blocker`, `warning`, `info`.
 One of `removed-api`, `deprecated-api`, `deprecated-api-in-use`,
 `eol-addon`, `eol-approaching`, `version-skew`, `chart-incompat`,
 `kb-stale`, `addon-no-data`, `unknown-api`, `crd-version`,
-`support-lifecycle`. A release may add
+`support-lifecycle`, `volume-plugin`. A release may add
 categories under `/api/v1`, so this is not an enum: treat one you do
 not know by its severity.
 
@@ -679,7 +679,7 @@ Something the evaluation could not assess.
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `capability` | string | yes | A collector capability (api-usage, deprecated-calls, helm, addons, versions, crds), kb-coverage, or target (the target is not an upgrade of the cluster). |
+| `capability` | string | yes | A collector capability (api-usage, deprecated-calls, helm, addons, versions, crds, volumes), kb-coverage, or target (the target is not an upgrade of the cluster). |
 | `reason` | string | yes | — |
 | `partial` | boolean | no | The capability ran but did not read everything. |
 | `skipped` | array of string | no | What a partial capability did not read. |
@@ -695,7 +695,7 @@ whole.
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `capability` | string | yes | A collector capability (api-usage, deprecated-calls, helm, addons, versions, crds), kb-coverage, or target (the target is not an upgrade of the cluster). |
+| `capability` | string | yes | A collector capability (api-usage, deprecated-calls, helm, addons, versions, crds, volumes), kb-coverage, or target (the target is not an upgrade of the cluster). |
 | `reason` | string | yes | — |
 | `partial` | boolean | no | The capability ran but did not read everything. |
 | `skipped` | array of string | no | What a partial capability did not read. |
@@ -1195,6 +1195,7 @@ sent, unknown fields included, so a newer server can judge them.
 | `unrecognizedImagesOmitted` | integer | no | Unrecognized image repositories the cap dropped. |
 | `provider` | string | no | Known values: eks, gke, aks, other. The managed Kubernetes service the collector inferred, or `other` when the cluster shows none of the three; absent when it could not tell (the nodes were unreadable and the server version names no provider). A name this build does not know is accepted and has no support calendar (a newer agent may learn more providers); a value that is not a name of at most 63 bytes of letters, digits, `-`, `_` or `.` is refused (422). |
 | `crds` | array of object | no | CustomResourceDefinitions: versions, status.storedVersions, and the custom resources at a deprecated or unserved version. |
+| `volumePlugins` | array of object | no | The in-tree volume plugins (the `volumes` capability) the pods name, one entry per plugin by its field name in a pod's volumes (`glusterfs`, `awsElasticBlockStore`): `plugin`, `count` (pods), `namespaces` (pods per namespace). At most 64 entries, each plugin once; an entry's namespace keys must be namespace names (422 otherwise). An inventory without the `volumes` capability, as older agents push, is not assessed for them. |
 | `addOnEvidenceAgeSeconds` | integer | no | How old, in seconds, the pod evidence the add-ons were detected from was when the agent reused its last full pod pass instead of listing every pod again (`--pod-pass-every`, `--pod-pass-max-age`). Absent when every pod was read. Not part of the snapshot's identity, like collectedAt: a push that differs only in it is a duplicate and is not stored, so the stored report keeps the age it was first pushed with, as it keeps that push's `collectedAt` (the evidence is as of `collectedAt`). |
 | `apiServerStartTime` | string (date-time) | no | process_start_time_seconds of the kube-apiserver whose /metrics deprecatedCalls were read from, in whole seconds: apiserver_requested_deprecated_apis counts requests since then. Absent when the scrape did not report it. Not part of the snapshot's identity, like collectedAt: a push that differs only in it is a duplicate. The server ignores one before 2014 or more than 10 minutes after collectedAt. |
 
