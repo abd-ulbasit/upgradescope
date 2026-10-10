@@ -284,10 +284,19 @@ jobs:
           [ -n "$seal" ] || { echo "::error::refusing run $RUN_ID: no seal job"; exit 1; }
           # A log that is not ready yet is fetched again; a fetch that keeps
           # failing is reported as that, not as a missing digest.
+          # curl, not gh api: gh refuses to print an API response that holds
+          # terminal escape sequences (it asks for --allow-escape-sequences),
+          # and a job log is full of ANSI colour codes. The endpoint answers
+          # with a redirect to the blob store, which -L follows. Plain -L
+          # sends the Authorization header to the first host only and drops it
+          # when the redirect goes to another one; never use
+          # --location-trusted here, it would send this job's token to the
+          # blob store.
           logs=''
           for attempt in 1 2 3; do
             [ "$attempt" = 1 ] || sleep 10
-            logs=$(api "actions/jobs/$seal/logs") && break || logs=''
+            logs=$(curl -fsSL --retry 2 -H "Authorization: Bearer $GH_TOKEN" -H 'Accept: application/vnd.github+json' \
+              "${GITHUB_API_URL:-https://api.github.com}/repos/$GH_REPO/actions/jobs/$seal/logs") && break || logs=''
           done
           [ -n "$logs" ] || { echo "::error::refusing run $RUN_ID: could not fetch the seal job's log (job $seal)"; exit 1; }
           lines=$(tr -d '\r' <<<"$logs" | grep -E "^[0-9T:.Z-]+ kb-refresh-patch-sha256 $PIPELINE [0-9a-f]{64}$" || true)
@@ -600,10 +609,19 @@ jobs:
           [ -n "$seal" ] || { echo "::error::refusing run $RUN_ID: no seal job"; exit 1; }
           # A log that is not ready yet is fetched again; a fetch that keeps
           # failing is reported as that, not as a missing digest.
+          # curl, not gh api: gh refuses to print an API response that holds
+          # terminal escape sequences (it asks for --allow-escape-sequences),
+          # and a job log is full of ANSI colour codes. The endpoint answers
+          # with a redirect to the blob store, which -L follows. Plain -L
+          # sends the Authorization header to the first host only and drops it
+          # when the redirect goes to another one; never use
+          # --location-trusted here, it would send this job's token to the
+          # blob store.
           logs=''
           for attempt in 1 2 3; do
             [ "$attempt" = 1 ] || sleep 10
-            logs=$(api "actions/jobs/$seal/logs") && break || logs=''
+            logs=$(curl -fsSL --retry 2 -H "Authorization: Bearer $GH_TOKEN" -H 'Accept: application/vnd.github+json' \
+              "${GITHUB_API_URL:-https://api.github.com}/repos/$GH_REPO/actions/jobs/$seal/logs") && break || logs=''
           done
           [ -n "$logs" ] || { echo "::error::refusing run $RUN_ID: could not fetch the seal job's log (job $seal)"; exit 1; }
           lines=$(tr -d '\r' <<<"$logs" | grep -E "^[0-9T:.Z-]+ kb-refresh-patch-sha256 $PIPELINE [0-9a-f]{64}$" || true)
