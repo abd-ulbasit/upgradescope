@@ -179,7 +179,7 @@ quote them.
 | upgradescope, #228 (pod pass) | `0b6fec28` (this branch on main `f121698a`, which has #251, #262, #271, #279 and #286), the benchmark's `TestBenchAgentTick` cross-compiled for `linux/amd64` and run on the ThinkPad beside the apiserver (`BENCH_RUN_ON`, outside a CPU quota), 10 October 2026, 02:56 to 03:12 UTC, under the measurement lock, on lab A (`us-lab-137`, reset first, filled by `BENCH_STEPS=1`, settled 150 s, Kubernetes 1.37.0), no Argo CD or Flux objects. Run 1: `BENCH_TICKS=8`, the default `--pod-pass-every=3`; run 2, on the same fill: `BENCH_TICKS=5 BENCH_POD_PASS_EVERY=1`. The lab was reset afterwards ([the run](#the-pod-pass-every-nth-tick-228)) |
 | Also running, #228 (pod pass) | lab B (`us-lab-137b`) up and idle, with no fill: its control plane at 11.6 to 21.9% of a core and 569 to 749 MiB in the five `docker stats` taken (before the reset, before each run's ticks, after run 1 and after run 2), and `bookstore` at 10.8 to 19.9% of a core and 567 to 617 MiB; lab A's own control plane at 185 to 315% of a core and 3.2 GiB (KWOK's heartbeats) when sampled at the fill. The ThinkPad's 1-minute load average was 0.45 before the reset, 8.5 to 11.9 around run 1 and 9.4 to 22.5 around run 2 (4 threads) |
 | Also running, #247 (the cause) | `bookstore` and lab `us-lab-137`, idle (10 to 17% of a core each; `us-lab-137` at 575 to 680 MiB, no fill; `docker stats` at the start and end of each run and around the decode runs); the lab's own control plane at 125 to 325% of a core from KWOK's heartbeats; the host's 1-minute load average 3.1 to 11.2 in the spot samples between 21:48 and 23:05 UTC (1.25 before the fill, at 21:40). The two decode runs below (the collector's `TestHelmDecodeCostByRelease`, outside a quota, the lab's agent uninstalled) ran on the ThinkPad at 23:08 UTC at a load of 4.6 and 7.2; an earlier one at 22:36 UTC (pod idle, load 7.3 to 10.7, before the test reported 43, 51 and 83) gave 12.7 s for all 1,000 and 5.40 s for the last 50 |
-| upgradescope, #285 | before: main `4b1c2893`; after: `a14f737c` (this branch's production code: the commits after it change tests and docs only). `TestHelmDecodeCostByRelease` cross-compiled for `linux/amd64` (`GOOS=linux GOARCH=amd64 go test -c ./internal/collect`) and run on the ThinkPad, outside a CPU quota, 10 October 2026, 11:34 to 11:37 UTC, under the measurement lock: four runs of each binary, alternating, each the test's own mean of 3 passes over the 1,000 payloads. Two earlier versions of the change were measured the same way: `db5b0845` (09:55 to 10:00 UTC) and `572f0e47` (10:13 to 10:18 UTC, 9.175 s before and 6.530 s after, 28.8% less), which asked kubectl's decoder about number-like scalars one by one ([below](#a-manifest-document-parsed-once-285)). The payloads are the bench fill's Helm Secrets, read from lab A (`us-lab-137`, kind 1.37.0) after `hack/bench/seed` created only them (`--nodes 0 --pods 0 --configmaps 0 --deployments 0 --helm-releases 1000 --wait 0`, seed 1, 09:20 UTC; 22,841,288 bytes stored and 106,874,938 decompressed, 800 small, 150 medium and 50 large, the totals [given above](#what-is-simulated)); the lab was reset right after they were read, and before and after the 11:29 to 11:41 UTC run (which does not use it). The heap figures are the same tests run on the Mac, at a load average of 21 to 73 ([the runs](#a-manifest-document-parsed-once-285)); the worst-case figures were measured on the ThinkPad again at 12:03 to 12:10 UTC, with a binary built from `b3eba1cc` (production code as `a14f737c`) |
+| upgradescope, #285 | before: main `4b1c2893`; after: `a14f737c`, where the final version's figures of #285 below were measured. The branch's production code has changed since in two commits, and neither was re-measured: `82927f11` makes the converter decline a document that holds U+0085, U+2028 or U+2029, which goes to kubectl's decoder as before (the lab's payloads hold none: the seed that generated them, `hack/bench/seed`, has no non-ASCII byte in its source, which was checked from the seed's source, not by reading the payloads again), and `f1f2af12` is a refactor of `decoded` and `settle` that does not change what runs. The commits after those change tests, `hack/test-heap.sh` and docs only. `TestHelmDecodeCostByRelease` cross-compiled for `linux/amd64` (`GOOS=linux GOARCH=amd64 go test -c ./internal/collect`) and run on the ThinkPad, outside a CPU quota, 10 October 2026, 11:34 to 11:37 UTC, under the measurement lock: four runs of each binary, alternating, each the test's own mean of 3 passes over the 1,000 payloads. Two earlier versions of the change were measured the same way: `db5b0845` (09:55 to 10:00 UTC) and `572f0e47` (10:13 to 10:18 UTC, 9.175 s before and 6.530 s after, 28.8% less), which asked kubectl's decoder about number-like scalars one by one ([below](#a-manifest-document-parsed-once-285)). The payloads are the bench fill's Helm Secrets, read from lab A (`us-lab-137`, kind 1.37.0) after `hack/bench/seed` created only them (`--nodes 0 --pods 0 --configmaps 0 --deployments 0 --helm-releases 1000 --wait 0`, seed 1, 09:20 UTC; 22,841,288 bytes stored and 106,874,938 decompressed, 800 small, 150 medium and 50 large, the totals [given above](#what-is-simulated)); the lab was reset right after they were read, and before and after the 11:29 to 11:41 UTC run (which does not use it). The heap figures are the same tests run on the Mac, at a load average of 21 to 73 ([the runs](#a-manifest-document-parsed-once-285)); the worst-case figures were measured on the ThinkPad again at 12:03 to 12:10 UTC, with a binary built from `b3eba1cc` (production code as `a14f737c`) |
 | Also running, #285 | lab B (`us-lab-137b`) was not queried (another agent's); the work package said it was idle. The ThinkPad's 1-minute load average was 1.45 to 2.66 at the start of each of the eight timed runs of 11:34 to 11:37 UTC (each run is itself one busy thread of the four), 1.99 to 3.82 at the start of the three worst-case runs of 12:06 to 12:08 UTC, and 1.81 to 2.32 at the start of the earlier worst-case runs, and the busiest processes were k3s and the apiservers at 3 to 11% of a thread each: a fill would have shown 2.4 to 3.6 threads on top. |
 
 ### What is simulated
@@ -1130,8 +1130,10 @@ exponent, a date) is typed by the converter itself, as go-yaml v2's
 `sigs.k8s.io/yaml` over generated scalars; below). The reader is the one
 `scan -f` and `CollectManifests` use too, so those are parsed once as well,
 with the findings the same tests hold. **How often it answers** depends on
-the manifest: all 33,620 documents of the lab's 1,000 releases (at
-`a14f737c` too), and all 58 documents in total of five files: Flux's
+the manifest: all 33,620 documents of the lab's 1,000 releases (counted at
+`a14f737c`; `82927f11` declines only a document with U+0085, U+2028 or U+2029,
+which the seed cannot generate, so the count is the same there by the seed's
+source, not counted again), and all 58 documents in total of five files: Flux's
 install manifest (645 KiB, 38 documents, with its CRDs; helm-controller
 v1.2.0), the Kubernetes Dashboard's (6), this chart's render (4, and 9 with
 `server.enabled`) and a cert-manager CRD (1)
@@ -1167,7 +1169,8 @@ manifest of the collector's test data, objects, evidence and problems),
 `TestParseOnce_ReleasesHaveTheSameFindings` (a table of releases: ingresses
 and lists, a CRD, anchors, duplicate and merge keys, tags, JSON, comments,
 unrendered templates), `TestParseOnce_RandomManifestsMatchTwoParses` (300
-manifests of random documents, some past a run's size) and
+manifests of random documents, some past a run's size; 10 under `-race`,
+where the 60 of an earlier version took 257 s) and
 `TestParseOnce_BoundsAreUnchanged`; that the saving is wired in at all (a
 test that fails if a rendered document is not answered from the tree, which
 no equivalence test notices, since a stream parsed twice is equal to
@@ -1197,6 +1200,20 @@ decodes the lab's 1,000 payloads both ways: the 1,000 entries are equal
 (20 of them with flagged APIs). With `UPGRADESCOPE_PARSE_ONCE_FILES`,
 `TestParseOnce_FilesMatchTwoParses` does the same for manifest files you
 name and says how many of their documents the converter answered.
+
+**Which code was measured.** The final version's decode CPU, heap figures
+and worst-case column below were measured at `a14f737c` (the worst case with
+a binary built from `b3eba1cc`, which has `a14f737c`'s production code). Two
+later commits change production code and were **not re-measured**:
+`82927f11` makes the converter decline a document that holds U+0085, U+2028
+or U+2029, so that it goes to kubectl's decoder as before; the lab's payloads
+hold none of the three (the seed generator in `hack/bench/seed` has no
+non-ASCII byte in its source: checked from the seed, not by reading the
+payloads), so for them the code that runs is `a14f737c`'s, but the figures
+are `a14f737c`'s and not measured at `82927f11`. `f1f2af12` is a refactor of
+`streamParser.decoded` and `settle` (the reparse reference left a signature)
+that does not change what runs. The commits since change tests,
+`hack/test-heap.sh` and docs only.
 
 **Decode CPU.** `TestHelmDecodeCostByRelease` on the lab's 1,000 payloads,
 before (`4b1c2893`) and after (`a14f737c`), four runs of each, alternating,
@@ -1239,7 +1256,7 @@ On the manifests of real charts the gain is larger than the lab's, because
 their CRDs, which the generated releases lack, are most of their text. The
 Flux install manifest (645 KiB, 38 documents) takes 42, 40 and 42 ms of CPU
 to read once and 72, 63 and 67 ms twice (`TestParseOnce_FilesMatchTwoParses`
-at the final code, three runs of the test, each the mean of 3 readings, on
+at the production code of `a14f737c` (the code of that day, before `82927f11` and `f1f2af12`), three runs of the test, each the mean of 3 readings, on
 the Mac at a load average of 21 to 24: 38.6% less over the three, with that
 noise; 42, 43 and 46 ms against 68, 69 and 69 ms for the version before,
 at a load of 71 to 72). That is one file, not several. No release of a real
@@ -1253,8 +1270,8 @@ reads the live heap after back-to-back collections, and a busy host adds to
 it). The bound is 64 MiB. Peak live heap above the baseline, MiB, per case
 of `TestCollectHelmManifestParsingIsBounded`. "First version" is `db5b0845`,
 whose two runs alternated with the two before runs; "final" is `a14f737c`
-(production code as the last commit), two runs of the heap step of
-`make test-heap` (10 October 2026):
+(not `82927f11` or `f1f2af12`, which came after and were not re-measured),
+two runs of the heap step of `make test-heap` (10 October 2026):
 
 | Case | Before, run 1 | Before, run 2 | First version, run 1 | First version, run 2 | Final, run 1 | Final, run 2 |
 |---|---|---|---|---|---|---|
@@ -1287,7 +1304,8 @@ Ingress, or a Deployment (the rendered one of the tests) with dotted
 versions among its annotations. On the ThinkPad, 10 October 2026, under the
 lock: `a99bc88a`, which asked, twice (11:37 and 11:39 UTC), and the final
 version three times (12:06, 12:07 and 12:08 UTC, a test binary built from
-`b3eba1cc`, whose production code is `a14f737c`'s). The "twice" column is
+`b3eba1cc`, whose production code is `a14f737c`'s, not that of `82927f11`
+or `f1f2af12`). The "twice" column is
 the old path in the final binary's own runs (the one in `a99bc88a`'s runs
 reads within 5% of it). CPU in ms, each run listed, with once divided by
 twice (the same binary's own), rounded to two places:
@@ -1337,7 +1355,7 @@ time, for the gain of a sixth of the decode, and was not done.
 |---|---|---|
 | One GET per Helm release on every tick: 1,000 of 1,061 requests, 90 MiB, 33 s and 23.5 CPU-seconds at full size | The only cost that grew with releases, not pages | **Fixed**: the agent keeps what it decoded, keyed by the storage object's UID and resourceVersion; a steady tick makes none (61 requests then, 53 on `735751d` and 31 after #228). `TestHelmCache…` and `TestTicksFetchHelmReleasesOnlyWhenTheyChange` |
 | The same 1,000 GETs on the first tick after a start, and on every one-shot `scan` | Sequential, 36.1 to 36.7 s and 23.1 to 23.5 CPU-seconds here; at a 60 ms round trip the first tick reached the Helm step's deadline with 231 releases unread; as a pod at the old 200m default it reached it with 132 unread (measured, [above](#cpu-and-the-chart-limit)) | **Fixed** for the round trip ([#226](https://github.com/abd-ulbasit/upgradescope/issues/226)): 8 GETs in flight, decoded one at a time in order; 42.4 s here at `9810fb6`, on a host whose load rose to 15 (27.1 s at the draft `59d8561`, at a load of 7 to 12), and at 60 ms 30.4 s at `06cdf7a` and 29.6 s at `5da764e`, with every release read. Decoding (22 CPU-seconds) and the client's rate limit (14 s for 1,000) are the bounds now, so under a CPU quota #226 was not expected to help at 200m and saves at most the 13.4 s the GETs waited at 1 CPU (computed, [above](#cpu-and-the-chart-limit)); measured at 200m at `da90a86e` (with #226 and #228, 9 October 2026), the first tick still gave up at the Helm step's deadline, with 43 of 1,001 unread where `735751d` left 132 ([above](#the-tick-after-a-partial-helm-step-247)); the runs differ in more than #226 and in host load, so the share that is #226's is not known; the chart's default limit is now 1 CPU, at which main's first tick read all 1,000. `TestCollectHelmConcurrentMatchesSequential` |
-| A Helm release's manifest is parsed twice per YAML document: by the walk and by kubectl's decoder ([#285](https://github.com/abd-ulbasit/upgradescope/issues/285)) | 4.49 of the 5.64 CPU-seconds of decoding 51 releases in the pod, 2.73 of them kubectl's decoder ([above](#the-tick-after-a-partial-helm-step-247)); the lab's 1,000 releases cost 9.160 s of CPU to decode (mean of four runs, the ThinkPad, `4b1c2893`) | **Fixed**: the second parse is gone where it can be shown to give the same JSON: 6.186 s (32.5% less) for the 1,000, 33.8% less for the large ones, `a14f737c`, 10 October 2026; 38.6% less to read Flux's real install manifest (Mac, noisy); 33% to 45% less on eight 1 MiB manifests (five dense in number-like scalars, three Deployments with 0 to 64 dotted versions), and 15% to 22% more for a document walked to its end and then declined (ThinkPad, `b3eba1cc`); same findings and heap ([above](#a-manifest-document-parsed-once-285)). `TestParseOnce…`, `TestTreeJSON…`, `TestV2Number…` |
+| A Helm release's manifest is parsed twice per YAML document: by the walk and by kubectl's decoder ([#285](https://github.com/abd-ulbasit/upgradescope/issues/285)) | 4.49 of the 5.64 CPU-seconds of decoding 51 releases in the pod, 2.73 of them kubectl's decoder ([above](#the-tick-after-a-partial-helm-step-247)); the lab's 1,000 releases cost 9.160 s of CPU to decode (mean of four runs, the ThinkPad, `4b1c2893`) | **Fixed**: the second parse is gone where it can be shown to give the same JSON: 6.186 s (32.5% less) for the 1,000, 33.8% less for the large ones, measured at `a14f737c`, 10 October 2026 (`82927f11` and `f1f2af12` changed production code after it and were not re-measured: [above](#a-manifest-document-parsed-once-285)); 38.6% less to read Flux's real install manifest (Mac, noisy); 33% to 45% less on eight 1 MiB manifests (five dense in number-like scalars, three Deployments with 0 to 64 dotted versions), and 15% to 22% more for a document walked to its end and then declined (ThinkPad, `b3eba1cc`); same findings and heap ([above](#a-manifest-document-parsed-once-285)). `TestParseOnce…`, `TestTreeJSON…`, `TestV2Number…` |
 | `kube-system` pods are listed in full twice a tick: by the control-plane version check, then again by the all-pods list | 4,009 pods here; the second listing is not a separate 9 requests but 9 extra ones (those pods already fall inside the 29 pages of the all-pods list) and about 4,000 pods decoded twice; grows with nodes (every node adds a `kube-proxy` and a CNI pod) | **Fixed** ([#227](https://github.com/abd-ulbasit/upgradescope/issues/227), #232): the add-ons take them from the version check's list; 30 pod list requests a tick instead of 38 in the runs on `735751d` |
 | Argo CD Applications, Flux HelmReleases and the OCIRepositories their chartRefs name are listed whole (page size 50) every tick (#218; the OCIRepositories since #248, a GET each before) | **Measured** (`BENCH_GITOPS=1`, at 1,000 Applications and 1,000 HelmReleases with 500 chartRefs): at `da90a86e` 50 of the 81 requests of a steady tick (20 + 20 + 10 lists), 9.0 MiB of 59.8, every chart resolved ([above](#the-ocirepositories-listed-248)); on main `735751d`, before #248, 540 of 596, 500 of them sequential OCIRepository GETs, 12 MiB of 63, 8.7 more seconds and 3.2 more CPU-seconds, under host noise ([above](#re-measured-on-main-with-and-without-argo-cd-and-flux)) | Fixed by [#248](https://github.com/abd-ulbasit/upgradescope/issues/248): a list instead of a GET per OCIRepository, a GET by name only where the list is forbidden; the rest grows by one request per 50 objects |
 | The all-pods list is the steady tick's largest cost | 38 of 61 requests (30 of 53 after #232), 79% of the bytes; whole pod objects are needed for their images, and the agent keeps no watch | **Requests fixed** ([#228](https://github.com/abd-ulbasit/upgradescope/issues/228)): pod and node pages sized by their largest object (at most 1,000), discovery kept between ticks, the agent's object read once: 53 to 31 requests, short of the target of under 25. The bytes (50 MiB) and CPU (3 s) are unchanged on a tick that lists every pod; reading the pods less often (#228's option b, the default since, PF-18) makes the ticks that reuse the pass cost 20 requests, 27.8 MiB and 1.8 CPU-seconds (measured at `0b6fec28`, 10 October 2026), and a cycle of 3 averages 23.7 requests (computed), while the tick that lists every pod still makes 31 |
