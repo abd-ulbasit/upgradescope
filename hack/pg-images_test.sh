@@ -108,7 +108,7 @@ want_majors "the schedule runs 14-18" schedule false "" "14 15 16 17 18"
 want_majors "workflow_dispatch runs 14-18" workflow_dispatch false true "14 15 16 17 18"
 want_majors "workflow_dispatch with full-matrix=false runs 17" workflow_dispatch false false 17
 grep -qxF '      images: ${{ steps.matrix.outputs.images }}' "$work/pg-matrix.job" &&
-  grep -qxF '    needs: pg-matrix' "$work/pg-conformance.job" &&
+  grep -qxF '    needs: [changes, pg-matrix]' "$work/pg-conformance.job" &&
   grep -qxF '        include: ${{ fromJSON(needs.pg-matrix.outputs.images) }}' "$work/pg-conformance.job" &&
   grep -qE '^        image: mirror\.gcr\.io/library/\$\{\{ matrix\.image \}\}( |$)' "$work/pg-conformance.job" &&
   ok "pg-conformance's service image is matrix.image (through mirror.gcr.io), from pg-matrix's output" ||

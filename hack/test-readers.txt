@@ -1,0 +1,52 @@
+# The packages whose tests read the repository outside Go code, for
+# hack/test.sh --readers: the unit tests a pull request runs even when it
+# changes no Go code (CI's test job, scope "readers"; a change to Go code
+# runs all of them). Two kinds of reader, and a change to ANY file can
+# break the second kind, which is why no pull request skips this list:
+#
+#   documentation readers: the docs-drift tests fail on a stale page (the
+#   CLI's flags, the metrics reference, the chart's upgrade notes, the
+#   support-lifecycle examples, the claims ledger's references, the
+#   generated reference under docs/reference);
+#
+#   whole-tree readers: tests that walk or list every file of the checkout.
+#   internal/server's TestMeasureYAMLNeverUndercounts decodes every .yaml and
+#   .yml under the repository root (workflows, issue templates and Dependabot
+#   config included); internal/crd/apigroup's
+#   TestNoLegacyGroupOutsideTheCompatPath reads every tracked file through
+#   `git ls-files` (a scripts or workflow edit that names the old API group
+#   fails it); internal/cli and deploy/chart walk docs/ and the chart.
+#
+# One "<module dir> <package dir>" per line, the form `hack/test.sh --list`
+# prints.
+#
+# hack/test_test.sh keeps this from going stale, with two detectors over the
+# tracked *_test.go files: a package that names a docs page or a Markdown
+# file in a string (a path under docs/, a ../ path to a *.md, README.md and
+# the like), and a package that walks or lists the tree from outside its own
+# directory (filepath.WalkDir from "../..", a repository root or a variable
+# holding one, `git ls-files`, `git rev-parse --show-toplevel`), must be
+# here, so a new reader fails hack-test until its package is listed. Both
+# over-approximate: a string that only names a file in a fixture counts, and
+# listing a package that reads nothing only costs time. That is why
+# internal/server/store and registry are here (each has an in-memory
+# fixture with a "README.md" entry; neither reads a real page).
+#
+# Found first on 2026-10-10 (main at 2df4f696) by deleting docs/, hack/docs/,
+# mkdocs.yml and every *.md and running `go test ./...`: deploy/chart,
+# internal/agent, internal/cli, internal/crd, internal/kb, internal/server
+# and tools/gen-docs failed on a file they could not open. Deleting files
+# cannot find a reader that walks the tree and skips what is missing, which
+# is how the whole-tree readers were missed: the detectors do not depend on
+# it.
+. deploy/chart
+. internal/agent
+. internal/cli
+. internal/crd
+. internal/crd/apigroup
+. internal/kb
+. internal/server
+. internal/server/store
+. registry
+. tools/gen-docs
+tools/gen-kb .

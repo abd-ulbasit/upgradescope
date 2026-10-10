@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Keeps docs/claims.md honest (make claims-check; CI's test job): every
+# Keeps docs/claims.md honest (make claims-check; CI's repo-checks job): every
 # reference in a claim row's last column ("Proven by") must still exist, so
 # renaming or deleting the test behind a public claim fails CI instead of
 # leaving the ledger pointing at nothing. The references, each backticked:

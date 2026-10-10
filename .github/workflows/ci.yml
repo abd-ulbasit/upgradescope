@@ -84,10 +84,33 @@ concurrency:
 # reproduces a job byte for byte (CONTRIBUTING.md, "What CI runs"). Tools the
 # scripts download (kind, kubectl, kubeconform, govulncheck, GoReleaser) are
 # pinned in the scripts; kind/kubectl/kubeconform are also sha256-verified.
+#
+# How long a pull request takes (CONTRIBUTING.md, "Which jobs a pull request
+# runs"; the numbers are above ci-ok): the longest jobs are sharded
+# (test-heap four ways, test two, cross-build one job per OS), and a pull
+# request runs the Go-heavy jobs only for a change they can see, decided by
+# the changes job. The unit tests are never skipped. ci-ok accepts a skipped
+# gated job only when the changes job ran and said so. A push to main, the
+# schedule, a dispatch and a release run what they ran before the gates
+# existed.
 jobs:
   # Which areas a PR or main push touches, for the jobs too expensive to run
-  # on everything: docs-only changes skip the kind e2e. Skipped on the
-  # schedule, workflow_dispatch and release (tag) runs, which run everything.
+  # on everything. On a PR the Go-heavy jobs (test-heap, build, images,
+  # examples, vuln, pg-conformance, the kind e2e and envtest) run only for a
+  # change they can see. The unit tests are never skipped: they run in full
+  # for code and, for a change to no Go code, in the packages whose tests read
+  # the repository outside Go code (hack/test-readers.txt), because some of
+  # those walk the whole checkout and fail on a change to any file. A push to
+  # main keeps what it ran before, which is everything, but the kind e2e and
+  # envtest after a docs-only push.
+  # Skipped on the schedule, workflow_dispatch and release (tag) runs, which
+  # run everything: a gated job then sees `changes` skipped and runs.
+  #
+  # ci-ok accepts a gated job's skip only when this job SUCCEEDED and said
+  # the job is not needed (hack/ci-ok.sh), so a failed, cancelled or missing
+  # changes job cannot turn into a green PR with the tests skipped.
+  # hack/ci-gates_test.sh (make hack-test) evaluates each gated job's `if` for
+  # every kind of run and every combination of filter results.
   changes:
     if: github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
     runs-on: ubuntu-latest
@@ -96,11 +119,15 @@ jobs:
       contents: read
       pull-requests: read # paths-filter lists PR files through the API
     outputs:
-      # hack/e2e.sh runs the server-gate command from the CI gate page, so
-      # that one docs page counts as code for the e2e.
-      e2e: ${{ (steps.code.outputs.e2e == 'true' || steps.code.outputs.e2e_doc == 'true') && 'true' || 'false' }}
-      release: ${{ steps.paths.outputs.release }}
-      action: ${{ steps.paths.outputs.action }}
+      # What each says, and how it follows from the filters below, is in
+      # hack/ci-changes.sh. e2e: hack/e2e.sh runs the server-gate command from
+      # the CI gate page, so that one docs page counts as code for the e2e.
+      go: ${{ steps.decide.outputs.go }}
+      cross: ${{ steps.decide.outputs.cross }}
+      test-scope: ${{ steps.decide.outputs.test-scope }}
+      e2e: ${{ steps.decide.outputs.e2e }}
+      release: ${{ steps.decide.outputs.release }}
+      action: ${{ steps.decide.outputs.action }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -168,6 +195,101 @@ jobs:
               - 'registry/**'
               - 'go.mod'
               - 'go.sum'
+            # What the Go-heavy jobs can see: Go code, and every other file
+            # one of them reads (the embedded data and dashboard, the chart
+            # and examples the tests and the kind e2e load, the Dockerfiles,
+            # the scripts the jobs call). A file not here is one no gated job
+            # reads. hack/ci-gates_test.sh (make hack-test) holds this to
+            # that: every tracked file is matched here or is on its short list
+            # of files nothing gated reads, and every hack/ script a gated job
+            # reaches is matched. (The unit tests are not gated: a change to
+            # a file not here still runs hack/test-readers.txt.)
+            go:
+              - '**/*.go'
+              - '**/go.mod'
+              - '**/go.sum'
+              - '**/testdata/**'
+              - 'api/**'
+              - 'cmd/**'
+              - 'internal/**' # incl. internal/kb/data and the committed webdist
+              - 'registry/data/**'
+              - 'tools/**'
+              - 'web/**' # the embedded dashboard
+              - 'deploy/**' # the chart: helm, kube, examples and the chart tests
+              - 'examples/**'
+              - 'action.yml'
+              - 'action/**'
+              - 'ci/**' # templates internal/cli's tests read
+              - 'packaging/krew/**'
+              - '.krew.yaml'
+              - '.goreleaser.yml'
+              - 'Dockerfile*'
+              - '.dockerignore'
+              - 'Makefile'
+              - 'LICENSE'
+              - 'NOTICE'
+              - 'THIRD_PARTY_NOTICES'
+              - '.github/workflows/ci.yml' # a CI change runs everything
+              - '.github/actions/**'
+              # The hack/ scripts, data and fixtures the gated jobs call, and
+              # theirs in turn (the test, test-heap, build, cross-build, vuln,
+              # examples, images, pg-conformance, envtest and e2e targets).
+              - 'hack/shard.sh'
+              - 'hack/test.sh'
+              - 'hack/test-durations.txt'
+              - 'hack/test-readers.txt'
+              - 'hack/test-heap.sh'
+              - 'hack/test-heap-durations.txt'
+              - 'hack/dashboard-smoke.sh'
+              - 'hack/go-install-check.sh'
+              - 'hack/cross-build.sh'
+              - 'hack/vulncheck.sh'
+              - 'hack/vulncheck_test.sh'
+              - 'hack/vuln-allowlist.txt'
+              - 'hack/renovate-audit.sh'
+              - 'hack/renovate/**'
+              - 'hack/examples-test.sh'
+              - 'hack/install-tool.sh'
+              - 'hack/images.s*' # written as a glob: hack/dockerhub-mirror_test.sh audits step text for the script names
+              - 'hack/pg-test.sh'
+              - 'hack/pg-images.sh'
+              - 'hack/pg-images.txt'
+              - 'hack/kind-images.sh'
+              - 'hack/kind-node-images.txt'
+              - 'hack/envtest.sh'
+              - 'hack/envtest-versions.txt'
+              - 'hack/e2e.s*' # (same)
+              - 'hack/e2e/**'
+              - 'hack/demo/**'
+            # What can break a platform's compile (cross-build): any Go
+            # file or module file, the build's own inputs. Everything here is
+            # in go too.
+            cross:
+              - '**/*.go'
+              - '**/go.mod'
+              - '**/go.sum'
+              - 'cmd/**'
+              - 'internal/**'
+              - '.goreleaser.yml'
+              - 'Makefile'
+              - 'hack/cross-build.sh'
+              - '.github/workflows/ci.yml'
+      - id: decide
+        env:
+          EVENT: ${{ github.event_name }}
+          # The PR's file count: the filters see at most 3000 files
+          # (hack/ci-changes.sh runs everything from there up).
+          CHANGED_FILES: ${{ github.event.pull_request.changed_files }}
+          GO: ${{ steps.paths.outputs.go }}
+          CROSS: ${{ steps.paths.outputs.cross }}
+          E2E_CODE: ${{ steps.code.outputs.e2e }}
+          E2E_DOC: ${{ steps.code.outputs.e2e_doc }}
+          RELEASE: ${{ steps.paths.outputs.release }}
+          ACTION: ${{ steps.paths.outputs.action }}
+        # shell: bash runs with -o pipefail; the default `bash -e` would let
+        # tee hide a failed ci-changes.sh and report an empty success.
+        shell: bash
+        run: hack/ci-changes.sh | tee -a "$GITHUB_OUTPUT"
 
   lint:
     if: github.event_name != 'schedule'
@@ -186,14 +308,41 @@ jobs:
       # into a red build on an unrelated PR.
       - run: make lint
 
+  # gofmt, go vet and go test -race -count=1, main module and every tools/
+  # module, in two shards that run side by side (hack/test.sh --shard: every
+  # package in exactly one, balanced by hack/test-durations.txt). One runner
+  # took 9.4 minutes for the main module alone (run 38038631216). The ITs
+  # stay env-gated, so this is the unit set.
+  #
+  # Never skipped on a pull request. One that changes no Go code runs only
+  # the packages whose tests read the repository outside Go code (test-scope
+  # readers, from hack/ci-changes.sh; hack/test-readers.txt): the docs-drift
+  # tests fail on a stale page, and two tests walk the whole checkout
+  # (internal/server decodes every YAML file in it, internal/crd/apigroup
+  # reads every tracked file), so a change to a workflow, an issue template
+  # or a script can fail them and cannot skip them. That costs a
+  # documentation or CI-only pull request the weight of its slowest shard
+  # (hack/test-durations.txt: 336 s of -race package weight, a relative
+  # figure, not measured wall time) instead of nothing: the price of never
+  # passing ci-ok with a needed test not run. A failed changes job runs
+  # everything.
   test:
-    if: github.event_name != 'schedule'
+    name: test (shard ${{ matrix.shard }})
+    needs: changes
+    if: >-
+      !cancelled() && github.event_name != 'schedule'
     runs-on: ubuntu-latest
     # 25, up from 15: the job took 7 to 12 minutes on main's last pushes
     # (runs 38028648092, 38031779891, 38032862971), before #314 added a
     # -race build of tools/promrule-test (the Prometheus tree) to make test.
-    # A cold cache or a slow runner would have run out of room at 15.
+    # A cold cache or a slow runner would have run out of room at 15; a shard
+    # is about half of that work.
     timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        # Every shard 1..n of n, once: hack/test_test.sh fails if one is missing.
+        shard: ['1/2', '2/2']
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -205,9 +354,30 @@ jobs:
           cache-dependency-path: |
             go.sum
             tools/*/go.sum
-      # gofmt, go vet and go test -race -count=1, main module and every
-      # tools/ module. The ITs stay env-gated, so this is the unit set.
-      - run: make test
+      - name: go vet and go test -race, shard ${{ matrix.shard }}
+        env:
+          SHARD: ${{ matrix.shard }}
+          SCOPE: ${{ needs.changes.outputs.test-scope == 'readers' && 'readers' || 'all' }}
+        run: make test TEST_SHARD="$SHARD" TEST_SCOPE="$SCOPE"
+
+  # The checks that read the repository rather than the Go code, so a change
+  # to a script, the claims ledger or a workflow is judged on every pull
+  # request, whatever else it touches. They were steps of the test job.
+  repo-checks:
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: ${{ env.RESTORE_CACHES == 'true' }} # no cache on the release path (IR-22)
+          cache-dependency-path: |
+            go.sum
+            tools/*/go.sum
       # The golang base image pins GOTOOLCHAIN=local, so a Dockerfile behind
       # go.mod's `go` directive fails at `go mod download` (the images and
       # kube jobs); GoReleaser must be one pinned version that go.mod's Go
@@ -225,12 +395,25 @@ jobs:
   # `make test` above never runs them in full; they are the proofs the
   # claims ledger and docs/operations.md cite for the server's memory
   # bounds. hack/test-heap.sh finds every test that reads raceEnabled and
-  # runs it without -race, failing on a skip. They take ~11.5 minutes on
-  # an Apple silicon laptop; a hosted runner is slower.
+  # runs it without -race, failing on a skip. The three packages' test times
+  # added up to 1209 s on a hosted runner (run 38038631216; the job took 22 m
+  # 19 s), the longest job of a pull request, so they run as four shards
+  # side by side (hack/test-heap.sh --shard: each test in exactly one,
+  # balanced by hack/test-heap-durations.txt). ci-ok needs the job, which is
+  # every shard; hack/test-heap_test.sh fails if the matrix names fewer than
+  # all of them.
   test-heap:
-    if: github.event_name != 'schedule'
+    name: test-heap (shard ${{ matrix.shard }})
+    needs: changes
+    if: >-
+      !cancelled() && github.event_name != 'schedule' &&
+      (needs.changes.outputs.go == 'true' || needs.changes.result != 'success')
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ['1/4', '2/4', '3/4', '4/4']
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -239,14 +422,18 @@ jobs:
         with:
           go-version-file: go.mod
           cache: ${{ env.RESTORE_CACHES == 'true' }} # no cache on the release path (IR-22)
-      - run: make test-heap
+      - name: heap-bound tests, shard ${{ matrix.shard }}
+        env:
+          SHARD: ${{ matrix.shard }}
+        run: make test-heap TEST_HEAP_SHARD="$SHARD"
 
-  # The binary and the dashboard it embeds, then every package (tests
-  # included) compiled and vetted for each platform the release ships: lint
-  # and test run on linux only, and a windows- or darwin-only break would
-  # otherwise first fail in a tag's CI (#128), long after its PR merged.
+  # The binary and the dashboard it embeds, served, and the README's
+  # `go install` path. The platform compile is the cross-build job below.
   build:
-    if: github.event_name != 'schedule'
+    needs: changes
+    if: >-
+      !cancelled() && github.event_name != 'schedule' &&
+      (needs.changes.outputs.go == 'true' || needs.changes.result != 'success')
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -263,11 +450,49 @@ jobs:
       # index.html whose JS and CSS 404 is a blank dashboard (#128).
       - name: the binary serves the dashboard and every asset it references
         run: make dashboard-smoke
-      - name: compile for linux, darwin and windows (amd64, arm64)
-        run: make cross-build
       # The README's `go install` path: the binary names a real version
       # and commit, and serves the dashboard with every asset it references.
       - run: make go-install-check
+
+  # Every package (tests included) compiled and vetted for each platform the
+  # release ships: lint and test run on linux only, and a windows- or
+  # darwin-only break would otherwise first fail in a tag's CI (#128), long
+  # after its PR merged. Six platforms took 654 s in one step (run
+  # 38038631216), so one job per OS, side by side. On a pull request only for
+  # a change that can break a compile (the cross filter: Go files, module
+  # files, GoReleaser, the Makefile, hack/cross-build.sh); always on a push
+  # to main, a dispatch and a release. hack/ci-gates_test.sh
+  # fails if these legs do not add up to every platform in hack/cross-build.sh.
+  cross-build:
+    name: cross-build (${{ matrix.os }})
+    needs: changes
+    if: >-
+      !cancelled() && github.event_name != 'schedule' &&
+      (needs.changes.outputs.cross == 'true' || needs.changes.result != 'success')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: linux
+            platforms: linux/amd64 linux/arm64
+          - os: darwin
+            platforms: darwin/amd64 darwin/arm64
+          - os: windows
+            platforms: windows/amd64 windows/arm64
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: ${{ env.RESTORE_CACHES == 'true' }} # no cache on the release path (IR-22)
+      - name: compile for ${{ matrix.os }} (amd64, arm64)
+        env:
+          CROSS_BUILD_PLATFORMS: ${{ matrix.platforms }}
+        run: make cross-build
 
   # THIRD_PARTY_NOTICES (shipped in every archive, package and image) is
   # current, and every Go module and bundled npm package carries a license
@@ -295,6 +520,10 @@ jobs:
   # Reachable vulnerabilities in the shipped binary. Weekly too, because new
   # advisories land without any commit here.
   vuln:
+    needs: changes
+    if: >-
+      !cancelled() &&
+      (needs.changes.outputs.go == 'true' || needs.changes.result != 'success')
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -383,7 +612,10 @@ jobs:
   # ready, not-ready, stale, unassessed and missing ClusterReadiness fixtures,
   # and renovate-config-validator (pinned in hack/renovate) on the preset.
   examples:
-    if: github.event_name != 'schedule'
+    needs: changes
+    if: >-
+      !cancelled() && github.event_name != 'schedule' &&
+      (needs.changes.outputs.go == 'true' || needs.changes.result != 'success')
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -400,7 +632,10 @@ jobs:
   # nothing. The from-source build cross-compiles from the runner's platform
   # and Dockerfile.release only COPYs a binary, so no emulation is needed.
   images:
-    if: github.event_name != 'schedule'
+    needs: changes
+    if: >-
+      !cancelled() && github.event_name != 'schedule' &&
+      (needs.changes.outputs.go == 'true' || needs.changes.result != 'success')
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
@@ -506,11 +741,14 @@ jobs:
           echo "Postgres images ($set): $images"
           echo "images=$images" >> "$GITHUB_OUTPUT"
 
-  # Store conformance against a real Postgres: 17 on every PR and push, the
-  # supported range 14-18 on the schedule (and on demand).
+  # Store conformance against a real Postgres: 17 on every PR that changes
+  # code and every push, the supported range 14-18 on the schedule (and on demand).
   pg-conformance:
     name: postgres store conformance (postgres:${{ matrix.pg }})
-    needs: pg-matrix
+    needs: [changes, pg-matrix]
+    if: >-
+      !cancelled() && needs.pg-matrix.result == 'success' &&
+      (needs.changes.outputs.go == 'true' || needs.changes.result != 'success')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     strategy:
@@ -573,7 +811,7 @@ jobs:
     needs: changes
     if: >-
       !cancelled() && github.event_name != 'schedule' &&
-      (needs.changes.outputs.release == 'true' || needs.changes.result == 'skipped')
+      (needs.changes.outputs.release == 'true' || needs.changes.result != 'success')
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -924,7 +1162,7 @@ jobs:
     needs: [changes, kube-matrix]
     if: >-
       !cancelled() && needs.kube-matrix.result == 'success' &&
-      (needs.changes.outputs.e2e == 'true' || needs.changes.result == 'skipped')
+      (needs.changes.outputs.e2e == 'true' || needs.changes.result != 'success')
     runs-on: ubuntu-latest # Docker preinstalled
     timeout-minutes: 45
     strategy:
@@ -968,7 +1206,7 @@ jobs:
     needs: [changes, kube-matrix]
     if: >-
       !cancelled() && needs.kube-matrix.result == 'success' &&
-      (needs.changes.outputs.e2e == 'true' || needs.changes.result == 'skipped')
+      (needs.changes.outputs.e2e == 'true' || needs.changes.result != 'success')
     runs-on: ubuntu-latest
     timeout-minutes: 15
     strategy:
@@ -1035,22 +1273,52 @@ jobs:
   # The one check to require in a branch ruleset (#58). The kube job names
   # change with the matrix and most jobs skip on some events (docs-only PRs
   # skip kube), so none of them is a stable required check. This job always
-  # runs and fails if anything it needs failed or was cancelled; skipped is
-  # fine, that is a job not meant for this event. A skipped required check
-  # counts as passing, hence if: always(). hack/ci-ok_test.sh (make
-  # hack-test) fails if a job is missing from needs.
+  # runs and fails if anything it needs failed or was cancelled. A skipped
+  # job passes only if it is one that skips for the event by its own `if`, or
+  # a gated job (hack/ci-ok.sh lists them) that the changes job RAN and said
+  # is not needed: a gated job skipped because changes failed, was cancelled
+  # or said it IS needed fails the check. On a push to main only the docs-only
+  # skips that push always had (kube and envtest on e2e, release-check on
+  # release) are accepted; any other gated job skipped there fails, whatever
+  # the changes outputs say. A gated job runs whenever the changes job did not
+  # succeed (a failed one on main keeps its old test signal; on a pull request
+  # ci-ok fails on the changes job itself). A skipped required check counts as
+  # passing, hence if: always(). hack/ci-ok_test.sh (make hack-test) fails
+  # if a job is missing from needs, and runs the verdict through every
+  # scenario; hack/ci-gates_test.sh checks the gates against this file.
+  #
+  # How long a pull request takes, from the jobs' own start and end times
+  # (gh run view <run> --json jobs; the run's wall time is the slowest path):
+  #   before, run 38038631216 (a one-line ci.yml change; every job ran): 22 m
+  #     51 s wall; test-heap 22 m 19 s was the critical path, then test 12 m
+  #     36 s, build 12 m 17 s, release-check 11 m 22 s.
+  #   before, run 38031481959 (docs and a Go test file): 22 m 11 s wall;
+  #     test-heap 22 m 1 s, test 8 m 34 s, build 12 m 14 s.
+  #   after: expected from the duration tables, NOT measured. A code PR:
+  #     test-heap shards about 305 s of tests each, the test shards about half
+  #     of 562 s, so about 7 to 10 minutes. A PR that changes no Go code
+  #     (documentation, CI, scripts): the test job in readers scope, whose
+  #     slowest shard carries 336 s of -race package weight (a relative
+  #     figure: the packages ran in parallel on one runner), plus checkout,
+  #     setup and compile, so the 4 to 6 minutes first hoped for is unproven
+  #     and may be exceeded. The unit tests of those packages are not skipped
+  #     on any PR because two of them read every file of the checkout. The
+  #     measured figures of this change's own pull request runs go here and in
+  #     its description; they need a docs-only run and a small code run apart
+  #     (a PR that edits ci.yml runs everything).
   ci-ok:
     if: always()
-    needs: [changes, lint, test, test-heap, build, notices, vuln, web, helm, examples, images, registry, pg-matrix, pg-conformance, release-check, action, kube-matrix, kube, envtest, kb-freshness]
+    needs: [changes, lint, test, repo-checks, test-heap, build, cross-build, notices, vuln, web, helm, examples, images, registry, pg-matrix, pg-conformance, release-check, action, kube-matrix, kube, envtest, kb-freshness]
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:
-      - name: every job passed or was skipped
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: hack/ci-ok.sh
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - name: every job passed or was skipped for a reason that holds
         env:
           NEEDS: ${{ toJSON(needs) }}
-        run: |
-          jq -r 'to_entries[] | "\(.key) \(.value.result)"' <<<"$NEEDS" | sort | tee "$RUNNER_TEMP/results"
-          if bad=$(grep -Ev ' (success|skipped)$' "$RUNNER_TEMP/results"); then
-            echo "::error::not every job passed: $(tr '\n' ' ' <<<"$bad")"
-            exit 1
-          fi
+          EVENT: ${{ github.event_name }}
+        run: hack/ci-ok.sh
