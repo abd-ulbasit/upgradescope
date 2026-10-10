@@ -62,21 +62,22 @@ for (a what-if) without going back to the cluster.
 | `internal/inventory` | The `Inventory` contract (what was observed) and Kubernetes `Version` parsing | nothing |
 | `internal/collect` | Builds an `Inventory` from a live cluster (client-go) or from rendered manifests | `inventory`, `kb`, `registry` |
 | `registry` | The add-on EOL/compatibility dataset: schema, validator, embedded YAML loader | nothing internal (importable on its own) |
+| `api` | Embeds the published report schema so the MCP server can hand it to clients as a tool output schema | nothing internal |
 | `internal/kb` | Loads the knowledge base: API lifecycle data, the registry, and the version-skew policy | `inventory`, `registry` |
 | `internal/engine` | `Evaluate` and `Score`: pure, deterministic, no I/O | `inventory`, `kb`, `registry` |
-| `internal/sarif` | Renders a report as SARIF 2.1.0 | `engine` |
+| `internal/sarif` | Renders a report as SARIF 2.1.0 | `engine`, `inventory` |
 | `internal/junit` | Renders a report as JUnit XML for Jenkins, GitLab and Azure Pipelines | `engine`, `inventory` |
 | `internal/codequality` | Renders a report as a GitLab Code Quality report | `engine`, `inventory` |
 | `internal/suppress` | Applies ignore rules, annotations and a baseline to a report | `engine`, `inventory` |
 | `internal/secretfile` | Reads a token or URL from a mounted file and re-reads it when the file changes | nothing internal |
 | `internal/textsafe` | Makes text a manifest or cluster controls safe to print to a terminal or a CI log | nothing internal |
 | `internal/mcp` | The MCP server behind `upgradescope mcp`: tools, schemas and the stdio and HTTP transports; what a scan does stays in the CLI's code, handed in through its config | `engine`, `registry`, `api` |
-| `internal/crd` | `ClusterReadiness` types, the embedded CRD manifest, and status projection and writes | `engine`, client-go |
-| `internal/agent` | The in-cluster loop and the snapshot push client | `collect`, `engine`, `crd`, `kb` |
-| `internal/server` | Ingest, read API, what-if, gate, exports, team mapping, delta notifications, SPA serving | `engine`, `kb`, `collect` (manifests only), `sarif`, `junit`, `codequality`, `suppress`, `secretfile` |
-| `internal/server/store` | The `Store` interface and its SQLite and Postgres implementations, with embedded migrations | nothing internal |
+| `internal/crd` | `ClusterReadiness` types, the embedded CRD manifest, and status projection and writes | `engine`, `suppress`, client-go |
+| `internal/agent` | The in-cluster loop and the snapshot push client | `collect`, `crd`, `engine`, `inventory`, `kb`, `secretfile`, `suppress` |
+| `internal/server` | Ingest, read API, what-if, gate, exports, team mapping, delta notifications, SPA serving | `codequality`, `collect` (manifests only), `engine`, `inventory`, `junit`, `kb`, `registry`, `sarif`, `secretfile`, `server/notify`, `server/store`, `suppress` |
+| `internal/server/store` | The `Store` interface and its SQLite and Postgres implementations, with embedded migrations | `engine` |
 | `internal/server/notify` | Slack and generic-webhook delivery | nothing internal |
-| `internal/cli` | cobra commands, flag validation, output writers, exit codes | everything above |
+| `internal/cli` | cobra commands, flag validation, output writers, exit codes | `agent`, `codequality`, `collect`, `engine`, `inventory`, `junit`, `kb`, `mcp`, `sarif`, `secretfile`, `server`, `server/notify`, `server/store`, `suppress`, `textsafe` |
 | `tools/gen-kb` | A separate Go module that regenerates the API lifecycle dataset from `k8s.io/api` | `k8s.io/api` |
 | `tools/eol-sync` | A separate Go module that syncs registry EOL fields with the endoflife.date API | stdlib only |
 | `web/` | React + TypeScript dashboard, built by Vite and embedded with `go:embed` | the REST API |

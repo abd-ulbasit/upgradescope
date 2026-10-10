@@ -77,11 +77,10 @@ three skipped tests (`not-assessed/deprecated-calls`, `not-assessed/helm`,
 `not-assessed/versions`) and no passed test. Do not count passed tests to
 detect a clean files-mode scan; the exit code says it. Jenkins fails a build
 whose reports hold no tests, and skipped tests are tests, so neither case
-fails it. Times are 0, so the file is the same
-on every run of the same scan. The file validates against the Jenkins JUnit
-schema, the xUnit plugin's `junit-10.xsd` (vendored in
-`internal/junit/junittest`), so readers that validate strictly accept it
-too.
+fails it. Times are 0, so the file is the same on every run of the same
+scan. The file validates against the Jenkins JUnit schema, the xUnit
+plugin's `junit-10.xsd` (vendored in `internal/junit/junittest`), so readers
+that validate strictly accept it too.
 
 **GitLab Code Quality** (`--output gitlab-codequality`): one entry per
 finding and object located in a file, on that file and line (line 1 when

@@ -71,6 +71,7 @@ internal/
   suppress/            ignore rules, annotations and baselines applied to a report
   secretfile/          reads a token or URL from a mounted file and re-reads it on change
   textsafe/            makes manifest-controlled text safe for terminals and CI logs
+api/                   OpenAPI and the report and webhook JSON schemas; embeds the report schema for the MCP server
 registry/              the add-on EOL/compat dataset (data/*.yaml), its schema and validator
 tools/
   gen-kb/              separate Go module: regenerates internal/kb/data/apilifecycle.json
