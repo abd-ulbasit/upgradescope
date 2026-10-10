@@ -19,6 +19,61 @@ a CI gate.
 
 ### Added
 
+- `agent --pod-pass-every` (default `3`) and `--pod-pass-max-age` (default
+  `1h`; chart `agent.podPassEvery` and `agent.podPassMaxAge`) set how often
+  the agent lists every pod outside kube-system; what that does to results
+  is under **Changed**. `addOnEvidenceAgeSeconds` (optional; in the
+  inventory, the report and `api/report.schema.json`, and
+  `ClusterReadiness.status`) is the age of the pod pass the add-on evidence
+  comes from. It is also the gauge
+  `upgradescope_addon_evidence_age_seconds`, in the tick's log line and on
+  the dashboard's Cluster view, and it is left out of the snapshot hash, so
+  a reusing tick pushes nothing new. The agent warns at start when
+  `--pod-pass-max-age` is at or below `(--pod-pass-every - 1) x 1.1 x
+  --interval`, the least that reusing a pass on every tick between two full
+  passes needs, and names the remedies: raise the max age or lower
+  `--pod-pass-every` (#228).
+- `serve --require-read-credential` never opens the read API: a read with no
+  credential, or with a bearer nothing knows, gets `401` even when the
+  database holds no read token, so a lost or restored database cannot reopen
+  it. `serve` refuses it together with `--allow-anonymous-read`, and warns
+  at startup, ending with the mint command (`upgradescope tokens create
+  --read --teams '*'`), while no read credential exists yet. The chart
+  passes it by default (see **Changed**) (#295).
+- `serve` and the agent re-read the files behind their `--*-file` flags (the
+  token files, `--slack-webhook-file`, `--webhook-file` and
+  `--webhook-secret-file`) when they change, at most every 5 s, and swap the
+  value atomically; the three server tokens reload as one group, so two of
+  them can never end up equal. An empty, unreadable, oversized or colliding
+  new file keeps the old value, and the log names the file, never its
+  content; a read or admin token file that empties or disappears never opens
+  the read API. A value from a flag or an environment variable is still read
+  once. New `serve --optional-secret-file` names the `--*-file` flags whose
+  file may be missing at start, as a key absent from a Secret you manage is:
+  removing a required ingest-token file keeps the old token, and removing
+  the optional one leaves per-cluster tokens only (#255).
+- `agent --pprof-addr HOST:PORT` serves Go's profiler on its own listener.
+  It is off by default and refused on any address but loopback; reach it in
+  a pod with `kubectl port-forward` ("Profiling the agent" in
+  `docs/observability.md`) (#247).
+- Retention is observable:
+  `upgradescope_retention_prune_failures_total{store}`,
+  `upgradescope_retention_last_success_timestamp_seconds` (set only after a
+  complete prune) and `upgradescope_retention_rows_deleted_total{table}`;
+  none exists with `--retention=0`, and `/readyz` is unaffected. The chart's
+  PrometheusRule adds `UpgradescopeRetentionStale`, which fires when there
+  has been no successful prune in 2 days, or when a process that has
+  completed no prune counts a failure, so a server that restarts more often
+  than that and fails its startup prune every time is caught too (#263,
+  #296).
+- The knowledge base gives 33 more removed APIs their GA replacement, cited
+  from the successor's changelog and marked as defaulted in the generator; a
+  removal past the knowledge base's horizon reads "(projected)" in live and
+  Helm-manifest findings alike, and a target past it notes that its version
+  knowledge is projected (#266).
+- Registry data synced with endoflife.date: Calico 3.33 (3.31 ended
+  2026-10-01), Istio 1.31 on Kubernetes up to 1.37, and EKS 1.37 (standard
+  support to 2027-12-01, extended to 2028-12-01) (#277).
 - `GET /api/v1/fleet/teams` carries each team's `verdict`: the worst of its
   verdicts in the clusters evaluated, `blocked` over `unknown` over `ready`.
   A team with a clean score can still be `blocked` by a blocker no team
@@ -443,6 +498,187 @@ a CI gate.
 
 ### Changed
 
+- **Breaking:** the `ClusterReadiness` CRD group is now
+  `upgradescope.basit.engineer`, not `upgradescope.dev` (a domain the
+  project does not own), and every annotation key moved with it:
+  `upgradescope.basit.engineer/ignore`, `/ignore-reason`, `/status-error`
+  and, in the example Kyverno and Gatekeeper policies, `/upgrade-target`.
+  The kind, `v1alpha1`, the short name `ucr` and the object name are
+  unchanged. Entries in this file written before the move still show the old
+  names. Nothing migrates in place, because the new CRD is a different
+  resource. Before `helm upgrade`, apply it: `kubectl apply -f
+  deploy/chart/crds/clusterreadinesses.upgradescope.basit.engineer.yaml` of
+  the release you upgrade to (Helm never installs CRDs on upgrade, and the
+  chart's agent may not create them). Then carry over `spec.targets` and
+  `spec.ignore`, rewrite your annotations, point Argo CD and Flux health
+  checks (the Argo CD key is now
+  `resource.customizations.health.upgradescope.basit.engineer_ClusterReadiness`),
+  policies and RBAC at the new group, and delete the old CRD with `kubectl
+  delete crd clusterreadinesses.upgradescope.dev`; "The API group moved" in
+  `docs/operations/upgrade.md` has each step. Without the new CRD the
+  chart's agent exits at start with an error that names the exact `kubectl
+  apply` command (with `agent.manageCRD=false` it stays up and every tick
+  fails with it, in `/readyz` and the log), and the install notes print the
+  command after the upgrade. The scanner reads the old
+  `upgradescope.dev/ignore` and `ignore-reason` annotations until v0.3.0,
+  prefers the new key when an object has both, writes only the new ones, and
+  warns once, naming the first five objects, that the old keys are
+  deprecated. The agent never deletes the old CRD: it logs one warning with
+  the delete command (#68, #221).
+- **Breaking for chart users:** with `server.enabled` and no
+  `server.readToken`, the chart now passes `serve
+  --require-read-credential`, so the read API, the dashboard's data,
+  `/api/v1/gate`, `/metrics` and the MCP fleet reads answer `401` until you
+  mint a read token (the install notes print the command). Before, they were
+  open until the first token was minted, and a lost PVC, an emptyDir
+  (`persistence.enabled=false`), a restored backup or a fresh `--db-url`
+  reopened them; a team token the new store did not know even got fleet
+  scope. To keep an open read API, set `server.allowAnonymousRead=true`
+  explicitly. A release that set `server.ingress.allowAnonymousRead=true`
+  only to use minted tokens (the earlier advice) stays open after a database
+  loss until you drop it. `metrics.serviceMonitor` without
+  `server.readToken` fails the render, and so does a `server.extraArgs`
+  entry that contradicts the mode the chart renders
+  (`--allow-anonymous-read` or `--require-read-credential`, either way). On
+  any read API that is open, a bearer that matches no known credential now
+  gets `401` instead of fleet scope (leave a CI `READ_TOKEN` placeholder
+  empty), and a request whose Host is not `localhost`, a loopback address,
+  the address it arrived on, a chart-named Service name or an
+  `--allowed-host` gets `421`, on every listener, not only a loopback one: a
+  NodePort or LoadBalancer IP needs `server.allowedHosts`
+  (`--allowed-host`). Minting or revoking a read token takes effect within
+  about a second, with no restart (#295, #309).
+- A suppression or baseline for an API the target does not serve yet (the
+  "not served until 1.X" blocker) needs the key
+  `removed-api/<group>/<version>/<kind>/unserved`. That blocker keeps the
+  category `removed-api` but no longer shares the bare key
+  `removed-api/<api>` with the removal blocker and the next-minor removal
+  warning, so a rule or baseline taken from a `--target 1.30` report can no
+  longer hide the `--target 1.37` removal blocker. A rule on the bare key
+  matches nothing for that finding, and the scan warns once and names the
+  new key. `ReadBaseline` drops the entries an older binary wrote for a
+  not-yet-served finding, so that blocker resurfaces once as new against an
+  old baseline. SARIF rule ids, JUnit test names and GitLab Code Quality
+  check names and fingerprints change for those findings (#300).
+- An add-on image pinned by digest, tagged `:latest` or tagged with a
+  version that cannot be parsed now takes the `app.kubernetes.io/version` of
+  the pods that run it, under the existing label trust rule (the name label,
+  or the chart label when there is no name label; provider builds are never
+  claimed through labels), and a parsed image tag still wins over a label.
+  The oldest version across the pods holds, in either pod order. A scan that
+  passed because such an image read as "version unknown" can now report an
+  `eol-addon` blocker and exit 2: a digest-pinned cert-manager labelled
+  v1.12.3 is a blocker once that line is past its end of life, so check a CI
+  gate before you upgrade. A pod's labels are writable by anyone with pod
+  create in the namespace, so a digest-only image's version can be forged
+  there; the damage stays in that namespace, and the oldest version wins.
+  The reused pod pass carries the label-derived version too. The
+  `addon-no-data` detail names only what the detector consulted: for an
+  inventory from an agent that predates this rule (no `collectorSchema`:
+  v0.1.x and v0.2.0-rc.1/rc.2) it says the agent did not read the pod's
+  version label, and claims no Helm app version where that agent reported
+  the chart version in its place (#301).
+- By default the agent lists every pod outside kube-system only on every
+  third tick (`--pod-pass-every=3`) or when the last full pass is an hour
+  old (`--pod-pass-max-age`), and applies the registry to that pass's images
+  and labels in between. It reads kube-system pods, Helm releases, GitOps
+  resources and IngressClasses on every tick, and lists every pod on the
+  next tick after a failed or partial pass, a version step that did not list
+  kube-system, a pass at the max age, or a change in the Helm releases and
+  GitOps chart references that name a registry add-on. An add-on installed
+  some other way, an image changed in place (`kubectl set image`) or a
+  GitOps upgrade through a version constraint that leaves the resource
+  untouched can therefore be reported as it was for up to two ticks (20
+  minutes at the default interval); `--pod-pass-every=1` lists every pod on
+  every tick, as before. Measured against 2,001 KWOK nodes, about 14,000
+  pods and 1,000 Helm releases: a tick that reuses the pass makes 20
+  requests (27.8 MiB read, 2.4 s, 1.8 CPU-seconds) and one that lists every
+  pod 31 (50.4 MiB, 4.4 s, 3.4 CPU-seconds), so a cycle of 3 averages 23.7
+  requests (computed from the medians): the target of under 25 requests is
+  met on average, not on a tick that lists every pod (#228).
+- Decoding a Helm release's manifest parses each document once, not twice:
+  the decode CPU of the lab's 1,000 release payloads fell 28.8% (9.175 s to
+  6.530 s), and that of the largest 50 by 30.0%, with the same findings and
+  the same heap (16.1 to 55.3 MiB against the 64 MiB bound). A document with
+  an anchor, alias, tag or merge key, a non-string or duplicate key, or a
+  U+0085, U+2028 or U+2029 line break is parsed the old way, so the result
+  stays byte-identical to kubectl's decoder. `docs/operations/scale.md` has
+  the measurement and the code that was measured (#285).
+- Flux OCIRepositories are listed, not fetched one by one: one paged list of
+  the namespace the `chartRef`s point into, or one cluster-wide list,
+  per-namespace when that is forbidden, and a GET only where a list is. A
+  steady tick at 1,000 Argo CD Applications and 1,000 HelmReleases went from
+  540 to 50 GitOps requests (81 in all) with all 2,000 charts resolved. The
+  chart's `rbac.gitops.flux` grants `list` too; a custom role with `get`
+  only still works, on GETs. Releases decoded before a partial Helm step's
+  deadline stay in the cache, so the next tick fetches and decodes only the
+  unread ones. They are the largest, since they sort last, which is why that
+  tick costs more CPU: a profile on the lab at 200m puts 97% of its extra
+  CPU in decoding the 51 unread releases (#248, #247).
+- Chart: the token and webhook Secrets are mounted as files (no `subPath`,
+  read-only, only the keys in use) and passed with the `--*-file` flags, not
+  as environment variables, so rotating a value, or the contents of an
+  `existingSecret`, takes effect within the kubelet's Secret sync (about a
+  minute) with no restart. This replaces the `kubectl rollout restart` the
+  #242 entry asks for; a value from `extraArgs` or `extraEnv` is read once
+  and still needs it. The upgrade rolls the pods once. A `--*-token` flag in
+  `server.extraArgs` or `agent.extraArgs` beside a chart-supplied secret
+  file now fails the render, and a same-named `UPGRADESCOPE_*_TOKEN` in
+  `extraEnv` no longer overrides the chart's file. With `server.replicas`
+  above 1, replicas may disagree on a rotated token for up to the sync
+  window (#255).
+- A cluster whose agent collected with a different lifecycle dataset or
+  add-on registry than the server's (the digests in `kbVersion`) has its
+  api-usage, helm and addons checks marked partial, so it reads `unknown`,
+  never `ready`, in reports, what-ifs and the CI gate, until the agent runs
+  the server's version; a v0.1.x agent, which sends no `kbVersion`, is
+  covered too. Expect a burst of verdict changes, and notifications, on a
+  server upgrade until the agents follow, and give the server the
+  `agent.extraRegistry` entries too (`--registry-dir`). Ingest refuses
+  (`422`) an `agentVersion` over 128 bytes, a `kbVersion` over 512 bytes, or
+  either when it is not printable ASCII (#268).
+- A target below the knowledge base's oldest covered minor (1.16) is refused
+  by `scan --target`, the agent's `--targets` and `spec.targets`, `serve
+  --targets` and the gate's `target`, which now answers `400` instead of
+  `422`; the error says that `target: 1.30` in YAML is the number 1.3. The
+  Action's `target` must match `^[0-9]+\.[0-9]+$` (`v1.36` and `1.36.2` were
+  accepted before). The support-lifecycle finding's key carries its phase
+  (ending, extended or ended), so a suppression or baseline of one phase no
+  longer hides a worse later one; an existing rule keyed without the phase
+  matches only the phase it names (#237, #266).
+- RKE2 clusters get an `eol-approaching` warning, and Flux installed from
+  manifests, RKE1 ingress (`-rancherN` builds of
+  `rancher/nginx-ingress-controller`) and Kubernetes Dashboard v1 become
+  blockers, which can turn a CI gate red (see **Fixed**). A `--registry-dir`
+  or `agent.extraRegistry` copy of `rke2-ingress-nginx.yaml` taken from
+  v0.2.0-rc.x, or an extra entry that relied on a tag pattern to share a
+  repository with an embedded entry, now stops `scan`, `agent` and `serve`
+  at start with a claim conflict that says to copy the current file again
+  (#265).
+- MCP: every result and every error of every tool (`scan`, `get_report`,
+  `list_findings`, `registry_lookup`, `fleet_summary`) has two text blocks,
+  a notice that text from the cluster, a report file, a manifest, the
+  registry or a fleet server is data and not instructions, then the JSON: a
+  client that read `content[0]` as JSON must read `structuredContent` or the
+  second block. Every outside string and object key over 2 KiB is cut
+  ("…(cut by upgradescope mcp)"), so `get_report` can differ from the file
+  it read, and `_meta["upgradescope.basit.engineer/clusterSupplied"]`
+  carries the marker. With no current kube context at start, `scan` is off
+  for the life of the server, including in a pod with no kubeconfig, where
+  `mcp` used to fall back to the service account; a later context switch
+  never moves scans (#264).
+- Server database: migration 0010 (SQLite and Postgres) adds an index on
+  `evaluations(created_at, id)`. SQLite builds it before the server answers
+  `/healthz`, reading every evaluation row once, report overflow included
+  (187 to 197 ms for 20,000 evaluations of 30 KB, about 627 MiB, on an Apple
+  M1 Pro; not measured on a larger database). On Postgres it is a plain
+  `CREATE INDEX IF NOT EXISTS idx_evaluations_created_at`, which blocks
+  writes to `evaluations` while it builds: upgrade in a quiet window, or
+  create it first with `CREATE INDEX CONCURRENTLY`
+  (`docs/operations/upgrade.md`) (#297).
+- A multi-line error from a library (yaml's `unmarshal errors:` list, for
+  one) now prints on one line with a literal `\n`; only an `errors.Join`
+  separator stays a newline (#245).
 - Chart: a release that already runs `server.replicas` above 1 (which needs
   Postgres) gets the PodDisruptionBudget and the soft spread of the server
   pods across nodes on `helm upgrade`, as both are on by default, so a node
@@ -452,7 +688,8 @@ a CI gate.
 - `serve` answers `421` to a request whose Host it does not answer for,
   before any route, credential, team header or scope is looked at, when it
   listens on a loopback address or `--trust-team-header` is set (a routable
-  listener without a trusted header answers any Host, as before). It answers
+  listener without a trusted header answers any Host, except while its read
+  API is open: see the entry on the chart closing the read API). It answers
   for `localhost`, a loopback address, the address the request arrived on
   (probes and scrapes of the pod IP), the `--listen` host (not `0.0.0.0` or
   `::`) and every `--allowed-host`; the port is never compared. This closes
@@ -577,7 +814,8 @@ a CI gate.
   of a secret value (readable by everyone who can get Deployments): after
   you change a token, a webhook URL or the contents of a Secret you named,
   run `kubectl rollout restart` on the server and agent Deployments (the
-  install notes now print the command). Every key of the chart's Secrets is
+  install notes now print the command; the chart's token and webhook
+  Secrets no longer need it, see #255). Every key of the chart's Secrets is
   now written under `data`, so from this version on, removing a value
   removes its key; the one exception is a value you remove in the same
   upgrade from an earlier chart, which keeps an inert key in the Secret
@@ -617,7 +855,8 @@ a CI gate.
   about 70 KiB each, after small ones, would take the agent past its
   `GOMEMLIMIT` at the chart's 256Mi limit (computed): raise
   `agent.resources.limits.memory` on a cluster with pods that large. The
-  target of under 25 requests is not met (#228).
+  target of under 25 requests is not met (#228; met on average by the pod
+  pass reuse described above).
 - The first tick, and every one-shot `scan`, fetches Helm releases on 8
   workers and still decodes one at a time, in order, so results and the
   release cache are unchanged; memory stays bounded at one release's decode
@@ -1055,6 +1294,76 @@ a CI gate.
 
 ### Fixed
 
+- A Helm release whose newest revision failed is judged by its newest
+  deployed revision, else its newest superseded one, which is what `helm
+  upgrade` would diff against, not the failed one; a release with only
+  failed revisions is a named partial gap on `helm`, where it used to be
+  dropped silently (#239).
+- When API discovery fails, the scanner's own deprecated-API LISTs are no
+  longer read as another client's calls, which could turn a ready cluster
+  red: those rows are withheld for that pass and `deprecated-calls` is
+  partial with the reason. The architecture and API-usage pages now match
+  the collector: there is no Endpoints LIST, four managers are trusted (with
+  the kube-scheduler caveat), and an object no writer can be attributed to
+  is "authorship unknown", not "undetected" (#239).
+- Registry false greens: RKE2's ingress entry claims only its `-hardenedN`
+  builds, so RKE1's and early RKE2's `rancher/nginx-ingress-controller`
+  `-rancherN` builds are found as Ingress NGINX (end of life) instead of
+  reading ready; Flux is found from its v2 controller images (source-,
+  kustomize-, helm-, notification- and image-controllers and source-watcher,
+  mapped to the Flux line) and as Flux v1 (`fluxcd/flux`,
+  `weaveworks/flux`), not only from its chart; Kubernetes Dashboard v1.x
+  per-arch images are matched (end of life); and RKE2 Ingress NGINX carries
+  split support, community end 2026-03-31 and SUSE Rancher Prime LTS to
+  2027-11-30, on the registry page as in the report (#265).
+- Argo CD Applications whose source is a native OCI chart (an `oci://`
+  `repoURL` and no `chart` field) are read, as a chart named after the
+  repository's last path element at `targetRevision`, for single- and
+  multi-source Applications; Flux OCIRepository versions follow Flux's
+  precedence, digest over semver over tag, and a semver constraint is
+  reported as a range, never as an exact version (#267).
+- The agent conforms its inventory before pushing: it leaves out, and names
+  as a partial gap, the Helm releases, manifest objects, add-on installs and
+  images the server would refuse, so an object with a hostile name can no
+  longer stop a cluster's reports (#268).
+- Files mode and the gate report a manifest at an API version the target
+  does not serve yet ("not served until 1.X"); a namespace-scoped ignore
+  rule no longer suppresses an add-on install that has no namespace in files
+  mode; and `storage.k8s.io/v1alpha1` VolumeAttachment is dated removed in
+  1.23, when kube-apiserver stopped serving it (#237, #266).
+- A removed or deprecated alpha API with no replacement chain, one whose
+  kind has only a later pre-GA version, now remediates to the newest later
+  version the target serves, with its stability (`migrate to
+  scheduling.k8s.io/v1beta1 Workload (beta; may need enabling)`) and a
+  projected removal marked; this covers 7 entries (Workload, PodGroup,
+  LeaseCandidate, ResourceClass, PodSchedulingContext) (#302).
+- Retention deletes in batches of at most 5,000 rows a transaction, on
+  SQLite and Postgres (evaluations, then notification baselines, then
+  snapshots), so a large backlog drains over successive transactions and
+  runs, one failure cannot wedge retention, and a run cut short keeps what
+  it committed. On SQLite the drain reads the new `evaluations(created_at,
+  id)` index instead of walking every report under the write lock on every
+  daily run, even with nothing to delete: a prune with nothing to delete
+  took about 190 ms over 20,000 evaluations of 30 KB before and 0.25 to 0.6
+  ms after (#263, #297).
+- The release path and the Action: GitHub's Latest moves only after the
+  provenance attestation exists, so a failed attest step leaves it on the
+  previous release; a `gh` older than 2.68, which lacks the flags the Action
+  passes to `gh attestation verify`, is no verifier, and the Action falls
+  back to cosign or stops with "gh 2.68 or later (or cosign) is needed to
+  verify provenance"; and a commit SHA pin installs the newest tag at that
+  commit whose release is published, or fails with "is not published yet",
+  never suggesting `verify-provenance: false` (#303, #304, #305).
+- Documentation: `CONTRIBUTING.md` and `docs/architecture.md` list every
+  subcommand and package that exists; the Renovate example uses `--output
+  json` (there is no `--format`); `other-ci.md` describes both clean JUnit
+  shapes (a clean live scan is one passing test, `readiness/no findings`; a
+  clean files-mode scan is 0 passed and 3 skipped); copy-paste examples
+  carry no dates that expire; and the sizing guidance for large pods says
+  about 60 KiB (computed), not 70, as the point past which a page of 1,000
+  pods passes the agent's `GOMEMLIMIT` at the chart's 256Mi limit. Tests now
+  fail when a documented flag does not exist or the package map drifts
+  (#306, #307, #308, #269, #290).
 - Suppressing every listed object of a removed-API finding (an
   `upgradescope.dev/ignore` annotation, or a rule with `namespace`, `name`
   or `file`) no longer hides the live callers folded into it, which could
@@ -1240,6 +1549,53 @@ a CI gate.
 
 ### Security
 
+- Text that a manifest or the cluster controls (titles, details, object
+  names, files, namespaces, warnings, the `clusters` and `tokens` list
+  commands, `serve`'s `--team-map` logs and the binary's own error text) is
+  escaped in table, markdown and text output and on stderr: C0 and C1
+  controls, DEL, bidi controls and line separators print as visible escapes,
+  so a manifest cannot move the cursor, rewrite earlier lines or reorder
+  text in a reviewer's terminal. JSON, SARIF and JUnit stay byte-exact.
+  `ci-gate.md`, `action/README.md` and the suppressions guide now say that
+  on `pull_request` the config, baseline and ignore annotations come from
+  the PR's own tree, so a PR can suppress its own findings, and show how to
+  take them from the base commit (#245).
+- `mcp --http` has header, read and idle timeouts (10 s, 60 s, 120 s) and a
+  64 KiB header cap, and no write timeout, so long scans still return. Idle
+  sessions expire after 10 minutes, at most 100 are open (a new one past
+  that gets `503` with `Retry-After`), a `401` closes the connection, and a
+  call is cancelled when its client disconnects, so an abandoned scan frees
+  the scan slot. MCP reads exactly the members the schema check judged: a
+  report with a repeated member name, or one that differs only in case from
+  a property the schema declares, is refused, and so is a
+  pattern-constrained string (`target`, `since`, a hop's `from` and `to`,
+  `support.minor`, `annualCostDelta`) over 2 KiB, which is no longer cut. A
+  cut that would break the tool's output schema is a tool error, never a
+  protocol error (#264, #298, #299).
+- The Action verifies the downloaded binary's build provenance for every
+  release that publishes it (`gh attestation verify` against this
+  repository's `release.yml` at the release's tag, on a GitHub-hosted
+  runner, or `cosign verify-blob` of `checksums.txt` with the archive pinned
+  to it by sha256): the new input `verify-provenance` is `true` by default,
+  and `false` checks the checksum only, with a warning. With it on there is
+  no unverified fallback: the `go install` fallback after a failed download
+  is gone, and release candidates are verified too. No job that builds,
+  signs or publishes a release restores a cache (a test fails if one does),
+  only the highest stable release moves `v0`, `:latest` and GitHub Latest,
+  the tag ruleset protects release tags only, so a major tag can move,
+  pg-conformance images are pinned by digest, and CI no longer uploads the
+  Action's fixture findings to code scanning from `main` (#244).
+- `kb-refresh` no longer builds its unreviewed bump in a run scheduled from
+  `main`: the scheduled workflow builds nothing and dispatches
+  `kb-refresh-build.yml` on the throwaway branch `bot/kb-refresh-build`,
+  whose jobs configure no cache (an entry written there lands in a cache
+  scope `main`'s CI and tag runs never restore). The job that commits checks
+  the dispatched run through the API (workflow path, branch, head SHA,
+  event, success, repository) and the download against the digest a seal job
+  computed, and only it can write the bot branch or open the PR. `make
+  check-toolchain` now also fails on a literal `go-version:` in a workflow,
+  and the build jobs read Go from `go.mod`, as every other job does (#273,
+  #11).
 - Built with Go 1.26.9 and `golang.org/x/net` v0.60.0 (`go.mod` requires Go
   1.26.9, and the Dockerfile pins the `golang:1.26.9` image by digest). This
   fixes the `net/http` and HTTP/2, `crypto/tls`, `html/template`,
