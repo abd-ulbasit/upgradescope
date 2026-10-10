@@ -862,7 +862,7 @@ func (s *Server) warnNoReadCredential(ctx context.Context) {
 		}
 	}
 	log.Printf("WARN server: --require-read-credential is set and no read credential exists yet (no --read-token, no active minted read token, no trusted team header): " +
-		"every read returns 401 until one is minted: 'upgradescope tokens create --read --teams '*'' with the same --db or --db-url, or set --read-token")
+		"every read returns 401 until one is minted (with the same --db or --db-url) or --read-token is set; to mint one, run: upgradescope tokens create --read --teams '*'")
 }
 
 // Ready is closed once the listener is bound. It is NEVER closed when

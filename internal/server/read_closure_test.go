@@ -136,6 +136,13 @@ func TestRequireReadCredentialSurvivesAStoreSwap(t *testing.T) {
 			if code, body := getWith(t, net.JoinHostPort("127.0.0.1", port2), "/api/v1/clusters", "localhost:"+port2, ""); code != tc.afterStart {
 				t.Errorf("anonymous read after a restart on an empty store = %d %s, want %d", code, body, tc.afterStart)
 			}
+			// A fresh process has no memory of the token. Even where the
+			// restart reopens the API for anonymous reads, the old (possibly
+			// team-scoped) token is an unknown credential: 401, not the whole
+			// fleet. This is the case the unknown-bearer rule exists for.
+			if code, body := getWith(t, net.JoinHostPort("127.0.0.1", port2), "/api/v1/clusters", "localhost:"+port2, "Bearer minted-tok"); code != http.StatusUnauthorized {
+				t.Errorf("the old token after a restart on an empty store = %d %s, want 401", code, body)
+			}
 		})
 	}
 }
@@ -272,6 +279,13 @@ func TestRequireReadCredentialStartupWarning(t *testing.T) {
 					if !strings.Contains(warn, want) {
 						t.Errorf("WARN %q does not say %q", warn, want)
 					}
+				}
+				// The command is the last thing the line says, unquoted, so
+				// it can be copied as it stands (a quote around it, or inside
+				// a quote, makes the shell see one word).
+				const cmd = "upgradescope tokens create --read --teams '*'"
+				if !strings.HasSuffix(warn, ": "+cmd) {
+					t.Errorf("WARN %q does not end with the paste-ready command %q", warn, cmd)
 				}
 			}
 			if strings.Contains(logged.String(), "open to anyone") {

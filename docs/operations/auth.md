@@ -413,7 +413,9 @@ So pick the gate's credential by what the repository can break:
 Every read that presents a bearer other than `--read-token` or the admin
 token looks it up in the store (an indexed query on its hash), and while
 no read token has been minted an open read API lists them once per
-anonymous read, before the read and fleet concurrency limits apply.
+anonymous read, and once per anonymous request whose Host is not in the
+allow-list on any path (`/`, `/healthz` and the dashboard's static files
+included), before the read and fleet concurrency limits apply.
 Requests with random bearers therefore each cost a store query; put the server behind a proxy
 that rate-limits unauthenticated clients if that matters to you.
 

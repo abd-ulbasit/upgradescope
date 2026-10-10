@@ -3,6 +3,9 @@ package cli
 import (
 	"bytes"
 	"context"
+	"fmt"
+	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"slices"
@@ -244,4 +247,96 @@ func TestServeRequireReadCredentialStartsOnAnExposedAddress(t *testing.T) {
 	if err := cmd.Execute(); err != nil {
 		t.Errorf("serve --listen 0.0.0.0:0 --require-read-credential with an empty database: %v, want it to run until cancelled", err)
 	}
+}
+
+// The first read token is minted by a second process against the database
+// the running server already holds open (the chart's install notes tell the
+// operator to `kubectl exec` the command into the server pod). With the real
+// serve wiring on a SQLite file and --require-read-credential: a read is 401,
+// `tokens create --read --teams '*'` on the same --db (its own store handle)
+// succeeds while the server runs, and the printed token reads 200 on the next
+// request with no restart.
+func TestReadTokenMintedWhileServeHoldsTheDatabase(t *testing.T) {
+	db := filepath.Join(t.TempDir(), "held.db")
+
+	// A free port to hand to serve (the real wiring does not report the bound
+	// address back); the race between closing and re-binding is accepted.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := ln.Addr().(*net.TCPAddr).Port
+	ln.Close()
+	base := fmt.Sprintf("http://127.0.0.1:%d", port)
+
+	cmd := newServeCmd()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	cmd.SetContext(ctx)
+	cmd.SetArgs([]string{"--listen", fmt.Sprintf("0.0.0.0:%d", port), "--db", db, "--require-read-credential"})
+	done := make(chan error, 1)
+	go func() { done <- cmd.Execute() }()
+	stopped := false
+	stop := func() {
+		if stopped {
+			return
+		}
+		stopped = true
+		cancel()
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Errorf("serve exited with %v, want a clean stop", err)
+			}
+		case <-time.After(10 * time.Second):
+			t.Error("serve did not stop after its context was cancelled")
+		}
+	}
+	defer stop()
+
+	status := func(path, bearer string) int {
+		t.Helper()
+		req, err := http.NewRequest(http.MethodGet, base+path, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if bearer != "" {
+			req.Header.Set("Authorization", "Bearer "+bearer)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return 0
+		}
+		resp.Body.Close()
+		return resp.StatusCode
+	}
+
+	deadline := time.Now().Add(10 * time.Second)
+	for status("/healthz", "") != http.StatusOK {
+		if time.Now().After(deadline) {
+			t.Fatalf("serve never answered /healthz; its output:\n%s", out.String())
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+
+	if got := status("/api/v1/clusters", ""); got != http.StatusUnauthorized {
+		t.Fatalf("anonymous read before any token exists = %d, want 401", got)
+	}
+	if got := status("/api/v1/clusters", strings.Repeat("a", 64)); got != http.StatusUnauthorized {
+		t.Fatalf("unknown bearer before any token exists = %d, want 401", got)
+	}
+
+	// The second process: its own store handle on the file serve holds open.
+	token, _ := createReadTokenCLI(t, db, "*")
+
+	if got := status("/api/v1/clusters", token); got != http.StatusOK {
+		t.Fatalf("the minted token against the running server = %d, want 200 with no restart", got)
+	}
+	if got := status("/api/v1/clusters", ""); got != http.StatusUnauthorized {
+		t.Errorf("anonymous read after minting = %d, want 401 (the API stays closed)", got)
+	}
+	stop()
 }
