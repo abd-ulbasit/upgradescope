@@ -16,7 +16,7 @@ cluster.
 The repository root is a composite action. It installs a release binary
 verified against the release's `checksums.txt` and, for releases from
 v0.2.0-rc.2 on, its build provenance (the release workflow at that tag built
-it: `gh attestation verify`, or `cosign verify-blob` without gh 2.49+; the
+it: `gh attestation verify`, or `cosign verify-blob` without gh 2.68+; the
 [Action's README](https://github.com/abd-ulbasit/upgradescope/blob/main/action/README.md#install-and-integrity)
 says exactly what is checked), scans rendered manifests,
 writes SARIF and a job summary, annotates the findings, and fails the step

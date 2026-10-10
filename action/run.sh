@@ -138,6 +138,34 @@ newest() {
   printf '%s' "$best"
 }
 
+# newest_first <tag>...: the release tags, newest first, one per line.
+newest_first() {
+  local rest=" $* " best
+  while [ -n "${rest// /}" ]; do
+    best=$(newest ${rest})
+    printf '%s\n' "$best"
+    rest=${rest/ $best / }
+  done
+}
+
+# release_published <tag>: whether this repository has a published release
+# for tag, from the releases/tags/<tag> API (a draft, or a tag whose release
+# workflow has not published yet, answers 404). 0: published; 1: 404; 2: the
+# API could not be asked or answered otherwise (no network, a rate limit, a
+# 5xx after the retries). GH_TOKEN, the workflow's github.token when the
+# install step passes it, raises the rate limit that GitHub-hosted runners
+# share; it goes to api.github.com over https, with no redirect followed.
+release_published() {
+  local code rc=0 auth=()
+  [ -z "${GH_TOKEN-}" ] || auth=(-H "Authorization: Bearer $GH_TOKEN")
+  code=$(curl -fsS --retry 3 --proto '=https' -o /dev/null -w '%{http_code}' \
+    -H 'Accept: application/vnd.github+json' ${auth[@]+"${auth[@]}"} \
+    "https://api.github.com/repos/$repo/releases/tags/$1" 2>/dev/null) || rc=$?
+  [ "$rc" -ne 0 ] || return 0
+  [ "$code" = 404 ] && return 1
+  return 2
+}
+
 validate() {
   local v=${INPUT_VERSION-} t=${INPUT_TARGET-} f=${INPUT_FAIL_ON-} p=${INPUT_PATH-}
   # Empty is the default: the action ref's release, else latest.
@@ -188,6 +216,30 @@ sha256() {
   if command -v sha256sum >/dev/null; then sha256sum "$1"; else shasum -a 256 "$1"; fi | awk '{print $1}'
 }
 
+# The oldest gh whose `gh attestation verify` has every flag provenance()
+# passes. Read from cli/cli's pkg/cmd/attestation/verify/verify.go at the
+# release tags (2026-10-10): `attestation verify` and --repo,
+# --deny-self-hosted-runners exist at v2.49.0 (the first gh with
+# `attestation`); --signer-workflow is absent at v2.50.0 and present at
+# v2.54.0; --source-ref (cli/cli#10308) is absent at v2.67.0 and present at
+# v2.68.0, so it sets the minimum. A gh between 2.49 and 2.67 has
+# `attestation` but rejects --source-ref ("unknown flag"), which is no sign
+# of a replaced asset.
+gh_min=2.68
+
+# gh_can_verify: whether the gh on PATH can run provenance()'s
+# `gh attestation verify`: its --help (once, offline) lists every flag the
+# call passes. Capability, never error text: a gh from before `attestation`
+# fails the --help as an unknown command, and a gh from before --source-ref
+# does not list it; both are no verifier.
+gh_can_verify() {
+  local help flag
+  help=$(gh attestation verify --help 2>&1) || return 1
+  for flag in --repo --signer-workflow --source-ref --deny-self-hosted-runners; do
+    grep -Eq -- "^[[:space:]]+(-[A-Za-z], )?$flag([[:space:]=]|\$)" <<<"$help" || return 1
+  done
+}
+
 # provenance <tag> <dir>: that the archive in dir (its sha256 already
 # matched the same release's checksums.txt) was built by this repository's
 # release workflow at refs/tags/<tag>, which checksums.txt alone cannot
@@ -212,21 +264,22 @@ provenance() {
     return
   fi
   if command -v gh >/dev/null; then
-    if gh attestation verify "$dl/$asset" --repo "$repo" --signer-workflow "$workflow" \
-      --source-ref "refs/tags/$tag" --deny-self-hosted-runners >"$dl/verify.log" 2>&1; then
-      echo "provenance OK: $asset ($tag) was built by $workflow at refs/tags/$tag (gh attestation verify)"
-      return
-    fi
-    logged "$dl/verify.log"
-    # A gh from before `gh attestation` (2.49; some self-hosted runners) is
-    # no verifier: cosign is tried next, and without cosign the step fails.
-    # Any other gh failure fails the step: cosign is never a second chance
-    # for an archive gh rejected.
-    grep -q '^unknown command "attestation" for "gh"' "$dl/verify.log" ||
+    if gh_can_verify; then
+      if gh attestation verify "$dl/$asset" --repo "$repo" --signer-workflow "$workflow" \
+        --source-ref "refs/tags/$tag" --deny-self-hosted-runners >"$dl/verify.log" 2>&1; then
+        echo "provenance OK: $asset ($tag) was built by $workflow at refs/tags/$tag (gh attestation verify)"
+        return
+      fi
+      logged "$dl/verify.log"
+      # Any gh failure fails the step: cosign is never a second chance for
+      # an archive gh rejected.
       die "provenance check failed: gh attestation verify found no attestation that $workflow built $asset at refs/tags/$tag (its output is above); nothing was installed. A replaced release asset fails here; if gh itself cannot reach the attestations API on this runner, verify-provenance: false installs on the checksum alone"
+    fi
+    # A gh too old for the call (some self-hosted runners; gh_min) is no
+    # verifier: cosign is tried next, and without cosign the step fails.
     command -v cosign >/dev/null ||
-      die "gh on PATH has no attestation command (gh 2.49 or later has it) and cosign is not on PATH to verify $asset ($tag); nothing was installed. Install gh 2.49+ or cosign (sigstore/cosign-installer) before this step, or set verify-provenance: false to install on the checksum alone"
-    echo "gh on PATH has no attestation command (gh 2.49 or later has it): verifying with cosign instead"
+      die "the gh on PATH is too old to verify provenance (it has no gh attestation verify, or no --source-ref flag), and cosign is not on PATH to verify $asset ($tag); nothing was installed. gh $gh_min or later (or cosign) is needed to verify provenance: update gh, or install cosign (sigstore/cosign-installer), before this step, or set verify-provenance: false to install on the checksum alone"
+    echo "the gh on PATH is too old to verify provenance (gh $gh_min or later is needed): verifying with cosign instead"
   fi
   if command -v cosign >/dev/null; then
     curl -fsSL --retry 3 -o "$dl/checksums.txt.sigstore.json" "$releases/download/$tag/checksums.txt.sigstore.json" ||
@@ -304,10 +357,13 @@ install() {
   # @v0.2.0-rc.2 runs v0.2.0-rc.2. GitHub's latest skips prereleases, and
   # would run an older release's engine (it missed removals added since)
   # and pass what this one blocks. At a full commit SHA, the release tag
-  # that points at that commit (the newest, if several do); a SHA that no
-  # release tag points at, or one that cannot be looked up, gets latest and
-  # a warning that says why. Any other ref (a branch, v0) has no release of
-  # its own: latest.
+  # that points at that commit: the newest of those whose release is
+  # published (a tag exists before its release does). A SHA whose tags have
+  # no published release yet fails, naming them: a SHA pin asks for that
+  # version, and latest would be another (#303). A SHA that no release tag
+  # points at, or one that cannot be looked up, gets latest and a warning
+  # that says why. Any other ref (a branch, v0) has no release of its own:
+  # latest.
   # ACTION_REF is this action's ref only when ACTION_REPOSITORY
   # (github.action_repository) is this repository: in a composite action
   # that uses this one, both are the outer action's (actions/runner#2473),
@@ -323,14 +379,32 @@ install() {
       tag=$ref
       echo "version defaults to the action ref $tag"
     elif [[ $ref =~ $commit_sha ]]; then
-      local sha at rc=0 why
+      local sha at rc=0 prc why t unpublished=
       sha=$(printf '%s' "$ref" | tr '[:upper:]' '[:lower:]')
       at=$(release_at "$sha") || rc=$?
-      # Tags match release_tag, so word splitting is safe.
-      at=$(newest $at)
-      if [ -n "$at" ]; then
-        tag=$at
-        echo "version defaults to $tag, the release at the action ref $sha"
+      # The tags at the commit, newest first; the first whose release is
+      # published wins. A tag exists before its release does (release.yml
+      # runs the whole CI suite first, and may fail before publishing), and
+      # a commit can carry an older, published candidate too. Tags match
+      # release_tag, so word splitting is safe.
+      at=$(newest_first $at)
+      tag=
+      for t in $at; do
+        prc=0
+        release_published "$t" || prc=$?
+        case $prc in
+          0) tag=$t && break ;;
+          1) unpublished="$unpublished${unpublished:+, }$t" ;;
+          *) die "cannot tell whether the release for $t, a tag at the action ref $sha, is published (the GitHub API request https://api.github.com/repos/$repo/releases/tags/$t failed); nothing was installed. Set version: to a published release (version: vX.Y.Z) and retry" ;;
+        esac
+      done
+      if [ -n "$tag" ]; then
+        echo "version defaults to $tag, the release at the action ref $sha${unpublished:+ ($unpublished, newer tags at the same commit, have no published release yet)}"
+      elif [ -n "$unpublished" ]; then
+        # A SHA pin asks for this commit's version: latest would be another
+        # one, so there is no fallback, and verify-provenance: false would
+        # not help (there is nothing to download).
+        die "the release for $unpublished, the tag(s) at the action ref $sha, is not published yet; nothing was installed. Pin a published release (version: vX.Y.Z), or wait for the release workflow to publish it and re-run"
       else
         tag=latest
         case $rc in

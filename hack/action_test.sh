@@ -8,8 +8,11 @@
 #   - action/run.sh install: input validation, sha256 verification against
 #     the release's checksums.txt and the provenance check (gh attestation
 #     verify, or cosign verify-blob; both fail closed, including on a
-#     substituted archive whose checksums.txt matches), no source build
-#     ever with verify-provenance true (a failed download installs
+#     substituted archive whose checksums.txt matches; a gh without
+#     `attestation` or without --source-ref, found by its --help, is no
+#     verifier: cosign, else a clear failure), a commit SHA's release (the
+#     newest tag there whose release is published; none published fails),
+#     no source build ever with verify-provenance true (a failed download installs
 #     nothing), the go install fallback only with verify-provenance false
 #     and a Go toolchain, the pre-provenance releases (exactly v0.1.0 and
 #     v0.1.1, never by version), a latest moved back to one of them at an
@@ -143,14 +146,17 @@ case "$(uname -m)" in x86_64 | amd64) arch=amd64 ;; *) arch=arm64 ;; esac
 asset="upgradescope_${os}_${arch}.tar.gz"
 
 # curl: serves $releases/download/<tag>/<file> from $work/rel/<tag>/<file>
-# and redirects $releases/latest to $STUB_LATEST; logs every URL. With
-# STUB_CURL_RETRIES=1 every download fails as a retried transient error.
+# and redirects $releases/latest to $STUB_LATEST; logs every URL. The
+# releases/tags/<tag> API answers 200 when $work/rel/<tag> exists, else 404
+# (a tag whose release is not published), or $STUB_API_FAIL's status for
+# every tag; it logs the request headers. With STUB_CURL_RETRIES=1 every
+# download fails as a retried transient error.
 mkdir -p "$work/stub-curl"
 cat >"$work/stub-curl/curl" <<EOF
 #!/usr/bin/env bash
-out= fmt= url=
+out= fmt= url= hdr=
 while [ \$# -gt 0 ]; do
-  case \$1 in -o) out=\$2; shift ;; -w) fmt=\$2; shift ;; -*) ;; *) url=\$1 ;; esac
+  case \$1 in -o) out=\$2; shift ;; -w) fmt=\$2; shift ;; -H) hdr="\$hdr[\$2]"; shift ;; -*) ;; *) url=\$1 ;; esac
   shift
 done
 echo "curl \$url" >>"$work/calls"
@@ -158,6 +164,12 @@ case \$url in
   "$releases/latest")
     [ -n "\${STUB_LATEST:-}" ] || { echo "curl: (22) The requested URL returned error: 404" >&2; exit 22; }
     [ "\$fmt" != '%{url_effective}' ] || printf '%s' "$releases/tag/\$STUB_LATEST" ;;
+  "https://api.github.com/repos/abd-ulbasit/upgradescope/releases/tags/"*)
+    echo "curl-headers \$hdr" >>"$work/calls"
+    code=200
+    if [ -n "\${STUB_API_FAIL:-}" ]; then code=\$STUB_API_FAIL; elif [ ! -d "$work/rel/\${url##*/}" ]; then code=404; fi
+    [ "\$fmt" != '%{http_code}' ] || printf '%s' "\$code"
+    [ "\$code" = 200 ] || { echo "curl: (22) The requested URL returned error: \$code" >&2; exit 22; } ;;
   "$releases/download/"*)
     f="$work/rel/\${url#"$releases/download/"}"
     if [ -n "\${STUB_CURL_RETRIES:-}" ]; then
@@ -198,9 +210,13 @@ fi
 cat "$work/ls-remote"
 EOF
 chmod +x "$work/stub-curl/curl" "$work/stub-go/go" "$work/stub-git/git"
-# gh: with STUB_GH_OLD=1, a gh from before `gh attestation` (2.49), as on
-# some self-hosted runners: every such call fails as an unknown command.
-# Otherwise it answers only `gh attestation verify <file> --repo <this repository>
+# gh: with STUB_GH_OLD=1, a gh from before `gh attestation` (before 2.49),
+# as on some self-hosted runners: every such call fails as an unknown
+# command. With STUB_GH_NOSOURCEREF=1, a gh from 2.49 to 2.67: it has
+# `attestation verify`, but its --help does not list --source-ref and a call
+# with it fails as cobra does, "unknown flag". Otherwise (gh 2.68 and later)
+# `gh attestation verify --help` lists the flags, and it answers
+# `gh attestation verify <file> --repo <this repository>
 # --signer-workflow <its release.yml> --source-ref refs/tags/<tag>
 # --deny-self-hosted-runners`: verified when the file's sha256 is in
 # $work/attest/<tag> (what release.yml's attestation covers for that tag),
@@ -216,6 +232,25 @@ if [ -n "\${STUB_GH_OLD:-}" ]; then
   exit 1
 fi
 [ "\$1 \$2" = "attestation verify" ] || exit 2
+if [ "\${3:-}" = --help ]; then
+  echo "Verify the integrity and provenance of an artifact using its associated cryptographically signed attestations."
+  echo
+  echo "Flags:"
+  echo "      --cert-oidc-issuer string   Issuer of the OIDC token (default \"https://token.actions.githubusercontent.com\")"
+  echo "      --deny-self-hosted-runners  Fail verification for attestations generated on self-hosted runners"
+  echo "  -o, --owner string              GitHub organization to scope attestation lookup by"
+  echo "  -R, --repo string               Repository name in the format <owner>/<repo>"
+  echo "      --signer-repo string        Repository of reusable workflow that signed attestation"
+  echo "      --signer-workflow string    Workflow that signed attestation"
+  if [ -z "\${STUB_GH_NOSOURCEREF:-}" ]; then
+    echo "      --signer-digest string      Digest associated with the signer workflow"
+    echo "      --source-ref string         Ref associated with the source workflow"
+  fi
+  exit 0
+fi
+if [ -n "\${STUB_GH_NOSOURCEREF:-}" ]; then
+  for a; do [ "\$a" != --source-ref ] || { echo "unknown flag: --source-ref"; echo "Usage:  gh attestation verify [<file-path> | oci://<image-uri>] [--owner | --repo] [flags]"; exit 1; }; done
+fi
 file=\$3
 [ "\$4 \$5 \$6 \$7" = "--repo abd-ulbasit/upgradescope --signer-workflow abd-ulbasit/upgradescope/.github/workflows/release.yml" ] &&
   [ "\$8" = --source-ref ] && [ "\${10}" = --deny-self-hosted-runners ] && [ \$# = 10 ] || { echo "stub gh: unexpected flags: \$*" >&2; exit 2; }
@@ -253,7 +288,8 @@ chmod +x "$work/stub-gh/gh" "$work/stub-cosign/cosign"
 sha_rc=cccccccccccccccccccccccccccccccccccccccc    # v0.2.0-rc.2, annotated
 sha_rc_tag=1111111111111111111111111111111111111111 # v0.2.0-rc.2's tag object
 sha_light=dddddddddddddddddddddddddddddddddddddddd # v9.9.4, lightweight
-sha_two=ffffffffffffffffffffffffffffffffffffffff   # v9.9.9-rc.1 and v9.9.9
+sha_two=ffffffffffffffffffffffffffffffffffffffff   # v9.9.9-rc.1 and v9.9.9 (published), v9.9.10 (tagged, no release)
+sha_unpub=9999999999999999999999999999999999999999 # v9.9.11 and v9.9.12-rc.1, neither with a release
 sha_float=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb # only v0 and nightly, no release
 sha_none=0123456789abcdef0123456789abcdef01234567  # no tag at all
 tab=$'\t'
@@ -268,6 +304,12 @@ $sha_light${tab}refs/tags/v9.9.4
 $sha_two${tab}refs/tags/v9.9.9^{}
 4444444444444444444444444444444444444444${tab}refs/tags/v9.9.9-rc.1
 $sha_two${tab}refs/tags/v9.9.9-rc.1^{}
+5555555555555555555555555555555555555555${tab}refs/tags/v9.9.10
+$sha_two${tab}refs/tags/v9.9.10^{}
+6666666666666666666666666666666666666666${tab}refs/tags/v9.9.11
+$sha_unpub${tab}refs/tags/v9.9.11^{}
+7777777777777777777777777777777777777777${tab}refs/tags/v9.9.12-rc.1
+$sha_unpub${tab}refs/tags/v9.9.12-rc.1^{}
 EOF
 
 # release <tag> <checksums-mode: ok|bad|missing|none> [no-archive]: a
@@ -562,8 +604,51 @@ expect "an upper-case commit SHA finds its release" 0 "installed upgradescope v0
 run install "$work/stub-curl:$work/stub-git:" INPUT_VERSION= "$own" ACTION_REF=$sha_light STUB_LATEST=v9.9.9
 expect "a lightweight release tag's SHA installs that release" 0 "installed upgradescope v9.9.4 from $releases/download/v9.9.4/$asset"
 hasnt "a lightweight release tag's SHA does not warn" "$work/out" "::warning"
+# The tags at a commit are tried newest first, and the first whose release is
+# published wins (#303): a tag exists before its release does, and an older
+# candidate at the same commit may be published and verifiable. v9.9.10 is
+# tagged at sha_two but has no release; v9.9.9 and v9.9.9-rc.1 do.
 run install "$work/stub-curl:$work/stub-git:" INPUT_VERSION= "$own" ACTION_REF=$sha_two STUB_LATEST=v9.9.4
-expect "a SHA with a candidate and its release installs the release" 0 "installed upgradescope v9.9.9 from $releases/download/v9.9.9/$asset"
+expect "a SHA whose newest tag has no release installs the next published one (v9.9.9, not v9.9.10)" 0 "installed upgradescope v9.9.9 from $releases/download/v9.9.9/$asset"
+has "...with its provenance verified" "$work/out" "provenance OK: $asset (v9.9.9) was built by abd-ulbasit/upgradescope/.github/workflows/release.yml at refs/tags/v9.9.9"
+has "...and logs the version and the newer tag without a release" "$work/out" "version defaults to v9.9.9, the release at the action ref $sha_two (v9.9.10, newer tags at the same commit, have no published release yet)"
+has "the unpublished tag is probed with the releases/tags API" "$work/calls" "curl https://api.github.com/repos/abd-ulbasit/upgradescope/releases/tags/v9.9.10"
+has "the published tag is probed with the releases/tags API" "$work/calls" "curl https://api.github.com/repos/abd-ulbasit/upgradescope/releases/tags/v9.9.9"
+hasnt "the walk stops at the first published release (the older candidate is not probed)" "$work/calls" "releases/tags/v9.9.9-rc.1"
+hasnt "a SHA with a published release never asks for the latest release" "$work/calls" "$releases/latest"
+hasnt "a SHA with a published release does not warn" "$work/out" "::warning"
+[ "$(grep -n 'releases/tags/v9.9.10' "$work/calls" | head -n 1 | cut -d: -f1)" -lt "$(grep -n 'releases/tags/v9.9.9$' "$work/calls" | head -n 1 | cut -d: -f1)" ] &&
+  ok "the tags are probed newest first" || fail "the tags are probed newest first" "$work/calls"
+# GH_TOKEN, the install step's github.token, authenticates the probe (the
+# rate limit GitHub-hosted runners share); without it the request is
+# anonymous.
+run install "$work/stub-curl:$work/stub-git:" INPUT_VERSION= "$own" ACTION_REF=$sha_two GH_TOKEN=stub-token
+has "the probe sends the workflow token to api.github.com" "$work/calls" "curl-headers [Accept: application/vnd.github+json][Authorization: Bearer stub-token]"
+run install "$work/stub-curl:$work/stub-git:" INPUT_VERSION= "$own" ACTION_REF=$sha_two
+has "the probe is anonymous without a token" "$work/calls" "curl-headers [Accept: application/vnd.github+json]"
+hasnt "the probe sends no Authorization header without a token" "$work/calls" "Authorization"
+# Tags at the commit, none with a published release: a SHA pin asks for that
+# version, so latest is no answer, and neither is verify-provenance: false.
+for vp in true false; do
+  run install "$work/stub-curl:$work/stub-git:$work/stub-go:" INPUT_VERSION= "$own" ACTION_REF=$sha_unpub STUB_LATEST=v9.9.4 INPUT_VERIFY_PROVENANCE=$vp
+  expect "a SHA whose only tags have no release fails, naming them, newest first (verify-provenance: $vp)" 1 \
+    "the release for v9.9.12-rc.1, v9.9.11, the tag(s) at the action ref $sha_unpub, is not published yet; nothing was installed. Pin a published release (version: vX.Y.Z), or wait for the release workflow to publish it and re-run"
+  hasnt "...without suggesting verify-provenance: false (verify-provenance: $vp)" "$work/out" "verify-provenance"
+  hasnt "...without falling back to latest (verify-provenance: $vp)" "$work/calls" "$releases/latest"
+  hasnt "...or to a source build (verify-provenance: $vp)" "$work/calls" "go "
+  hasnt "...or downloading anything (verify-provenance: $vp)" "$work/calls" "$releases/download/"
+  [ "$(grep -c '^::' "$work/out")" = 1 ] && installed_nothing && ok "...and installs nothing, with one error (verify-provenance: $vp)" ||
+    fail "...and installs nothing, with one error (verify-provenance: $vp)" "$work/out"
+done
+# An API answer that is neither 200 nor 404 (a rate limit, an outage) is not
+# "unpublished": the step cannot tell, and says so.
+for st in 403 503; do
+  run install "$work/stub-curl:$work/stub-git:" INPUT_VERSION= "$own" ACTION_REF=$sha_two STUB_API_FAIL=$st
+  expect "a releases/tags API error ($st) fails: it cannot tell whether v9.9.10 is published" 1 \
+    "cannot tell whether the release for v9.9.10, a tag at the action ref $sha_two, is published"
+  hasnt "...and does not fall back to latest ($st)" "$work/calls" "$releases/latest"
+  installed_nothing && ok "...and installs nothing ($st)" || fail "...and installs nothing ($st)" "$work/out"
+done
 run install "$work/stub-curl:$work/stub-git:" INPUT_VERSION= "$own" ACTION_REF=$sha_rc_tag STUB_LATEST=v9.9.4
 warned "an annotated tag's own object is not the commit it tags" "no release tag"
 run install "$work/stub-curl:$work/stub-git:" INPUT_VERSION= "$own" ACTION_REF=$sha_float STUB_LATEST=v9.9.4
@@ -727,21 +812,91 @@ installed_nothing && ok "no bundle: nothing installed" || fail "no bundle: nothi
 verifier="$work/stub-cosign:" run install "$work/stub-curl:" INPUT_VERSION=v9.9.1
 expect "cosign: a release verifies at its own tag" 0 "provenance OK: checksums.txt (v9.9.1)"
 
-# A gh too old to have `gh attestation` (self-hosted runners) is not a
-# verifier: cosign verifies when it is on PATH, else the step fails and
-# says what to install. Nothing from the old gh is relayed unprefixed.
-verifier="$work/stub-gh:$work/stub-cosign:" run install "$work/stub-curl:" STUB_GH_OLD=1
-expect "a gh without attestation falls back to cosign" 0 "provenance OK: checksums.txt (v9.9.9) is signed by abd-ulbasit/upgradescope/.github/workflows/release.yml at refs/tags/v9.9.9 (cosign verify-blob)"
-has "an old gh's missing attestation command is named" "$work/out" "gh on PATH has no attestation command (gh 2.49 or later has it): verifying with cosign instead"
-has "an old gh's output is prefixed" "$work/out" "| ::warning title=FORGED::from an old gh"
-verifier="$work/stub-gh:$work/stub-cosign:" run install "$work/stub-curl:" STUB_GH_OLD=1 INPUT_VERSION=v9.9.3
-expect "a gh without attestation still fails a substituted release through cosign" 1 "provenance check failed: checksums.txt for v9.9.3 is not signed by"
-installed_nothing && ok "old gh, cosign: a substituted archive is not installed" || fail "old gh, cosign: a substituted archive is not installed" "$work/out"
-verifier="$work/stub-gh:" run install "$work/stub-curl:" STUB_GH_OLD=1
-expect "a gh without attestation and no cosign fails, saying what to install" 1 \
-  "gh on PATH has no attestation command (gh 2.49 or later has it) and cosign is not on PATH to verify $asset (v9.9.9); nothing was installed"
-has "old gh, no cosign: the failure says how to opt out" "$work/out" "or set verify-provenance: false to install on the checksum alone"
-installed_nothing && ok "old gh, no cosign: nothing installed" || fail "old gh, no cosign: nothing installed" "$work/out"
+# A gh too old for the call is not a verifier (self-hosted runners): cosign
+# verifies when it is on PATH, else the step fails and says what to install.
+# "Too old" is found by asking gh (`gh attestation verify --help` must list
+# every flag the call passes), never by matching an error: a gh from before
+# `attestation` (before 2.49) has no such command, and a gh from 2.49 to 2.67
+# has it but not --source-ref (cli/cli#10308, first in 2.68.0), so the call
+# would fail as "unknown flag", which is not a replaced asset. Nothing from
+# the old gh is relayed unprefixed.
+for old in STUB_GH_OLD STUB_GH_NOSOURCEREF; do
+  case $old in
+    STUB_GH_OLD) what="a gh without attestation (before 2.49)" ;;
+    *) what="a gh without --source-ref (2.49 to 2.67)" ;;
+  esac
+  verifier="$work/stub-gh:$work/stub-cosign:" run install "$work/stub-curl:" "$old=1"
+  expect "$what falls back to cosign" 0 "provenance OK: checksums.txt (v9.9.9) is signed by abd-ulbasit/upgradescope/.github/workflows/release.yml at refs/tags/v9.9.9 (cosign verify-blob)"
+  has "$what: the too-old gh is named" "$work/out" "the gh on PATH is too old to verify provenance (gh 2.68 or later is needed): verifying with cosign instead"
+  hasnt "$what: no replaced-asset error" "$work/out" "replaced release asset"
+  [ "$(grep -c '^gh ' "$work/calls")" = 1 ] && has "$what: gh is only asked for its --help, once" "$work/calls" "gh attestation verify --help" ||
+    fail "$what: gh is called once, for --help only" "$work/calls"
+  has "$what: cosign was called" "$work/calls" "cosign verify-blob"
+  hasnt "$what: nothing from it reaches the log" "$work/out" "FORGED"
+  [ -x "$tmp/upgradescope-bin/upgradescope" ] && ok "$what: the release is installed through cosign" || fail "$what: the release is installed through cosign" "$work/out"
+  verifier="$work/stub-gh:$work/stub-cosign:" run install "$work/stub-curl:" "$old=1" INPUT_VERSION=v9.9.3
+  expect "$what still fails a substituted release through cosign" 1 "provenance check failed: checksums.txt for v9.9.3 is not signed by"
+  installed_nothing && ok "$what, cosign: a substituted archive is not installed" || fail "$what, cosign: a substituted archive is not installed" "$work/out"
+  verifier="$work/stub-gh:" run install "$work/stub-curl:" "$old=1"
+  expect "$what without cosign fails, saying gh 2.68 or later (or cosign) is needed" 1 \
+    "gh 2.68 or later (or cosign) is needed to verify provenance"
+  has "$what, no cosign: the failure names the asset and the tag" "$work/out" "to verify $asset (v9.9.9); nothing was installed"
+  has "$what, no cosign: the failure says how to opt out" "$work/out" "or set verify-provenance: false to install on the checksum alone"
+  hasnt "$what, no cosign: not reported as a replaced asset" "$work/out" "replaced release asset"
+  hasnt "$what, no cosign: not reported as a missing attestation" "$work/out" "found no attestation"
+  [ "$(grep -c '^::' "$work/out")" = 1 ] && ok "$what, no cosign: one error" || fail "$what, no cosign: one error" "$work/out"
+  installed_nothing && ok "$what, no cosign: nothing installed" || fail "$what, no cosign: nothing installed" "$work/out"
+  # With verify-provenance: false nothing needs a verifier.
+  verifier="$work/stub-gh:" run install "$work/stub-curl:" "$old=1" INPUT_VERIFY_PROVENANCE=false
+  expect "$what is not asked about with verify-provenance: false" 0 "installed upgradescope v9.9.9 from"
+  hasnt "$what: verify-provenance: false runs no gh" "$work/calls" "gh "
+done
+# A new gh (2.68 or later) verifies with gh, and cosign is not touched even
+# when it is on PATH.
+verifier="$work/stub-gh:$work/stub-cosign:" run install "$work/stub-curl:"
+expect "a gh with --source-ref verifies with gh" 0 "provenance OK: $asset (v9.9.9) was built by abd-ulbasit/upgradescope/.github/workflows/release.yml at refs/tags/v9.9.9 (gh attestation verify)"
+has "a new gh is asked for its --help once, first" "$work/calls" "gh attestation verify --help"
+[ "$(grep -c '^gh attestation verify --help' "$work/calls")" = 1 ] && ok "gh --help is run once" || fail "gh --help is run once" "$work/calls"
+hasnt "a new gh does not call cosign" "$work/calls" "cosign"
+hasnt "a new gh warns of nothing" "$work/out" "too old"
+verifier="$work/stub-gh:$work/stub-cosign:" run install "$work/stub-curl:" INPUT_VERSION=v9.9.3
+expect "a new gh that rejects an archive fails it, and cosign is not a second chance" 1 "provenance check failed: gh attestation verify found no attestation"
+hasnt "...cosign is not called after gh rejected it" "$work/calls" "cosign"
+# The capability probe, on its own: a flag is listed or it is not. A flag
+# that only starts like another (--source-digest) does not stand in for
+# --source-ref, and one named only in prose does not count.
+eval "$(sed -n '/^gh_can_verify() {$/,/^}$/p' action/run.sh)"
+canverify() { # canverify <name> <want: yes|no> <help text>
+  local got=no gh_help=$3
+  gh() { printf '%s\n' "$gh_help"; }
+  if gh_can_verify; then got=yes; fi
+  unset -f gh
+  if [ "$got" = "$2" ]; then ok "gh_can_verify: $1"; else fail "gh_can_verify: $1 (got $got, want $2)"; fi
+}
+all_flags="Flags:
+      --deny-self-hosted-runners  Fail verification
+  -R, --repo string               Repository
+      --signer-workflow string    Workflow
+      --source-ref string         Ref"
+canverify "every flag listed" yes "$all_flags"
+canverify "--source-ref missing (gh 2.49 to 2.67)" no "${all_flags/--source-ref/--source-digest}"
+canverify "--signer-workflow missing" no "${all_flags/--signer-workflow/--signer-repo}"
+canverify "--deny-self-hosted-runners missing" no "${all_flags/--deny-self-hosted-runners/--deny-nothing}"
+canverify "--repo missing" no "${all_flags/--repo/--repository}"
+canverify "a flag only in prose" no "${all_flags/--source-ref string         Ref/Ref}
+Use --source-ref soon"
+canverify "an unknown command" no 'unknown command "attestation" for "gh"'
+
+# The minimum gh is one number (run.sh's gh_min, read from cli/cli's source
+# at the release tags: --source-ref first ships in 2.68.0), and everything
+# that names a gh version names it.
+gh_min=$(sed -n 's/^gh_min=//p' action/run.sh)
+for f in action.yml action/action.yml action/README.md docs/getting-started/ci-gate.md docs/claims.md; do
+  found=$(grep -oE 'gh 2\.[0-9]+' "$f" | sort -u | tr '\n' ',' || true)
+  if [ "$gh_min" = 2.68 ] && [ "$found" = "gh $gh_min," ]; then ok "$f names gh $gh_min as the minimum, and no other"; else
+    fail "$f names gh versions '${found:-none}', want exactly 'gh $gh_min' (gh_min=$gh_min)"
+  fi
+done
 
 # No verifier: fail, and say how to opt out.
 verifier= run install "$work/stub-curl:"
