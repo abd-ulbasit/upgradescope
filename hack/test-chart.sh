@@ -251,9 +251,10 @@ assert_no_line "$TMP/server.yaml" '  serverToken: "test-token"' "no copy of the 
 assert_contains "$TMP/server.yaml" '--server-url=http://upgradescope-server.upgradescope.svc:8080' "agent points at in-chart server"
 assert_contains "$TMP/server.yaml" 'path: /healthz' "healthz probes"
 assert_not_contains "$TMP/server.yaml" '--read-token-file' "no read token unless set"
-# serve refuses an open read API on a non-loopback --listen; the chart's
-# empty readToken default opts in explicitly (NOTES.txt warns about it).
-assert_contains "$TMP/server.yaml" '--allow-anonymous-read' "empty readToken opts in to anonymous reads"
+# With no read token the chart closes the read API whatever the database
+# holds (--require-read-credential, #295); an open one is an explicit opt-in.
+assert_contains "$TMP/server.yaml" '--require-read-credential' "empty readToken closes the read API"
+assert_not_contains "$TMP/server.yaml" '--allow-anonymous-read' "no anonymous reads unless opted into"
 
 echo "== secrets never reach argv (no \$(VAR) expansion into args)"
 for f in "$TMP"/*.yaml; do
@@ -269,6 +270,34 @@ helm template upgradescope "$CHART" --namespace upgradescope \
 assert_file_secret "$TMP/readtoken.yaml" read-token /etc/upgradescope/secret-files/readToken upgradescope-server-tokens readToken secret-files "read token from the Secret, a mounted file"
 assert_not_contains "$TMP/readtoken.yaml" '--read-token=' "no read token value in args"
 assert_not_contains "$TMP/readtoken.yaml" '--allow-anonymous-read' "no anonymous reads with a read token"
+assert_not_contains "$TMP/readtoken.yaml" '--require-read-credential' "no extra flag with a read token"
+
+echo "== server assertions: open read API is an explicit opt-in"
+helm template upgradescope "$CHART" --namespace upgradescope \
+  --set server.enabled=true --set server.ingestToken=t \
+  --set server.allowAnonymousRead=true > "$TMP/open.yaml"
+assert_contains "$TMP/open.yaml" '--allow-anonymous-read' "server.allowAnonymousRead opens the read API"
+assert_not_contains "$TMP/open.yaml" '--require-read-credential' "an open read API is not also required to be closed"
+helm template upgradescope "$CHART" --namespace upgradescope \
+  --set server.enabled=true --set server.ingestToken=t \
+  --set server.ingress.allowAnonymousRead=true > "$TMP/open-ingress-flag.yaml"
+assert_contains "$TMP/open-ingress-flag.yaml" '--allow-anonymous-read' "server.ingress.allowAnonymousRead is the same opt-in"
+helm template upgradescope "$CHART" --namespace upgradescope \
+  --set server.enabled=true --set server.ingestToken=t \
+  --set server.readToken=r --set server.allowAnonymousRead=true > "$TMP/open-token.yaml"
+assert_not_contains "$TMP/open-token.yaml" '--allow-anonymous-read' "a read token wins over the opt-in"
+if helm template upgradescope "$CHART" --set server.enabled=true --set server.ingestToken=t \
+  --set 'server.extraArgs[0]=--allow-anonymous-read' >/dev/null 2>&1; then
+  fail "--allow-anonymous-read in extraArgs with the read API closed should fail the render (serve refuses both flags)"
+else
+  pass "extraArgs --allow-anonymous-read is refused while the chart closes the read API"
+fi
+if helm template upgradescope "$CHART" --set server.enabled=true --set server.ingestToken=t \
+  --set metrics.serviceMonitor.enabled=true >/dev/null 2>&1; then
+  fail "a ServiceMonitor scraping a closed read API with no read token to send should fail the render"
+else
+  pass "ServiceMonitor needs server.readToken or an open read API"
+fi
 
 echo "== server assertions: no ingest token supplied -> chart generates one (one-command install)"
 helm template upgradescope "$CHART" --namespace upgradescope \
@@ -302,7 +331,7 @@ assert_file_secret "$TMP/existing.yaml" server-token /etc/upgradescope/push-toke
 assert_file_secret "$TMP/existing.yaml" slack-webhook /etc/upgradescope/secret-files-optional/slackWebhook mysec slackWebhook secret-files-optional "optional slackWebhook key"
 assert_file_secret "$TMP/existing.yaml" webhook /etc/upgradescope/secret-files-optional/webhook mysec webhook secret-files-optional "optional webhook key"
 assert_contains "$TMP/existing.yaml" '--optional-secret-file=slack-webhook,webhook,webhook-secret' "serve is told which files may be absent"
-assert_contains "$TMP/existing.yaml" '--allow-anonymous-read' "no read token unless asked for"
+assert_contains "$TMP/existing.yaml" '--require-read-credential' "no read token unless asked for: the read API is closed"
 
 echo "== server assertions: read token from existingSecret, no inline value"
 helm template upgradescope "$CHART" --namespace upgradescope \
@@ -310,6 +339,7 @@ helm template upgradescope "$CHART" --namespace upgradescope \
   --set server.readTokenFromSecret=true > "$TMP/existing-read.yaml"
 assert_file_secret "$TMP/existing-read.yaml" read-token /etc/upgradescope/secret-files/readToken mysec readToken secret-files "read token from existingSecret"
 assert_not_contains "$TMP/existing-read.yaml" '--allow-anonymous-read' "no anonymous reads"
+assert_not_contains "$TMP/existing-read.yaml" '--require-read-credential' "no extra flag with a read token from the Secret"
 if helm template upgradescope "$CHART" --set server.enabled=true --set server.readTokenFromSecret=true >/dev/null 2>&1; then
   fail "readTokenFromSecret without existingSecret should fail"
 else
@@ -343,7 +373,7 @@ assert_no_line "$TMP/hub.yaml" 'kind: ClusterRoleBinding'    "no ClusterRoleBind
 assert_not_contains "$TMP/hub.yaml" '--server-token-file' "no agent push token"
 helm template upgradescope "$CHART" --namespace upgradescope \
   --set agent.enabled=false --set server.enabled=true --set server.ingestToken=t \
-  --set agent.serverToken=x --set agent.serverUrl=https://x.example \
+  --set server.readToken=r --set agent.serverToken=x --set agent.serverUrl=https://x.example \
   --set metrics.serviceMonitor.enabled=true --set metrics.prometheusRule.enabled=true \
   --set networkPolicy.enabled=true \
   --set-json 'networkPolicy.serverIngressFrom=[{"namespaceSelector":{"matchLabels":{"kubernetes.io/metadata.name":"ingress"}}}]' > "$TMP/hub-extras.yaml"
@@ -404,11 +434,17 @@ if helm template upgradescope "$CHART" --set server.enabled=true --set server.in
 else
   pass "Ingress needs server.ingress.host"
 fi
+# No read token and no opt-in: the read API is closed, so the Ingress renders.
+helm template upgradescope "$CHART" --namespace upgradescope --set server.enabled=true --set server.ingestToken=t \
+  --set server.ingress.enabled=true --set server.ingress.host=u.example.com > "$TMP/hub-ingress-closed.yaml"
+assert_line "$TMP/hub-ingress-closed.yaml" 'kind: Ingress' "Ingress in front of a closed read API (minted tokens) renders"
+assert_contains "$TMP/hub-ingress-closed.yaml" '--require-read-credential' "... and the read API is closed"
 if helm template upgradescope "$CHART" --set server.enabled=true --set server.ingestToken=t \
-  --set server.ingress.enabled=true --set server.ingress.host=u.example.com >/dev/null 2>&1; then
+  --set server.ingress.enabled=true --set server.ingress.host=u.example.com \
+  --set server.allowAnonymousRead=true >/dev/null 2>&1; then
   fail "an Ingress in front of an open read API should fail the render"
 else
-  pass "Ingress needs a read token (or allowAnonymousRead behind an auth layer)"
+  pass "an open read API behind an Ingress needs server.ingress.allowAnonymousRead (an auth layer in front)"
 fi
 helm template upgradescope "$CHART" --namespace upgradescope --set server.enabled=true --set server.ingestToken=t \
   --set server.ingress.enabled=true --set server.ingress.host=u.example.com \

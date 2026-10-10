@@ -104,6 +104,9 @@ RELEASE=upgradescope
 IMAGE=ghcr.io/abd-ulbasit/upgradescope
 TAG=e2e
 TOKEN=e2e-token
+# The server needs a read credential (the chart closes the read API without
+# one, and a bearer nothing knows is 401 even on an open one): a read token.
+READ_TOKEN=e2e-read-token
 CR=cluster
 # The chart's agent ServiceAccount: the release name, which contains the
 # chart name (templates/_helpers.tpl fullname).
@@ -480,7 +483,7 @@ install_chart() {
   # interval=1m so a second tick comes quickly; the first fires at start.
   h upgrade --install "$RELEASE" deploy/chart --namespace "$NS" --create-namespace \
     --set image.tag="$TAG" \
-    --set server.enabled=true --set server.ingestToken="$TOKEN" \
+    --set server.enabled=true --set server.ingestToken="$TOKEN" --set server.readToken="$READ_TOKEN" \
     --set agent.interval=1m \
     --wait --timeout 5m
 }
@@ -599,7 +602,7 @@ server_ingested() {
   pf_pid=$!
   local body="" i
   for i in $(seq 1 24); do
-    body=$(curl -fsS "$SERVER_URL/api/v1/clusters" 2>/dev/null || true)
+    body=$(curl -fsS -H "Authorization: Bearer $READ_TOKEN" "$SERVER_URL/api/v1/clusters" 2>/dev/null || true)
     if grep -q '"name"' <<<"$body" && grep -q '"score"' <<<"$body"; then break; fi
     nap 5
   done
@@ -621,7 +624,7 @@ documented_gate_command() {
     /^```$/ && inb { inb = 0; if (blk ~ /\/api\/v1\/gate/) { printf "%s", blk; exit }; next }
     inb { blk = blk $0 "\n" }' "$GATE_DOC") || return 1
   [ -n "$cmd" ] || { echo "$GATE_DOC has no sh block that POSTs to /api/v1/gate" >&2; return 1; }
-  name=$(curl -fsS "$SERVER_URL/api/v1/clusters" | jq -r '.[0].name // empty') && [ -n "$name" ] ||
+  name=$(curl -fsS -H "Authorization: Bearer $READ_TOKEN" "$SERVER_URL/api/v1/clusters" | jq -r '.[0].name // empty') && [ -n "$name" ] ||
     { echo "the server lists no cluster to name in the gate command" >&2; return 1; }
   GATE_CLUSTER=$(jq -rn --arg n "$name" '$n | @uri')
   GATE_CMD=$(sed -e "s/target=[^&\"]*/target=$NEXT/" -e "s/cluster=[^&\"]*/cluster=$GATE_CLUSTER/" <<<"$cmd")
@@ -639,13 +642,13 @@ documented_gate_command() {
 # <dir> beside a copy of the manifest as rendered.yaml; with allow-incomplete
 # it also carries &allow-incomplete=true (#177), the option the page documents
 # for a target past the horizon. Returns curl's exit code; the report is
-# <dir>/results.sarif. The server has no read token here, so READ_TOKEN is
-# any value; no_proxy keeps the port-forward off a CI proxy.
+# <dir>/results.sarif. READ_TOKEN is the server's read token, as in CI;
+# no_proxy keeps the port-forward off a CI proxy.
 gate_post() {
   local cmd=$GATE_CMD
   [ "${3-}" != allow-incomplete ] || cmd=$(sed "s/target=$NEXT/target=$NEXT\&allow-incomplete=true/" <<<"$cmd")
   mkdir -p "$1" && cp "$2" "$1/rendered.yaml" || return 1
-  (cd "$1" && env SERVER="$SERVER_URL" READ_TOKEN=e2e-open-read no_proxy=127.0.0.1 sh -ec "$cmd") 2>"$1/curl.err"
+  (cd "$1" && env SERVER="$SERVER_URL" READ_TOKEN="$READ_TOKEN" no_proxy=127.0.0.1 sh -ec "$cmd") 2>"$1/curl.err"
 }
 
 # #120 (FS-04, SV-06), the clean half: a ConfigMap posted with ?cluster= adds
@@ -677,7 +680,7 @@ gate_passes_clean_manifest() {
   }
   [ "$rc" = 0 ] || { echo "clean manifest: the documented command${extra:+ with &allow-incomplete=true} exited $rc, want 0 (verdict $want):" >&2; cat "$dir/curl.err" >&2; return 1; }
   curl -fsS -X POST "$SERVER_URL/api/v1/gate?target=$NEXT&cluster=$GATE_CLUSTER&fail-on=never" \
-    -H "Content-Type: application/x-yaml" --data-binary @hack/e2e/gate/clean.yaml >"$dir/gate.json" || return 1
+    -H "Authorization: Bearer $READ_TOKEN" -H "Content-Type: application/x-yaml" --data-binary @hack/e2e/gate/clean.yaml >"$dir/gate.json" || return 1
   jq -e '.clusterVerdict == "blocked" and any(.findings[]; .severity == "blocker")
       and all(.findings[]; .source == "cluster")' "$dir/gate.json" >/dev/null || {
     echo "clean manifest: want the cluster's blockers with every finding source=cluster; got:" >&2
