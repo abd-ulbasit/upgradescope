@@ -284,10 +284,22 @@ var versionRe = regexp.MustCompile(`\d+\.\d+(\.\d+)?(-(alpha|beta|rc)(\.?\d+)*)?
 // versionFromTag is the single normalization point for every value that
 // lands in AddOnInstance.Version, so registry cycles, compat ranges and
 // findings compare against one uniform form; "" when the tag carries no
-// version ("latest", a digest-only reference).
+// version ("latest", a digest-only reference), or none that is one: a
+// pod's creator chooses the tag, and a "version" of 17 KiB of digits is
+// not a release of anything, but would make the server refuse the
+// inventory (#268), so one over maxVersionBytes reads as no version.
 func versionFromTag(tag string) string {
-	return versionRe.FindString(tag)
+	v := versionRe.FindString(tag)
+	if len(v) > maxVersionBytes {
+		return ""
+	}
+	return v
 }
+
+// maxVersionBytes is the longest version versionFromTag and
+// exactChartVersion return: well past any real one ("1.31.1-rc.1" is 11
+// bytes), well under the limit the server puts on a string.
+const maxVersionBytes = 128
 
 // versionLess orders detected versions for the conservative-oldest pick:
 // semver compare when both sides parse ("1.9.4" < "1.10.0"), falling back
@@ -316,6 +328,9 @@ func releaseLine(v string) string {
 // chart version, unlike a Helm release's, is whatever its author wrote.
 func exactChartVersion(v string) string {
 	v = strings.TrimPrefix(v, "v")
+	if len(v) > maxVersionBytes {
+		return ""
+	}
 	if _, err := semver.StrictNewVersion(v); err != nil {
 		return ""
 	}

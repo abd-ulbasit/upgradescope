@@ -79,6 +79,17 @@ func decodeHelmEntry(data []byte, flagged map[gvk]bool) helmCacheEntry {
 	if err != nil {
 		return helmCacheEntry{decodeErr: err.Error()}
 	}
+	// The chart's metadata is free text anyone who can plant a release
+	// writes, and every string of an inventory is held to a limit: a
+	// release whose chart metadata is over it is not decodable, which the
+	// capability names (a kubeVersion cut to the limit would be a narrower
+	// constraint, not the chart's).
+	m := doc.Chart.Metadata
+	for _, s := range []string{m.Name, m.Version, m.AppVersion, m.KubeVersion, doc.Info.Status} {
+		if len(s) > inventory.MaxStringBytes {
+			return helmCacheEntry{decodeErr: fmt.Sprintf("chart metadata has a value over %d bytes, which is not recorded", inventory.MaxStringBytes)}
+		}
+	}
 	apis, err := manifestAPIs(doc.Manifest, flagged)
 	e := helmCacheEntry{
 		chartName: doc.Chart.Metadata.Name, chartVersion: doc.Chart.Metadata.Version,

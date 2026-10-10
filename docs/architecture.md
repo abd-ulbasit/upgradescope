@@ -423,7 +423,12 @@ Rules for changing it:
 
 - It describes **observations, not verdicts**. Severity, EOL status and
   scores never go in the inventory. They are derived from it, so a stored
-  snapshot can be re-judged by a newer knowledge base.
+  snapshot can be re-judged by a newer knowledge base. That covers what the
+  inventory holds, not what the agent's own knowledge base left out of it
+  (API usage is listed, and add-ons matched, by the agent's data): the
+  server compares the knowledge base digests in the push envelope with its
+  own and reads the difference as a required gap, `unknown` and not
+  `ready`.
 - New fields are additive and `omitempty`. A breaking change bumps
   `schemaVersion`. The push envelope that carries the inventory has its own
   `schemaVersion` (currently 1), and the server rejects envelope versions it

@@ -52,6 +52,12 @@ type Options struct {
 	// on every call, only once ForbiddenListRecheck has passed. The agent
 	// keeps one; a one-shot scan leaves it nil.
 	GitOpsCache *GitOpsCache
+	// OnConform, when set, is called once per Collect with what the
+	// collector left out so that the server would accept the inventory
+	// (inventory.Conform's notes: counts and kinds, never an identifier),
+	// when it left out anything. The capability reasons carry the same
+	// for the report; this is for a log. The agent logs it every tick.
+	OnConform func(notes []string)
 }
 
 // listPageSize bounds every cluster-wide list call: large clusters must
@@ -140,8 +146,11 @@ func Collect(ctx context.Context, c Clients, k kb.KB, opts Options) inventory.In
 	}
 	opts.DiscoveryCache.begin()
 	c.Discovery = opts.DiscoveryCache.client(c.Discovery)
-	runSteps(ctx, &inv, steps(c, k, opts))
+	notes := runSteps(ctx, &inv, steps(c, k, opts))
 	opts.DiscoveryCache.end(&inv)
+	if len(notes) > 0 && opts.OnConform != nil {
+		opts.OnConform(notes)
+	}
 	return inv
 }
 
@@ -167,8 +176,9 @@ func (e partialError) Error() string { return e.msg }
 // degrades only its own capability, its reason naming the step deadline.
 // The last step's deadline is ctx's own, so ctx has expired with it: the
 // note is left out only when ctx was cancelled (a stop), not when its
-// deadline passed (#238).
-func runSteps(ctx context.Context, inv *inventory.Inventory, ss []step) {
+// deadline passed (#238). It returns what the final Conform left out of
+// the inventory (see below).
+func runSteps(ctx context.Context, inv *inventory.Inventory, ss []step) (conformed []string) {
 	for i, s := range ss {
 		sctx, cancel, share := stepContext(ctx, len(ss)-i)
 		err := s.run(sctx, inv)
@@ -190,8 +200,15 @@ func runSteps(ctx context.Context, inv *inventory.Inventory, ss []step) {
 	}
 	// A reason joins one failure per resource a step could not read, and
 	// object refs carry their ignore annotations whole: cut both to the
-	// inventory limits, which the server refuses a push beyond.
-	inv.CutFreeText()
+	// inventory limits, which the server refuses a push beyond. What is
+	// beyond them and cannot be cut (a Helm release or a manifest object
+	// whose name is no identifier, an image repository of 17 KiB) is left
+	// out and named in its capability (#268): the server refuses a whole
+	// inventory for one such value, and the agent would offer the same one
+	// every tick. What no repair can mend is left, and the agent, which
+	// checks again before it pushes, does not send it.
+	conformed, _ = inv.Conform()
+	return conformed
 }
 
 // stepContext derives a step's context from the scan's: an equal share of

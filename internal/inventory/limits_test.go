@@ -148,3 +148,23 @@ func TestCutFreeTextCutsToTheLimits(t *testing.T) {
 		t.Error("CutFreeText() of an inventory within the limits = true")
 	}
 }
+
+func TestAppendReason(t *testing.T) {
+	if got := AppendReason("", "add"); got != "add" {
+		t.Errorf("AppendReason(empty) = %q", got)
+	}
+	if got := AppendReason("r", "add"); got != "r; add" {
+		t.Errorf("AppendReason = %q", got)
+	}
+	// Over the bound it is the existing text that is cut, at a character
+	// boundary: what the server added is whole.
+	add := "knowledge base skew: " + strings.Repeat("x", 600)
+	got := AppendReason(strings.Repeat("é", MaxReasonBytes), add)
+	if len(got) > MaxReasonBytes || !strings.HasSuffix(got, "; "+add) || !strings.Contains(got, cutMark) || !utf8.ValidString(got) {
+		t.Errorf("AppendReason over the bound: %d bytes, suffix ok %v, cut %v, valid %v", len(got), strings.HasSuffix(got, "; "+add), strings.Contains(got, cutMark), utf8.ValidString(got))
+	}
+	// An addition over the bound on its own is cut.
+	if got := AppendReason("r", strings.Repeat("y", 2*MaxReasonBytes)); len(got) > MaxReasonBytes+len("r; ") {
+		t.Errorf("AppendReason with a huge addition = %d bytes", len(got))
+	}
+}

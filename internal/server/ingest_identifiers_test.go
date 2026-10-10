@@ -156,7 +156,7 @@ func TestIngestCutsTheFreeTextOfOlderAgents(t *testing.T) {
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("status %d (%.400s), want 202", rec.Code, rec.Body)
 	}
-	stored, err := decodeInventory(st.snapshots[len(st.snapshots)-1])
+	stored, err := decodeInventory(st.snapshots[len(st.snapshots)-1], s.cfg.KB)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -137,7 +137,15 @@ values must be within limits that collectors keep to or that no genuine
 value comes near: strings of at most 16 KiB (a capability's reason
 64 KiB, an object's field manager the apiserver's 128 printable bytes),
 at most 100 objects per API usage entry, each group/version/kind once
-per list, at most 200 unrecognized images and 32 capabilities. Anything
+per list, at most 200 unrecognized images and 32 capabilities. The agent
+keeps to them even for objects anyone with access to one namespace can
+write: a Helm release whose name is no RFC 1123 subdomain (it is named by
+its object when the `name` label is not one), whose chart metadata is over
+16 KiB, or whose stored manifest holds an object with no valid name, and
+an image repository over 16 KiB, are left out of the inventory and named
+in the capability (`helm` or `addons` partial, with the release in
+`skipped`, or the image counted in `unrecognizedImagesOmitted`), and an
+inventory the server would still refuse is not sent at all. Anything
 else is `422`, naming the field and the rule, before anything is
 stored. The free text a collector copies whole from the cluster, which
 Kubernetes lets be longer, is cut to those limits instead: a
@@ -491,6 +499,38 @@ least one core.
   deprecated-calls are reported as not assessed, with the reason, and a
   chart version is kept as evidence only, so such a cluster is `unknown`
   until its agent is upgraded.
+- **Agents with another knowledge base.** An agent collects evidence by
+  its own knowledge base: it lists API usage, and reads a Helm release's
+  stored manifest, only for the group/version/kinds its lifecycle data
+  flags, and matches add-ons against its own registry, sending what no
+  entry claims as untagged `unrecognizedImages`. The server re-judges what
+  it is sent with its own knowledge base but cannot collect what the
+  agent's did not: an API the server flags and the agent's did not was
+  never listed, and an add-on the server's registry knows and the agent's
+  did not (a retired product such as weave-net is a blocker at any
+  version) was never matched. So the server compares the lifecycle and
+  registry digests in the push's `kbVersion` with its own
+  (`<generatedFrom>; lifecycle <digest>; registry <digest>`). Where the
+  lifecycle digests differ, `api-usage` and `helm` are partial, over
+  what the server's data would have collected; where the registry digests
+  differ, `addons` is. Each names `knowledge base differs from the
+  agent's` in `skipped`, and api-usage and addons are then required gaps:
+  the verdict is `unknown` at best, never `ready`, until the agent runs
+  the same data as the server (upgrade the agent). Evidence is complete
+  only when the digests are the same, and a digest cannot say which side
+  is newer, so an agent with newer data than its server reads the same
+  way (upgrade the server then). A `kbVersion` that names no digests (not
+  in that form) names no dataset, so it is not known to be complete
+  either. The inventory carries nothing extra for this, so its size stays
+  what it was. A server that cannot read its own label (a test knowledge
+  base) judges as before. The CI gate judges the same way: `POST
+  /api/v1/gate?cluster=` reads the cluster's snapshot through the same
+  view, so a PR against a cluster collected with other data gets
+  `unknown` (and `clusterVerdict` `unknown`), not `ready`. The move to
+  `unknown` sends no notification, so upgrading the server does not notify
+  every cluster whose agent is still on older data. An inventory file given
+  to the MCP server's `inventory_file` has no push envelope, so no such
+  check applies to it ([MCP](getting-started/mcp.md)).
 - **Outdated verdicts.** A stored verdict depends on the date (EOL windows),
   the KB and the team map. The background pass re-evaluates hourly and just
   after each UTC midnight; until it has, every read of a stored verdict

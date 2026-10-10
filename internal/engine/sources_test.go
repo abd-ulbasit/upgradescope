@@ -142,6 +142,12 @@ func TestHiddenByGaps(t *testing.T) {
 			[]check{{CatRemovedAPI, endpts, true}, {CatRemovedAPI, psp, false}},
 		},
 		{
+			// The agent collected with another knowledge base (#268): any
+			// API the server flags may have gone unlisted.
+			"partial api-usage from another knowledge base", []CapabilityGap{{Capability: inventory.CapAPIUsage, Partial: true, Skipped: []string{inventory.SkippedNewerKB}}},
+			[]check{{CatRemovedAPI, psp, true}, {CatRemovedAPI, endpts, true}, {CatDeprecatedAPIInUse, cidrCall, false}},
+		},
+		{
 			// A discovery failure in a group without flagged APIs:
 			// every flagged API was read.
 			"partial api-usage naming nothing", []CapabilityGap{{Capability: inventory.CapAPIUsage, Partial: true}},

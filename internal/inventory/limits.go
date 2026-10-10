@@ -115,6 +115,8 @@ const cutMark = " …(cut)"
 //     and ignore-reason annotations (up to 256 KiB), to MaxStringBytes:
 //     Ignore to the comma-separated tokens that fit whole, IgnoreReason
 //     ending in cutMark;
+//   - an object's RenderedFrom, the text of a Helm manifest's "# Source:"
+//     comment, to MaxStringBytes, ending in cutMark;
 //   - a GitOps chart's Chart, Version and Repo, copied from a custom
 //     resource's spec, to MaxStringBytes, ending in cutMark.
 //
@@ -149,6 +151,9 @@ func (inv *Inventory) CutFreeText() bool {
 				}
 				if s, ok := cutText(o.IgnoreReason, MaxStringBytes); ok {
 					o.IgnoreReason, cut = s, true
+				}
+				if s, ok := cutText(o.RenderedFrom, MaxStringBytes); ok { // a "# Source:" comment's text
+					o.RenderedFrom, cut = s, true
 				}
 			}
 		}
@@ -367,4 +372,26 @@ func (w *stringWalker) walk(v reflect.Value, max int) error {
 		}
 	}
 	return nil
+}
+
+// AppendReason returns reason with addition appended after "; ", within
+// MaxReasonBytes: the server builds on a reason a snapshot carries (already
+// cut by CutFreeText) and must stay within the bound admission applies. It
+// is the existing text that is cut, so the addition, which says what the
+// server judged, is always whole; an addition itself over the bound is cut.
+func AppendReason(reason, addition string) string {
+	if r, ok := cutText(addition, MaxReasonBytes); ok {
+		addition = r
+	}
+	if reason == "" {
+		return addition
+	}
+	const sep = "; "
+	if room := MaxReasonBytes - len(addition) - len(sep); len(reason) > room {
+		if room < len(cutMark) {
+			return addition
+		}
+		reason = utf8Prefix(reason, room-len(cutMark)) + cutMark
+	}
+	return reason + sep + addition
 }

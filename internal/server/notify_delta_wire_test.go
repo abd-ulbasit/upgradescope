@@ -57,14 +57,21 @@ func (r *recordingNotifier) all() []event {
 }
 
 // pushInventory pushes one inventory through the real ingest endpoint
-// (gzip JSON + bearer, per the snapshot push protocol) and requires 202.
+// (gzip JSON + bearer, per the snapshot push protocol) and requires 202. It
+// is pushed as an agent built with the embedded knowledge base would
+// (kbVersion), which is what a server with that knowledge base judges as
+// complete evidence (see kbSkewView).
 func pushInventory(t *testing.T, baseURL, token string, inv inventory.Inventory) {
 	t.Helper()
+	k, err := kb.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
 	body, err := json.Marshal(map[string]any{
 		"schemaVersion": 1,
 		"clusterName":   "prod-test",
 		"agentVersion":  "test",
-		"kbVersion":     "test",
+		"kbVersion":     k.Version,
 		"inventory":     inv,
 	})
 	if err != nil {

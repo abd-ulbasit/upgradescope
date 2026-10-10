@@ -109,7 +109,13 @@ The source of `list_findings` and `get_report` is one of:
 - `report_file`: a JSON report written by `upgradescope scan --output json`;
 - `inventory_file` with `target`: an inventory document (the `inventory` of an
   agent's snapshot: `schemaVersion` 1 with `clusterId` and `capabilities`),
-  judged at that target; mostly for fixtures and tests;
+  judged at that target; mostly for fixtures and tests. The file has no
+  push envelope, so the check a server makes for an agent collected with
+  another knowledge base ([Running the server](../operations.md#what-a-push-is-judged-as))
+  cannot be made: it is judged with this binary's knowledge base as if
+  collected with it, and one collected by an agent with older data can read
+  `ready` on evidence that agent never collected. Use `cluster` (fleet
+  mode) for a verdict that includes that check;
 - `cluster` (fleet mode): a cluster on the server, by name or id, at
   `target` or its next minor.
 

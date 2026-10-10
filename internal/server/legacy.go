@@ -74,9 +74,9 @@ func legacyView(inv inventory.Inventory, agentVersion string) inventory.Inventor
 		caps = map[inventory.Capability]inventory.CapabilityStatus{}
 	}
 	caps[inventory.CapAPIUsage] = inventory.CapabilityStatus{Reason: fmt.Sprintf(
-		"collected by agent %q, which predates v0.2.0 and counted every object of a kind the apiserver serves at a deprecated version, not the objects written through it; upgrade the agent to assess API usage", agentVersion)}
+		"collected by agent %s, which predates v0.2.0 and counted every object of a kind the apiserver serves at a deprecated version, not the objects written through it; upgrade the agent to assess API usage", quoteLabel(agentVersion))}
 	caps[inventory.CapDeprecatedCalls] = inventory.CapabilityStatus{Reason: fmt.Sprintf(
-		"collected by agent %q, which predates v0.2.0 and whose own requests to deprecated APIs are counted in the apiserver's deprecated-request metric; upgrade the agent to assess deprecated API callers", agentVersion)}
+		"collected by agent %s, which predates v0.2.0 and whose own requests to deprecated APIs are counted in the apiserver's deprecated-request metric; upgrade the agent to assess deprecated API callers", quoteLabel(agentVersion))}
 	inv.Capabilities = caps
 	inv.APIUsage, inv.DeprecatedCalls = nil, nil
 
@@ -126,10 +126,7 @@ func unattributedUsageView(inv inventory.Inventory) inventory.Inventory {
 		return inv
 	}
 	reason := fmt.Sprintf("%d API usage count(s) name no object, as a v0.1.x collector's did, so who writes through the deprecated version is unknown; they were not judged", len(unattributed))
-	if st.Reason != "" {
-		reason = st.Reason + "; " + reason
-	}
-	st.Reason, st.Partial = reason, true
+	st.Reason, st.Partial = inventory.AppendReason(st.Reason, reason), true
 	st.Skipped = slices.Compact(slices.Sorted(slices.Values(append(slices.Clone(st.Skipped), unattributed...))))
 	caps := maps.Clone(inv.Capabilities)
 	caps[inventory.CapAPIUsage] = st

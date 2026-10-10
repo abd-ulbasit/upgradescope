@@ -20,6 +20,14 @@ const (
 	CapCRDs Capability = "crds"
 )
 
+// SkippedNewerKB is the Skipped entry of api-usage, helm and addons that
+// the server (never a collector) adds when a snapshot was collected with a
+// knowledge base other than its own: the agent listed API usage and matched
+// add-ons by its own data, so evidence the server's data would have
+// collected is missing. The engine reads it as a required gap for api-usage
+// and addons, so the verdict is unknown.
+const SkippedNewerKB = "knowledge base differs from the agent's"
+
 // SkippedPods is the addons capability's Skipped entry for a cluster-wide
 // pod list that failed: pod images and labels find an add-on whatever
 // installed it, so the engine keeps that gap required.
@@ -43,8 +51,10 @@ type CapabilityStatus struct {
 	//     deprecated version, "group/version resource", whose metric rows
 	//     cannot be told apart from its own requests;
 	//   - helm: storage drivers not read ("configmaps") and releases not
-	//     read, not decodable or whose manifest was not fully parsed
-	//     ("namespace/name"); GitOps tools that deploy charts without
+	//     read, not decodable, left out for a name or chart metadata the
+	//     server would refuse, or whose manifest was not fully parsed
+	//     ("namespace/name", an invalid name quoted and cut: see
+	//     Inventory.Conform); GitOps tools that deploy charts without
 	//     leaving a Helm release the scan can read, or whose custom
 	//     resources it could not read (GitOpsArgoCD, GitOpsFlux);
 	//   - versions: the control-plane components with a kube-system pod
@@ -59,6 +69,9 @@ type CapabilityStatus struct {
 	//   - addons: resources not read for add-on evidence,
 	//     "group/version resource" ("networking.k8s.io/v1 ingressclasses",
 	//     "v1 pods", SkippedPods);
+	//   - api-usage, helm and addons, as the server adds them to a snapshot
+	//     collected with another knowledge base than its own:
+	//     SkippedNewerKB;
 	//   - crds: the custom resources not checked for use of a deprecated
 	//     or unserved CRD version, "group/version Kind"
 	//     ("cert-manager.io/v1alpha2 Certificate").
@@ -296,7 +309,7 @@ const (
 
 // GitOpsChart is a Helm chart a GitOps tool deploys into the cluster, read
 // from the tool's own custom resource: an Argo CD Application source with
-// chart set, or a Flux HelmRelease. Argo CD renders with helm template and
+// chart set (or a native OCI source: repoURL oci://..., no chart field), or a Flux HelmRelease. Argo CD renders with helm template and
 // leaves no release the Helm collector can read, so this is all that is
 // known of its chart: no appVersion, no stored manifest. (Flux's
 // helm-controller does leave a release Secret, which the Helm collector
@@ -313,7 +326,10 @@ type GitOpsChart struct {
 	Target string `json:"target,omitempty"`
 	Chart  string `json:"chart"`
 	// Version is the chart version as the resource spells it, which may be
-	// a constraint ("4.*", ">=4.0.0") or a tag; "" when it names none.
+	// a constraint ("4.*", ">=4.0.0"), a tag, or the digest a Flux
+	// OCIRepository pins ("sha256:..."; Flux applies a digest over a semver
+	// range over a tag, and so is it recorded); "" when it names none. An
+	// Argo CD source's is its targetRevision.
 	Version string `json:"version,omitempty"`
 	// Repo is an Application's repoURL, a HelmRelease's chart source
 	// ("HelmRepository/flux-system/ingress-nginx") or the URL of the

@@ -22,6 +22,7 @@ import (
 
 	"github.com/abd-ulbasit/upgradescope/internal/engine"
 	"github.com/abd-ulbasit/upgradescope/internal/inventory"
+	"github.com/abd-ulbasit/upgradescope/internal/kb"
 	"github.com/abd-ulbasit/upgradescope/internal/server/store"
 )
 
@@ -667,6 +668,16 @@ func (s *Server) handleIngest(w http.ResponseWriter, r *http.Request) {
 		errJSON(w, http.StatusUnprocessableEntity, err.Error())
 		return
 	}
+	// The envelope's labels are agent-controlled text: bounded and printable
+	// before anything is stored or judged from them (kbskew.go, legacy.go).
+	if err := validateEnvelopeLabel("agentVersion", req.AgentVersion, maxAgentVersionBytes); err != nil {
+		errJSON(w, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+	if err := validateEnvelopeLabel("kbVersion", req.KBVersion, maxKBVersionBytes); err != nil {
+		errJSON(w, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
 	// Per-cluster tokens authenticate exactly one cluster. 403 (not 401):
 	// the token is genuine, the target cluster is what's wrong. Checked
 	// before any store write so a mismatched push registers nothing.
@@ -732,7 +743,7 @@ func (s *Server) handleIngest(w http.ResponseWriter, r *http.Request) {
 		ReceivedAt:    now,
 		ServerVersion: inv.ServerVersion, // "" (degraded): ingestSnapshot inherits the last one
 		Inventory:     req.Inventory,
-	}, legacyView(inv, req.AgentVersion), pushToken)
+	}, judgedView(inv, req.AgentVersion, req.KBVersion, s.cfg.KB), pushToken)
 	if errors.Is(err, store.ErrTokenRevoked) {
 		errJSON(w, http.StatusUnauthorized, "invalid or missing bearer token: it was revoked while this push was processed, and nothing was stored")
 		return
@@ -942,7 +953,7 @@ func (s *Server) latestInventory(ctx context.Context, clusterID int64) (store.Sn
 	if err != nil {
 		return store.Snapshot{}, inventory.Inventory{}, err
 	}
-	inv, err := decodeInventory(snap)
+	inv, err := decodeInventory(snap, s.cfg.KB)
 	if err != nil {
 		return store.Snapshot{}, inventory.Inventory{}, err
 	}
@@ -950,19 +961,19 @@ func (s *Server) latestInventory(ctx context.Context, clusterID int64) (store.Sn
 }
 
 // decodeInventory decodes a stored snapshot's whole inventory, as this
-// server judges it (legacyView), its free text cut as ingest cuts it
+// server judges it (judgedView against k), its free text cut as ingest cuts it
 // (inventory.CutFreeText): the snapshot keeps the inventory as pushed, an
 // older agent's longer reasons and ignore annotations included. Its cost
 // follows the inventory's structure (~45 MB of heap for a snapshot at its
 // node budget), so a request handler calls it only in the read slot
 // (inReadSlot).
-func decodeInventory(snap store.Snapshot) (inventory.Inventory, error) {
+func decodeInventory(snap store.Snapshot, k kb.KB) (inventory.Inventory, error) {
 	var inv inventory.Inventory
 	if err := json.Unmarshal(snap.Inventory, &inv); err != nil {
 		return inventory.Inventory{}, fmt.Errorf("cluster %d (snapshot %d): %w: %v", snap.ClusterID, snap.ID, errCorruptInventory, err)
 	}
 	inv.CutFreeText()
-	return legacyView(inv, snap.AgentVersion), nil
+	return judgedView(inv, snap.AgentVersion, snap.KBVersion, k), nil
 }
 
 // latestHead loads the cluster's latest snapshot and decodes only its
@@ -991,7 +1002,7 @@ func (s *Server) latestHead(ctx context.Context, clusterID int64) (store.Snapsho
 	}
 	inv := inventory.Inventory{Source: head.Source, CollectorSchema: head.CollectorSchema, ServerVersion: head.ServerVersion, Capabilities: head.Capabilities}
 	inv.CutFreeText()
-	return snap, legacyView(inv, snap.AgentVersion), nil
+	return snap, judgedView(inv, snap.AgentVersion, snap.KBVersion, s.cfg.KB), nil
 }
 
 // evalSummary is the read API's compact evaluation view. Evaluations are
@@ -1246,7 +1257,7 @@ func (s *Server) loadOrComputeReport(ctx context.Context, clusterID int64, targe
 		if err := loadSnapshot(); err != nil {
 			return engine.Report{}, reportMeta{}, err
 		}
-		inv, err := decodeInventory(snap)
+		inv, err := decodeInventory(snap, s.cfg.KB)
 		if err != nil {
 			return engine.Report{}, reportMeta{}, err
 		}

@@ -340,6 +340,18 @@ func TestEvaluatePartialAndAddOnGaps(t *testing.T) {
 		{"partial versions naming no component is optional: a vendor kube-proxy image (OKE) upstream would not have told", // #169
 			partially(on124, inventory.CapVersions, vendorProxy), k, t125, VerdictReady,
 			[]CapabilityGap{{Capability: inventory.CapVersions, Reason: vendorProxy, Partial: true}}},
+		{"partial api-usage from a knowledge base other than the agent's is a required gap: any API the server flags may have gone unlisted", // #268
+			partially(on124, inventory.CapAPIUsage, "knowledge base skew", inventory.SkippedNewerKB), k, t125, VerdictUnknown,
+			[]CapabilityGap{{Capability: inventory.CapAPIUsage, Reason: "knowledge base skew", Partial: true,
+				Skipped: []string{inventory.SkippedNewerKB}, Required: true}}},
+		{"partial addons from a registry other than the agent's is a required gap, with or without pods", // #268
+			partially(on124, inventory.CapAddOns, "knowledge base skew", inventory.SkippedNewerKB), withRegistry, t125, VerdictUnknown,
+			[]CapabilityGap{{Capability: inventory.CapAddOns, Reason: "knowledge base skew", Partial: true,
+				Skipped: []string{inventory.SkippedNewerKB}, Required: true}}},
+		{"partial addons from another registry, with an empty registry, is optional: there is nothing to match",
+			partially(on124, inventory.CapAddOns, "knowledge base skew", inventory.SkippedNewerKB), k, t125, VerdictReady,
+			[]CapabilityGap{{Capability: inventory.CapAddOns, Reason: "knowledge base skew", Partial: true,
+				Skipped: []string{inventory.SkippedNewerKB}}}},
 		{"partial helm is an optional gap", partially(on124, inventory.CapHelm, helmReason, "a/b"), withRegistry, t125, VerdictReady,
 			[]CapabilityGap{{Capability: inventory.CapHelm, Reason: helmReason, Partial: true, Skipped: []string{"a/b"}}}},
 		{"an informational reason is no gap", func() inventory.Inventory {

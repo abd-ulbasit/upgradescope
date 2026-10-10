@@ -371,6 +371,16 @@ type runner struct {
 	lastPush time.Time // when it was pushed
 
 	last tickReport // the latest tick's outcome, for the observer
+
+	// conformed is what the collector left out of the latest collection so
+	// that the server would accept it (collect.Options.OnConform); tick logs
+	// it with what its own Conform left out.
+	conformed []string
+	// collectorConformed is set by the latest collection when it was
+	// collect.Collect, which conforms what it returns: the tick then does
+	// not walk the whole inventory a second time (the push is checked once
+	// more, by Admit). An injected collectFn leaves it false.
+	collectorConformed bool
 }
 
 func newRunner(clients collect.Clients, dyn dynamic.Interface, k kb.KB, cfg Config) *runner {
@@ -390,7 +400,10 @@ func newRunner(clients collect.Clients, dyn dynamic.Interface, k kb.KB, cfg Conf
 	discoveryCache := collect.NewDiscoveryCache()
 	gitopsCache := collect.NewGitOpsCache()
 	r.collectFn = func(ctx context.Context) inventory.Inventory {
-		return collect.Collect(ctx, clients, k, collect.Options{TeamLabel: cfg.TeamLabel, HelmCache: helmCache, DiscoveryCache: discoveryCache, GitOpsCache: gitopsCache})
+		inv := collect.Collect(ctx, clients, k, collect.Options{TeamLabel: cfg.TeamLabel, HelmCache: helmCache, DiscoveryCache: discoveryCache, GitOpsCache: gitopsCache,
+			OnConform: func(notes []string) { r.conformed = notes }})
+		r.collectorConformed = true
+		return inv
 	}
 	if cfg.ServerURL != "" {
 		r.pusher = newPusher(cfg.ServerURL, cfg.ServerToken, cfg.ServerRootCAs)
@@ -413,8 +426,30 @@ func (r *runner) tick(ctx context.Context) error {
 	r.last = tickReport{push: pushOff}
 	ph := newTickPhases(ctx)
 	cctx, cancel := ph.collect()
+	r.conformed, r.collectorConformed = nil, false
 	inv := r.collectFn(cctx)
 	cancel()
+	// collect.Collect leaves nothing the server would refuse; this holds
+	// whatever the collector (collectFn is injectable), and makes the status
+	// written and the snapshot pushed one inventory (#268). An injected
+	// collector is conformed here; collect.Collect already did, so its
+	// inventory is not walked a second time.
+	// What was left out, by the collector (collect.Options.OnConform) or by
+	// this, is said once per tick: the notes name no identifier (counts and
+	// kinds only), so they are safe to log, and the capability reasons carry
+	// the same for the report.
+	notes := r.conformed
+	if !r.collectorConformed {
+		more, _ := inv.Conform()
+		notes = append(notes, more...)
+	}
+	if len(notes) > 0 {
+		log := r.cfg.Logger
+		if log == nil {
+			log = slog.Default()
+		}
+		log.Warn("inventory conformed: some data was left out so the server would accept the push", "notes", notes)
+	}
 	r.last.caps = inv.Capabilities
 
 	// The ClusterReadiness calls share the status slice of the reserve;
@@ -679,6 +714,15 @@ func (r *runner) maybePush(ctx context.Context, inv inventory.Inventory) (pushed
 	}
 	if hash == r.lastHash && r.now().Sub(r.lastPush) < r.cfg.ForceSyncEvery {
 		return false, nil
+	}
+	// The server refuses (422) an inventory that is not admissible, for
+	// good: the same content is offered every tick, as lastHash moves only
+	// on success. Conform has left out what could be, so an inventory still
+	// refused here has a value no repair mends; say so rather than send it.
+	// (Admit works on a copy: it cuts free text in place, in maps shared with
+	// inv, which is already cut.)
+	if aerr := inv.Admit(); aerr != nil {
+		return false, fmt.Errorf("push skipped: the server would refuse this inventory (422), so it is not sent: %w", aerr)
 	}
 	name := r.cfg.ClusterName
 	if name == "" {

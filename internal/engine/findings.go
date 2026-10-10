@@ -172,7 +172,12 @@ type SuppressedFinding struct {
 //     (inventory.SkippedPods): only Helm releases and IngressClasses were
 //     read, and an add-on installed any other way goes undetected;
 //   - a partial api-usage, when Skipped names an API the KB removes at or
-//     before the target (an unchecked object of it would be a blocker);
+//     before the target (an unchecked object of it would be a blocker), or
+//     names inventory.SkippedNewerKB: the agent collected with another
+//     knowledge base than the server judges with, so any API the server
+//     flags may have gone unlisted;
+//   - a partial addons, likewise, when Skipped names inventory.SkippedNewerKB
+//     (add-ons the server's registry knows were never matched);
 //   - a partial versions, for cluster inventories, when Skipped names a
 //     component whose version upstream would have told but was not read
 //     (it may be the one past the skew policy), or "nodes", when no Node
@@ -295,6 +300,9 @@ func (g CapabilityGap) skips(key string) bool {
 	switch g.Capability {
 	case inventory.CapAPIUsage, inventory.CapDeprecatedCalls:
 		_, tail, _ := strings.Cut(key, "/") // category/group/version/name
+		if slices.Contains(g.Skipped, inventory.SkippedNewerKB) {
+			return true // any API the server flags may have gone unlisted
+		}
 		return slices.ContainsFunc(g.Skipped, func(s string) bool {
 			group, version, name, ok := splitAPI(s)
 			return ok && apiKey(group, version, name) == tail
