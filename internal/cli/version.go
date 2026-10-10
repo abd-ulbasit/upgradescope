@@ -129,6 +129,6 @@ add-on registry was last updated. --version prints the same text.`,
 			}
 		},
 	}
-	cmd.Flags().StringVar(&output, "output", "text", "output format: text|json")
+	cmd.Flags().StringVarP(&output, "output", "o", "text", "output format: text|json")
 	return cmd
 }

@@ -7,6 +7,8 @@ import (
 	"sync"
 
 	"github.com/spf13/cobra"
+
+	"github.com/abd-ulbasit/upgradescope/internal/textsafe"
 )
 
 // version is stamped via -ldflags "-X …/internal/cli.version=…" by release
@@ -67,6 +69,58 @@ var registerVersionTemplate = sync.OnceFunc(func() {
 	})
 })
 
+// unknownCommandError is the refusal of an argument that names no
+// subcommand of the root: the command as the user typed it, and the
+// commands it resembles. It is typed so that ErrorText can print cobra's
+// layout (the message, a blank line, the suggestions, one per line) with
+// real newlines while still escaping the typed name, which is
+// attacker-influenced text (#245): the generic escaping of every other error
+// would turn the layout's own newlines into literal \n and \t (#338).
+type unknownCommandError struct {
+	name, path  string
+	suggestions []string
+}
+
+// Error is cobra's own text, with the name quoted and so escaped.
+func (e *unknownCommandError) Error() string {
+	s := fmt.Sprintf("unknown command %q for %q", e.name, e.path)
+	if len(e.suggestions) > 0 {
+		s += "\n\nDid you mean this?\n"
+		for _, sug := range e.suggestions {
+			s += fmt.Sprintf("\t%v\n", sug)
+		}
+	}
+	return s
+}
+
+// text is the message as ErrorText prints it: the layout of Error with real
+// newlines, and every user-supplied part escaped.
+func (e *unknownCommandError) text() string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "unknown command \"%s\" for \"%s\"", textsafe.Escape(e.name), textsafe.Escape(e.path))
+	if len(e.suggestions) > 0 {
+		b.WriteString("\n\nDid you mean this?")
+		for _, sug := range e.suggestions {
+			b.WriteString("\n\t" + textsafe.Escape(sug))
+		}
+	}
+	return b.String()
+}
+
+// rootArgs refuses an argument that is not a subcommand, as cobra does for
+// a root command with subcommands and no Args of its own, but with the
+// typed unknownCommandError.
+func rootArgs(cmd *cobra.Command, args []string) error {
+	if len(args) == 0 {
+		return nil
+	}
+	var suggestions []string
+	if !cmd.DisableSuggestions {
+		suggestions = cmd.SuggestionsFor(args[0])
+	}
+	return &unknownCommandError{name: args[0], path: cmd.CommandPath(), suggestions: suggestions}
+}
+
 func Root() *cobra.Command {
 	registerVersionTemplate()
 	root := &cobra.Command{
@@ -88,6 +142,13 @@ a fleet with 'serve'.`,
 		Version:       version,
 		SilenceUsage:  true,
 		SilenceErrors: true,
+		// Args is only consulted for a runnable command, and cobra's own
+		// check of the unknown command is an untyped error (see
+		// unknownCommandError); with no argument this is the help, as a
+		// command that is not runnable prints it.
+		Args:                       rootArgs,
+		SuggestionsMinimumDistance: 2, // cobra's default, which SuggestionsFor only applies when set
+		RunE:                       func(cmd *cobra.Command, _ []string) error { return cmd.Help() },
 	}
 	root.SetVersionTemplate(`{{ upgradescopeVersion }}`)
 	// Usage is silenced (an error prints one line, not the whole usage), so
