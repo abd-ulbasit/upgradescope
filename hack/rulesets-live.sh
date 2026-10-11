@@ -15,7 +15,7 @@
 # (see .github/rulesets/README.md) and is never compared. For each file the
 # live ruleset of the same `name` must exist and equal it in `target`,
 # `enforcement`, `conditions` and `rules`. The rules are compared as a set
-# (sorted by type, then canonical JSON), their parameters in full with sorted
+# (sorted by their canonical form), their parameters in full with sorted
 # keys, and `required_status_checks` as a set, so the order the API returns
 # things in does not matter, and a dropped `integration_id` does.
 # `bypass_actors` is compared only when the live answer has the field: GitHub
@@ -26,7 +26,8 @@
 # 1. A GET that fails is retried twice; if the API still cannot be read it
 # fails closed (it never skips).
 #
-# Knobs: RULESETS_DIR (default .github/rulesets), RULESETS_REPO (default
+# Knobs: RULESETS_DIR (default .github/rulesets; a relative path is resolved
+# from the repository root, where the script cd's first), RULESETS_REPO (default
 # $GITHUB_REPOSITORY, else abd-ulbasit/upgradescope), RULESETS_GH (the gh
 # command), RULESETS_RETRY_SLEEP (seconds between attempts, default 2).
 set -euo pipefail
@@ -56,10 +57,12 @@ api() {
 }
 
 # The comparable form of a ruleset (a file or the API's answer). Keys are
-# sorted by jq -S; sets are sorted; an absent parameters, include or exclude
-# is the same as an empty one. bypass_actors is kept only if present.
+# sorted by jq -S; sets are sorted with jq sort, which orders objects by
+# their sorted keys, so the order a key was inserted in never matters. An
+# absent parameters, include or exclude is the same as an empty one.
+# bypass_actors is kept only if present.
 norm='
-  def set: sort_by(tostring);
+  def set: sort;
   def ref: (. // {}) | {include: ((.include // []) | sort), exclude: ((.exclude // []) | sort)};
   def rule:
     if .parameters == null then del(.parameters)
@@ -70,7 +73,7 @@ norm='
          then .allowed_merge_methods |= sort else . end)) end;
   { target, enforcement,
     conditions: ((.conditions // {}) | if has("ref_name") then .ref_name |= ref else . end),
-    rules: ([.rules[]? | rule] | sort_by(.type, tostring)) }
+    rules: ([.rules[]? | rule] | sort) }
   + (if has("bypass_actors") then {bypass_actors: (.bypass_actors | set)} else {} end)'
 
 api "repos/$repo/rulesets?per_page=100" "$work/list.json" || exit 1

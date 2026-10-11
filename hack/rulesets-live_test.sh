@@ -49,14 +49,17 @@ export FAKE_GH_LOG="$work/ghlog"
 repo_dir=.github/rulesets
 
 # dress <file> <id>: the file as the API returns it: ids, source and
-# timestamps added, the rules and the required checks in another order, and
-# bypass_actors kept (an admin's view).
+# timestamps added, the rules, the required checks and the bypass actors in
+# another order and with their keys in another order, and bypass_actors kept
+# (an admin's view).
 dress() {
   jq --argjson id "$2" '
     . + {id: $id, node_id: "RRS_x", source_type: "Repository", source: "abd-ulbasit/upgradescope",
          created_at: "2026-10-11T00:00:00.000+05:00", updated_at: "2026-10-11T00:00:00.000+05:00",
          current_user_can_bypass: "never", _links: {self: {href: "x"}}}
-    | .rules |= (reverse | map(if .parameters.required_status_checks then .parameters.required_status_checks |= reverse else . end))
+    | .rules |= (reverse | map(if .parameters.required_status_checks
+        then .parameters.required_status_checks |= (reverse | map(to_entries | reverse | from_entries)) else . end))
+    | if has("bypass_actors") then .bypass_actors |= (reverse | map(to_entries | reverse | from_entries)) else . end
   ' "$1"
 }
 
