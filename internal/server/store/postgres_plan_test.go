@@ -49,7 +49,7 @@ func pgTestSchema(t *testing.T, prefix string) string {
 // so the empty tables cannot make one cheaper than the index.
 func TestPostgresEvaluationReadsUseIndexes(t *testing.T) {
 	ctx := context.Background()
-	p, err := OpenPostgres(pgTestSchema(t, "plans"))
+	p, err := OpenPostgres(context.Background(), pgTestSchema(t, "plans"))
 	if err != nil {
 		t.Fatalf("OpenPostgres: %v", err)
 	}
@@ -135,7 +135,7 @@ func TestMigration0009BackfillsPostgres(t *testing.T) {
 			t.Fatalf("%s: %v", q, err)
 		}
 	}
-	p, err := OpenPostgres(dsn) // applies 0009
+	p, err := OpenPostgres(context.Background(), dsn) // applies 0009
 	if err != nil {
 		t.Fatalf("OpenPostgres: %v", err)
 	}
@@ -171,7 +171,7 @@ func TestMigration0009BackfillsPostgres(t *testing.T) {
 // plan as they like.
 func TestPostgresPruneEvaluationDrainUsesCreatedAtIndex(t *testing.T) {
 	ctx := context.Background()
-	p, err := OpenPostgres(pgTestSchema(t, "drainplan"))
+	p, err := OpenPostgres(context.Background(), pgTestSchema(t, "drainplan"))
 	if err != nil {
 		t.Fatalf("OpenPostgres: %v", err)
 	}
@@ -241,7 +241,7 @@ func TestPostgresMigration0010AcceptsAnIndexBuiltConcurrently(t *testing.T) {
 	if _, err := db.ExecContext(ctx, `CREATE INDEX CONCURRENTLY idx_evaluations_created_at ON evaluations (created_at, id)`); err != nil {
 		t.Fatalf("CREATE INDEX CONCURRENTLY: %v", err)
 	}
-	p, err := OpenPostgres(dsn) // applies 0010
+	p, err := OpenPostgres(context.Background(), dsn) // applies 0010
 	if err != nil {
 		t.Fatalf("OpenPostgres with the index already built: %v", err)
 	}
@@ -252,5 +252,78 @@ func TestPostgresMigration0010AcceptsAnIndexBuiltConcurrently(t *testing.T) {
 	}
 	if err := p.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pg_indexes WHERE schemaname = current_schema() AND indexname = 'idx_evaluations_created_at'`).Scan(&indexes); err != nil || indexes != 1 {
 		t.Errorf("idx_evaluations_created_at count = (%d, %v), want 1", indexes, err)
+	}
+}
+
+// TestPostgresMigration0011AcceptsAPrebuiltBaselineIndex: an operator who
+// added evaluations.baseline and built idx_evaluations_baseline with
+// CREATE INDEX CONCURRENTLY before the upgrade (docs/operations/upgrade.md,
+// so the build does not block writes to evaluations) gets a migration 0011
+// that succeeds, records itself, leaves the one index it found and drops
+// 0009's idx_evaluations_decided. A database not pre-built migrates to the
+// same indexes.
+func TestPostgresMigration0011AcceptsAPrebuiltBaselineIndex(t *testing.T) {
+	for _, prebuilt := range []bool{true, false} {
+		t.Run(map[bool]string{true: "prebuilt", false: "fresh"}[prebuilt], func(t *testing.T) {
+			ctx := context.Background()
+			dsn := pgTestSchema(t, "mig11")
+			db, err := sql.Open("pgx", dsn)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db.Close()
+			sub, err := fs.Sub(pgMigrationsFS, "pgmigrations")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := migratePostgres(ctx, db, migrationsBefore(t, sub, "0011")); err != nil {
+				t.Fatalf("migrate to 0010: %v", err)
+			}
+			var oid int64
+			if prebuilt {
+				for _, q := range []string{
+					`ALTER TABLE evaluations ADD COLUMN IF NOT EXISTS baseline BOOLEAN`,
+					`CREATE INDEX CONCURRENTLY idx_evaluations_baseline ON evaluations (cluster_id, target, id) WHERE ready OR blockers > 0 OR baseline`,
+				} {
+					if _, err := db.ExecContext(ctx, q); err != nil {
+						t.Fatalf("%s: %v", q, err)
+					}
+				}
+				if err := db.QueryRowContext(ctx, `SELECT 'idx_evaluations_baseline'::regclass::oid`).Scan(&oid); err != nil {
+					t.Fatal(err)
+				}
+			}
+			p, err := OpenPostgres(ctx, dsn) // applies 0011
+			if err != nil {
+				t.Fatalf("OpenPostgres (prebuilt %v): %v", prebuilt, err)
+			}
+			defer p.Close()
+			var recorded int
+			if err := p.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM schema_migrations WHERE version = '0011_evaluation_baseline.sql'`).Scan(&recorded); err != nil || recorded != 1 {
+				t.Errorf("migration 0011 recorded = (%d, %v), want 1", recorded, err)
+			}
+			count := func(name string) int {
+				var n int
+				if err := p.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pg_indexes WHERE schemaname = current_schema() AND indexname = $1`, name).Scan(&n); err != nil {
+					t.Fatal(err)
+				}
+				return n
+			}
+			if n := count("idx_evaluations_baseline"); n != 1 {
+				t.Errorf("idx_evaluations_baseline count = %d, want 1", n)
+			}
+			if n := count("idx_evaluations_decided"); n != 0 {
+				t.Errorf("idx_evaluations_decided count = %d, want 0 (0011 drops it)", n)
+			}
+			if prebuilt {
+				var after int64
+				if err := p.db.QueryRowContext(ctx, `SELECT 'idx_evaluations_baseline'::regclass::oid`).Scan(&after); err != nil {
+					t.Fatal(err)
+				}
+				if after != oid {
+					t.Errorf("idx_evaluations_baseline oid %d -> %d: the migration rebuilt the pre-built index, want it kept", oid, after)
+				}
+			}
+		})
 	}
 }

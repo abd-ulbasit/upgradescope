@@ -16,6 +16,7 @@ import (
 	"unicode"
 
 	"github.com/abd-ulbasit/upgradescope/internal/engine"
+	"github.com/abd-ulbasit/upgradescope/internal/inventory"
 	"github.com/abd-ulbasit/upgradescope/internal/server/store"
 )
 
@@ -204,6 +205,7 @@ func csvSafe(s string) string {
 const (
 	csvSummary     = "summary"      // first row: the verdict, always present
 	csvNotAssessed = "not-assessed" // one per capability the evaluation could not assess
+	csvSuppressed  = "suppressed"   // one per accepted finding, or accepted objects of one (Report.Suppressed)
 )
 
 // writeExportCSV emits a summary row (verdict and score in the title; the
@@ -252,15 +254,28 @@ func writeExportCSV(w io.Writer, cluster string, eval store.Evaluation, rep engi
 	}
 	summary := fmt.Sprintf("%s for %s: score %d/100", rep.Verdict, rep.Target, rep.Score)
 	detail := fmt.Sprintf("%d blockers, %d warnings, %d capabilities not assessed", blockers, warnings, len(rep.NotAssessed))
+	if n := len(rep.Suppressed); n > 0 {
+		detail += fmt.Sprintf(", %d suppressed", n)
+	}
 	if err := row(csvSummary, "", "", summary, detail, "", nil, nil, nil); err != nil {
 		return err
 	}
-	for _, f := range rep.Findings {
-		namespaces := f.Namespaces
+	namespacesOf := func(f engine.Finding) []string {
 		if f.NamespacesOmitted > 0 { // as the HTML export says it
-			namespaces = append(slices.Clip(namespaces), fmt.Sprintf("and %d more", f.NamespacesOmitted))
+			return append(slices.Clip(f.Namespaces), fmt.Sprintf("and %d more", f.NamespacesOmitted))
 		}
-		if err := row(string(f.Severity), string(f.Category), f.Key, f.Title, f.Detail, f.Remediation, f.Teams, namespaces, f.Citations); err != nil {
+		return f.Namespaces
+	}
+	for _, f := range rep.Findings {
+		if err := row(string(f.Severity), string(f.Category), f.Key, f.Title, f.Detail, f.Remediation, f.Teams, namespacesOf(f), f.Citations); err != nil {
+			return err
+		}
+	}
+	// An accepted finding is still the audit's: one row each, its own
+	// severity, what accepted it and why in the detail, so filtering on
+	// the severity column never counts it as open.
+	for _, sf := range rep.Suppressed {
+		if err := row(csvSuppressed, string(sf.Category), sf.Key, sf.Title, suppressedDetail(sf), sf.Remediation, sf.Teams, namespacesOf(sf.Finding), sf.Citations); err != nil {
 			return err
 		}
 	}
@@ -275,6 +290,42 @@ func writeExportCSV(w io.Writer, cluster string, eval store.Evaluation, rep engi
 	}
 	cw.Flush()
 	return cw.Error()
+}
+
+// suppressedDetail is a suppressed CSV row's detail: the finding's
+// severity, what accepted it (an object annotation, Source) and until when,
+// the reason, the accepted objects when it names them, then the finding's
+// own detail.
+func suppressedDetail(sf engine.SuppressedFinding) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s accepted by %s", sf.Severity, sf.Source)
+	if sf.Expires != "" {
+		fmt.Fprintf(&b, " until %s", sf.Expires)
+	}
+	fmt.Fprintf(&b, ": %s.", sf.Reason)
+	if names := objectNames(sf.Objects); len(names) > 0 {
+		if sf.ObjectsOmitted > 0 {
+			names = append(names, fmt.Sprintf("and %d more", sf.ObjectsOmitted))
+		}
+		fmt.Fprintf(&b, " Objects: %s.", strings.Join(names, ", "))
+	}
+	if sf.Detail != "" {
+		b.WriteString(" " + sf.Detail)
+	}
+	return b.String()
+}
+
+// objectNames names objects as namespace/name, or name when cluster-scoped.
+func objectNames(objs []inventory.ObjectRef) []string {
+	out := make([]string, 0, len(objs))
+	for _, o := range objs {
+		if o.Namespace != "" {
+			out = append(out, o.Namespace+"/"+o.Name)
+		} else {
+			out = append(out, o.Name)
+		}
+	}
+	return out
 }
 
 // exportData feeds the self-contained HTML report template.
@@ -386,7 +437,7 @@ func (d exportData) Sparkline() template.HTML {
 	return template.HTML(b.String()) // #nosec G203 — built from numbers and formatted dates only
 }
 
-var exportTemplate = template.Must(template.New("export").Parse(`<!DOCTYPE html>
+var exportTemplate = template.Must(template.New("export").Funcs(template.FuncMap{"objectNames": objectNames}).Parse(`<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -460,7 +511,25 @@ var exportTemplate = template.Must(template.New("export").Parse(`<!DOCTYPE html>
 </table>
 {{else}}
 <p>No findings.</p>
-{{end}}
+{{end}}{{with .Report.Suppressed}}
+<h2>suppressed ({{len .}})</h2>
+<p class="detail">Accepted findings: excluded from the score and the verdict, and listed here with what accepted them and why.</p>
+<table>
+  <tr><th>severity</th><th>category</th><th>finding</th><th>accepted by</th><th>reason</th></tr>
+  {{range .}}
+  <tr class="sev-{{.Severity}}">
+    <td>{{.Severity}}</td>
+    <td>{{.Category}}</td>
+    <td>
+      <strong>{{.Title}}</strong>
+      {{if .Detail}}<div class="detail">{{.Detail}}</div>{{end}}
+      {{if .Objects}}<div class="detail">Objects: {{range $i, $n := objectNames .Objects}}{{if $i}}, {{end}}{{$n}}{{end}}{{if .ObjectsOmitted}} and {{.ObjectsOmitted}} more{{end}}</div>{{end}}
+    </td>
+    <td>{{.Source}}{{if .Expires}} until {{.Expires}}{{end}}</td>
+    <td>{{.Reason}}</td>
+  </tr>
+  {{end}}
+</table>{{end}}
 {{if .Report.NotAssessed}}
 <h2>not assessed</h2>
 <ul class="gaps">

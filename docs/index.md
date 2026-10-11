@@ -11,13 +11,12 @@ as a table, JSON, SARIF, Markdown, JUnit or GitLab Code Quality, an exit code fo
 `ClusterReadiness` object in the cluster.
 
 !!! note "These docs describe v0.2.0"
-    The site follows `main`, which ships as v0.2.0, the first release CI
-    builds, signs and publishes. Until v0.2.0 is tagged, what pins it (the
-    GitHub Action `@v0.2.0`, release downloads, the container image and the
-    OCI chart) does not resolve yet. To try what these pages describe,
-    build `main`
-    (`go install github.com/abd-ulbasit/upgradescope/cmd/upgradescope@main`);
-    the chart in a clone defaults to the image of the release it was cut
+    v0.2.0 is the first release CI builds, signs and publishes: the GitHub
+    Action `@v0.2.0`, the release downloads, the container image and the OCI
+    chart all pin it. The site follows `main`, so a page can describe a
+    change newer than v0.2.0; to try one, build `main`
+    (`go install github.com/abd-ulbasit/upgradescope/cmd/upgradescope@main`).
+    The chart in a clone defaults to the image of the release it was cut
     for, so to run `main` set an image you build from it.
     [Install](operations/install.md) says what v0.1.x lacks.
 

@@ -392,3 +392,96 @@ func BenchmarkConformFallback(b *testing.B) {
 		})
 	}
 }
+
+// #373: an API usage entry with a negative count (a collector bug, or a
+// hand-built push) is dropped by Conform, named in the capability's Skipped,
+// and the rest is kept, so one bad row cannot make every push of the cluster
+// fail (422) for ever. A Helm release's bad manifest row drops the release,
+// named in helm's Skipped, as any other value Admit refuses in it does.
+func TestConformRepairsNegativeUsageCounts(t *testing.T) {
+	good := func() APIUsage {
+		return APIUsage{Group: "batch", Version: "v1beta1", Kind: "CronJob", Count: 1, Namespaces: map[string]int{"shop": 1}}
+	}
+	bad := func(edit func(*APIUsage)) APIUsage {
+		u := APIUsage{Group: "policy", Version: "v1beta1", Kind: "PodSecurityPolicy", Count: 2, Namespaces: map[string]int{"shop": 2}}
+		edit(&u)
+		return u
+	}
+	edits := map[string]func(*APIUsage){
+		"count":             func(u *APIUsage) { u.Count = -5 },
+		"objectsOmitted":    func(u *APIUsage) { u.ObjectsOmitted = -1 },
+		"a namespace count": func(u *APIUsage) { u.Namespaces["shop"] = -100 },
+	}
+	for name, edit := range edits {
+		t.Run("apiUsage/"+name, func(t *testing.T) {
+			inv := conformable()
+			inv.APIUsage = []APIUsage{bad(edit), good()}
+			assertDroppedKeepingGood(t, &inv, CapAPIUsage, "policy/v1beta1 PodSecurityPolicy", func() []APIUsage { return inv.APIUsage })
+		})
+		t.Run("apiAuthorshipUnknown/"+name, func(t *testing.T) {
+			inv := conformable()
+			inv.APIAuthorshipUnknown = []APIUsage{good(), bad(edit)}
+			assertDroppedKeepingGood(t, &inv, CapAPIUsage, "policy/v1beta1 PodSecurityPolicy", func() []APIUsage { return inv.APIAuthorshipUnknown })
+		})
+		t.Run("crds/"+name, func(t *testing.T) {
+			inv := conformable()
+			inv.CRDs = []CRD{{Group: "example.com", Kind: "Widget", Usage: []APIUsage{bad(edit)}}, {Group: "example.com", Kind: "Gadget"}}
+			notes, err := inv.Conform()
+			if err != nil || len(notes) == 0 {
+				t.Fatalf("Conform = %q, %v", notes, err)
+			}
+			if len(inv.CRDs) != 1 || inv.CRDs[0].Kind != "Gadget" {
+				t.Errorf("crds = %+v, want only the valid Gadget kept", inv.CRDs)
+			}
+			if st := inv.Capabilities[CapCRDs]; !st.Partial || !strings.Contains(st.Reason, "dropped for a value Admit refuses") {
+				t.Errorf("crds capability = %+v, want partial with the reason", st)
+			} else if len(st.Skipped) != 0 {
+				// crds' Skipped names CRDs whose versions could not be checked (the
+				// engine reads it so); a dropped CRD is counted in the reason only.
+				t.Errorf("crds skipped = %q, want none (a dropped CRD is not named there)", st.Skipped)
+			}
+			if err := inv.Admit(); err != nil {
+				t.Errorf("Admit after Conform = %v", err)
+			}
+		})
+		t.Run("helmReleases/"+name, func(t *testing.T) {
+			inv := conformable()
+			inv.HelmReleases = []HelmRelease{
+				{Name: "shop", Namespace: "apps", ChartName: "shop", ChartVersion: "1.0.0", Status: "deployed", ManifestAPIs: []APIUsage{bad(edit)}},
+				{Name: "ok", Namespace: "apps", ChartName: "ok", ChartVersion: "1.0.0", Status: "deployed", ManifestAPIs: []APIUsage{good()}},
+			}
+			notes, err := inv.Conform()
+			if err != nil || len(notes) == 0 {
+				t.Fatalf("Conform = %q, %v", notes, err)
+			}
+			if len(inv.HelmReleases) != 1 || inv.HelmReleases[0].Name != "ok" {
+				t.Errorf("releases = %+v, want only ok kept", inv.HelmReleases)
+			}
+			st := inv.Capabilities[CapHelm]
+			if !st.Partial || !strings.Contains(st.Reason, "Helm release(s) dropped") || !slices.Contains(st.Skipped, "apps/shop") {
+				t.Errorf("helm capability = %+v, want partial naming apps/shop", st)
+			}
+			if err := inv.Admit(); err != nil {
+				t.Errorf("Admit after Conform = %v", err)
+			}
+		})
+	}
+}
+
+func assertDroppedKeepingGood(t *testing.T, inv *Inventory, c Capability, skipped string, list func() []APIUsage) {
+	t.Helper()
+	notes, err := inv.Conform()
+	if err != nil || len(notes) == 0 {
+		t.Fatalf("Conform = %q, %v", notes, err)
+	}
+	if got := list(); len(got) != 1 || got[0].Kind != "CronJob" {
+		t.Errorf("list = %+v, want only the valid CronJob entry kept", got)
+	}
+	st := inv.Capabilities[c]
+	if !st.Available || !st.Partial || !strings.Contains(st.Reason, "API usage entr(ies) dropped for a value Admit refuses") || !slices.Contains(st.Skipped, skipped) {
+		t.Errorf("%s = %+v, want partial, reason and %q skipped", c, st, skipped)
+	}
+	if err := inv.Admit(); err != nil {
+		t.Errorf("Admit after Conform = %v", err)
+	}
+}

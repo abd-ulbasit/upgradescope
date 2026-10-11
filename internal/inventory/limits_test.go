@@ -168,3 +168,61 @@ func TestAppendReason(t *testing.T) {
 		t.Errorf("AppendReason with a huge addition = %d bytes", len(got))
 	}
 }
+
+// #373: a count is what a collector counted, so none may be negative in
+// any of the four lists of API usage entries (it was only checked for
+// volume plugins). A negative Helm manifest row was dropped by the engine
+// without a finding, so a real `helm upgrade` blocker disappeared from the
+// report. The error names the field. Zero stays valid.
+func TestAdmitRefusesNegativeAPIUsageCount(t *testing.T) {
+	lists := []struct {
+		name string
+		at   string
+		pick func(*Inventory) *APIUsage
+	}{
+		{"apiUsage", "apiUsage[0]", func(inv *Inventory) *APIUsage { return &inv.APIUsage[0] }},
+		{"apiAuthorshipUnknown", "apiAuthorshipUnknown[0]", func(inv *Inventory) *APIUsage { return &inv.APIAuthorshipUnknown[0] }},
+		{"a Helm release's manifestApis", "helmReleases[0].manifestApis[0]", func(inv *Inventory) *APIUsage { return &inv.HelmReleases[0].ManifestAPIs[0] }},
+		{"a CRD's usage", "crds[0].usage[0]", func(inv *Inventory) *APIUsage { return &inv.CRDs[0].Usage[0] }},
+	}
+	fields := []struct {
+		name   string
+		suffix string
+		set    func(*APIUsage, int)
+	}{
+		{"count", ".count", func(u *APIUsage, n int) { u.Count = n }},
+		{"objectsOmitted", ".objectsOmitted", func(u *APIUsage, n int) { u.ObjectsOmitted = n }},
+		{"a namespace count", ".namespaces", func(u *APIUsage, n int) { u.Namespaces["team-a"] = n }},
+	}
+	for _, l := range lists {
+		for _, f := range fields {
+			t.Run(l.name+"/"+f.name, func(t *testing.T) {
+				inv := validInventory()
+				f.set(l.pick(&inv), -5)
+				err := inv.ValidateLimits()
+				var le *LimitError
+				if !errors.As(err, &le) || le.Field != l.at+f.suffix {
+					t.Fatalf("ValidateLimits() = %v, want a LimitError at %s", err, l.at+f.suffix)
+				}
+				if !strings.Contains(le.Unquoted(), "negative") {
+					t.Errorf("Unquoted() = %q, want it to say negative", le.Unquoted())
+				}
+				// Zero is what a collector writes for nothing found.
+				inv = validInventory()
+				f.set(l.pick(&inv), 0)
+				if err := inv.ValidateLimits(); err != nil {
+					t.Errorf("ValidateLimits() with 0 = %v, want nil", err)
+				}
+			})
+		}
+	}
+	// Of several negative namespace counts the least key is named, whatever
+	// the map order.
+	inv := validInventory()
+	inv.APIUsage[0].Namespaces = map[string]int{"b": -1, "a": -2, "c": -1}
+	for range 20 {
+		if err := inv.ValidateLimits(); err == nil || !strings.Contains(err.Error(), `"a"`) {
+			t.Fatalf("ValidateLimits() = %v, want namespace \"a\" named", err)
+		}
+	}
+}

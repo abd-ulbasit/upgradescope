@@ -377,7 +377,7 @@ func TestTokensCreateDBPathIsExact(t *testing.T) {
 // database in it.
 func TestOpenStoreCreatesPrivateDirectory(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "new", "dir")
-	st, err := dbFlags{db: filepath.Join(dir, "u.db")}.openStore()
+	st, err := dbFlags{db: filepath.Join(dir, "u.db")}.openStore(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}

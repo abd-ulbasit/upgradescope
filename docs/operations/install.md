@@ -19,7 +19,7 @@ release workflow, with the dashboard and the knowledge base embedded.
 | krew | `kubectl krew install upgradescope` | once the plugin is in krew-index |
 | Go | `go install github.com/abd-ulbasit/upgradescope/cmd/upgradescope@<version>` | any |
 | Container image | `ghcr.io/abd-ulbasit/upgradescope:<version>` (linux/amd64, linux/arm64) | v0.2.0, signed |
-| Helm chart | `oci://ghcr.io/abd-ulbasit/charts/upgradescope` | v0.2.0, signed; before that, from a clone |
+| Helm chart | `oci://ghcr.io/abd-ulbasit/charts/upgradescope` | v0.2.0, signed |
 
 ## Release archives
 
@@ -42,7 +42,8 @@ sudo install upgradescope /usr/local/bin/
 From v0.2.0, `checksums.txt` is signed keylessly by the repository's release
 workflow ([cosign](https://docs.sigstore.dev/cosign/system_config/installation/)
 bundle `checksums.txt.sigstore.json`). Verify the signature, then the
-archive against the checksums:
+archive against the checksums (`cosign verify-blob` of this bundle works from
+cosign 2.4.3, the oldest tested; the image and chart need a newer one, below):
 
 ```sh
 curl -fsSLO "$base/checksums.txt.sigstore.json"
@@ -51,6 +52,9 @@ cosign verify-blob checksums.txt --bundle checksums.txt.sigstore.json \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 sha256sum --ignore-missing -c checksums.txt   # macOS: shasum -a 256 -c --ignore-missing checksums.txt
 ```
+
+cosign 2.4.1 fails on the bundle (`bundle does not contain cert for
+verification`) unless `verify-blob` also gets `--new-bundle-format`.
 
 Each archive also has an SPDX SBOM (`<archive>.sbom.json`) and a GitHub
 build-provenance attestation (`gh attestation verify <archive> --repo
@@ -82,11 +86,15 @@ verifies against the release workflow's signature.
 go install github.com/abd-ulbasit/upgradescope/cmd/upgradescope@latest
 ```
 
-The dashboard is committed in the module, so this binary serves it too,
-and `upgradescope version` reports the module version and commit (CI checks
-both: `make go-install-check`). What it lacks is the registry date stamp
-(`registry date: unknown`), and it is built with your toolchain rather than
-the release's.
+The dashboard is committed in the module, so this binary serves it too, and
+`upgradescope version` reports the module version. It does not report the commit or the build
+date: the go command stamps those only for a build inside a git checkout, so
+from the module proxy `upgradescope version` prints `commit: unknown`,
+`built: unknown` and `registry date: unknown` (seen by the round-3 audit on
+`v0.2.0-rc.3`, #99). `make go-install-check` builds from a
+checkout, where the commit is stamped, so it does not cover the proxy path.
+The binary is built with your toolchain rather than the release's; the
+release archives, image and packages carry all three stamps.
 
 ## Container image
 
@@ -96,7 +104,7 @@ docker run --rm ghcr.io/abd-ulbasit/upgradescope:0.2.0 version
 
 A distroless, non-root (UID 65532) image with only the binary and its
 license notices in `/licenses/`, for linux/amd64 and linux/arm64. Verify
-the signature:
+the signature with **cosign 3.x, or 2.6.3 or later**:
 
 ```sh
 cosign verify ghcr.io/abd-ulbasit/upgradescope:0.2.0 \
@@ -105,6 +113,15 @@ cosign verify ghcr.io/abd-ulbasit/upgradescope:0.2.0 \
 ```
 
 Each platform image is signed too and verifies on its own, by digest.
+
+The signatures are in cosign 3's bundle format, stored as OCI referrers. On
+cosign 2.6.2 or older the command above fails with `Error: no signatures
+found` (exit 10), though the image is signed: nothing is wrongly accepted, it
+fails closed. Upgrade cosign (the default of `sigstore/cosign-installer` v3.10.1
+is 2.6.1, too old: set `cosign-release` to `v2.6.3` or later, or use
+installer v4). From v0.2.0 on, each release run verifies every published image and
+chart with this command, once with cosign v2.6.3 and once with the current
+default.
 
 ## Helm chart
 
@@ -115,11 +132,12 @@ helm install upgradescope oci://ghcr.io/abd-ulbasit/charts/upgradescope \
 
 The published chart pins the image of its release by digest. It is signed
 with cosign (`cosign verify ghcr.io/abd-ulbasit/charts/upgradescope:0.2.0`
-with the flags above). Before v0.2.0 is published, install from a clone of
-the repository: `helm install upgradescope deploy/chart ...`, with
-`image.repository` and `image.tag` set to an image built from the clone
-(`make docker-build`) when you run unreleased changes: a clone's chart
-defaults to the image of the release it was cut for.
+with the flags above, and the same minimum: **cosign 3.x, or 2.6.3 or
+later**; older versions fail with `no signatures found`). To run unreleased
+changes, install from a clone of the repository instead:
+`helm install upgradescope deploy/chart ...`, with `image.repository` and
+`image.tag` set to an image built from the clone (`make docker-build`): a
+clone's chart defaults to the image of the release it was cut for.
 
 Upgrade it with `helm upgrade --reset-then-reuse-values` (Helm 3.14 or
 later), never `--reuse-values`, which keeps the old chart's defaults, the

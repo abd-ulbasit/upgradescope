@@ -75,6 +75,58 @@ func TestOutboxNeverLogsOrStoresSinkURLs(t *testing.T) {
 	}
 }
 
+// A URL with an "@" has its host withheld, and the dial error that follows
+// no longer names it: the log and last_error hold the same redacted text
+// (#371). A real refused connection to the userinfo sink's address.
+func TestOutboxWithheldHostIsNotInTheDialError(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	refused := ln.Addr().String()
+	ln.Close()
+	hook := notify.NewGenericWebhook("http://user:SECRETPW@" + refused + "/hooks/SECRETPATH")
+	logged := captureLog(t)
+	st := &lastErrorStore{Store: openSQLite(t)}
+	clock := &fakeClock{t: time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC)}
+	s := newTestServer(t, nil, func(c *Config) { c.Store = st; c.Notifier = hook })
+	s.now = clock.now
+	ts := httptest.NewServer(s.Handler())
+	defer ts.Close()
+	blockedThenClean(t, ts)
+
+	for range outboxMaxAttempts + 1 {
+		s.deliverOutbox(context.Background())
+		clock.set(clock.now().Add(outboxMaxBackoff + time.Minute))
+	}
+	st.mu.Lock()
+	stored := strings.Join(st.errs, "\n")
+	st.mu.Unlock()
+	if len(st.errs) < 2 {
+		t.Fatalf("only %d failed deliveries were stored", len(st.errs))
+	}
+	for what, text := range map[string]string{"the log": logged.String(), "last_error": stored} {
+		for _, leak := range []string{"SECRET", refused, "127.0.0.1"} {
+			if strings.Contains(text, leak) {
+				t.Errorf("%s carries %q:\n%s", what, leak, text)
+			}
+		}
+		if !strings.Contains(text, "http://(host redacted)/…") {
+			t.Errorf("%s does not show the withheld host:\n%s", what, text)
+		}
+		if !strings.Contains(text, "connection refused") {
+			t.Errorf("%s lost the reason:\n%s", what, text)
+		}
+	}
+	// What is stored is what is logged, per failed attempt.
+	for _, line := range strings.Split(strings.TrimSpace(stored), "\n") {
+		if !strings.Contains(logged.String(), line) {
+			t.Errorf("last_error %q is not in the log:\n%s", line, logged)
+			break
+		}
+	}
+}
+
 // rawURLNotifier is a sink whose errors repeat its URL as written and as
 // Go quotes it, as a notifier that does not redact its own errors would.
 type rawURLNotifier struct {

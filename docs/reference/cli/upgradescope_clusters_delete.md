@@ -7,7 +7,9 @@ Delete a cluster with its history, queued notifications and ingest tokens
 Delete a cluster record with its snapshot and evaluation history, its queued
 notifications and the per-cluster ingest tokens minted for its name. Use it to
 decommission a cluster, or when a cluster was rebuilt: a cluster name is bound to the
-cluster UID it first pushed, and the server answers 409 to a push from another UID.
+first non-empty cluster UID pushed under it (a name registered without one is bound
+by the first UID pushed afterwards, from whichever cluster sends it), and the server
+then answers 409 to a push from another UID, or with none.
 Delete the old record and the next push registers the new one; an agent that used a
 per-cluster token needs a new one ('upgradescope tokens create').
 An agent that keeps pushing under the name registers it again.
@@ -32,7 +34,7 @@ upgradescope clusters delete <cluster> [flags]
       --db-url string             Postgres URL (postgres://user:pass@host:5432/db); mutually exclusive with --db (visible in process listings: prefer $UPGRADESCOPE_DB_URL or --db-url-file)
       --db-url-file string        read --db-url from this file, e.g. a mounted Secret (surrounding whitespace is trimmed)
   -h, --help                      help for delete
-      --server-ca-file string     PEM bundle of a private CA that issued the server's certificate, trusted on top of the system roots (for an https server behind a private CA; $SSL_CERT_FILE also adds roots, for the whole process); needs an https server URL. Verification is never skipped
+      --server-ca-file string     PEM bundle of a private CA that issued the server's certificate, trusted on top of the system roots (for an https server behind a private CA; on Linux and other Unix systems $SSL_CERT_FILE and $SSL_CERT_DIR also change the system roots, for the whole process; Go ignores them on macOS and Windows, where this flag is the way); needs an https server URL. Verification is never skipped
       --server-url string         base URL of a running upgradescope server, e.g. https://upgradescope.example.com (instead of --db/--db-url)
 ```
 

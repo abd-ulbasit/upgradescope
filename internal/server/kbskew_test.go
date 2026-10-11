@@ -422,8 +422,9 @@ func TestKBSkewRegistryDirMismatchIsNamed(t *testing.T) {
 }
 
 // A server upgrade turns every cluster whose agent runs older data from
-// ready to unknown, and that is not news: an unknown pass sends nothing and
-// is not a baseline (operations: notifications), so the upgrade does not
+// ready to unknown, and that is not news: an unknown pass behind a required
+// gap that hides findings (here KB skew) sends nothing and is not a
+// baseline (operations: notifications), so the upgrade does not
 // notify every such cluster at once, and neither does the agent catching up.
 func TestKBSkewMovesNoNotifications(t *testing.T) {
 	k := embeddedKB(t)

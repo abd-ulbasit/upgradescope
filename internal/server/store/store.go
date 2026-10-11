@@ -74,8 +74,9 @@ type Store interface {
 	// then snapshots received before it that no evaluation refers to any
 	// more, except each cluster's latest snapshot and its evaluations (the
 	// cluster's current state, however old) and each (cluster, target)'s
-	// newest decided evaluation (LatestKnownEvaluation: the notification
-	// baseline, of the target itself or of an upgrade), with its snapshot.
+	// newest notification baseline (LatestKnownEvaluation: decided, or
+	// marked Baseline; of the target itself or of an upgrade), with its
+	// snapshot.
 	// baselines limits that last exception to the targets still in use
 	// (PruneBaselines); nil spares every baseline. Tokens, clusters and the
 	// outbox are not touched.
@@ -107,9 +108,11 @@ type Store interface {
 	// of every cluster (cluster list, fleet matrix, metrics) use it, so
 	// their cost never depends on how large a report is.
 	CurrentEvaluationSummary(ctx context.Context, clusterID int64, target string) (Evaluation, error)
-	// LatestKnownEvaluation is the newest evaluation for (cluster, target)
-	// whose verdict was decided — ready, or at least one blocker — skipping
-	// "unknown" ones (no blockers but required checks not assessed).
+	// LatestKnownEvaluation is the newest notification baseline for
+	// (cluster, target): an evaluation whose verdict was decided — ready,
+	// or at least one blocker — or one written with Baseline set, skipping
+	// the other "unknown" ones (no blockers, and a required check not
+	// assessed that may hide one).
 	LatestKnownEvaluation(ctx context.Context, clusterID int64, target string) (Evaluation, error)
 	ScoreHistory(ctx context.Context, clusterID int64, target string, limit int) ([]ScorePoint, error)
 
@@ -150,6 +153,12 @@ type Store interface {
 	ListTokens(ctx context.Context, clusterName string) ([]Token, error)       // active and revoked, ascending id; "" = every cluster
 	RevokeTokenID(ctx context.Context, clusterName string, id int64) error     // revokes one active token of clusterName; ErrNotFound otherwise
 	RevokeToken(ctx context.Context, clusterName string) error                 // revokes ALL active tokens; ErrNotFound when none are active
+	// IngestTokenCluster is ValidToken plus, in the same read, the id of
+	// the cluster registered under the token's name: 0 when none is yet
+	// (a token minted before the first push). Ingest authenticates with
+	// it, so a push knows from the start which cluster it may write to,
+	// and a rename or delete after that is a conflict, not a revoke.
+	IngestTokenCluster(ctx context.Context, token string) (clusterName string, clusterID int64, ok bool, err error)
 
 	// Read tokens: bearer tokens for the read API, each scoped to a set of
 	// team names, or to ReadScopeFleet ("*") for the whole fleet. Like
@@ -245,6 +254,15 @@ type Evaluation struct {
 	// from the report, never by the caller; true for a row written by a
 	// binary that predates the column (NULL), which may carry one.
 	CarriesHold bool `json:"-"`
+	// Baseline marks an evaluation the server takes as a notification
+	// baseline although its verdict is unknown (#380): its required gaps
+	// hide no finding (kb-coverage, target), so the pass saw all a
+	// blocker could come from. LatestKnownEvaluation returns it, the
+	// commit checks it and retention keeps it, as a decided one. A decided
+	// evaluation is a baseline whatever Baseline says. Written by the
+	// caller, on insert and refresh; false on read for a row written
+	// before the column (NULL).
+	Baseline bool `json:"-"`
 }
 
 // holdMarker is in every stored report that carries a held deprecated
@@ -440,7 +458,8 @@ var ErrClusterChanged = errors.New("store: the cluster was renamed or deleted wh
 var ErrClusterNameTaken = errors.New("store: cluster name is taken")
 
 // PruneBaselines says, per cluster id, which targets' notification
-// baselines (the newest decided evaluation of a cluster and target) a
+// baselines (the newest decided or Baseline evaluation of a cluster and
+// target) a
 // Prune spares however old they are: a cluster's entry lists the targets
 // its server still evaluates or may look back to for an upgrade; the
 // baselines of its other targets age out like any evaluation. A cluster
@@ -506,7 +525,8 @@ type EvaluationBatch struct {
 	// evaluated snapshot's id.
 	Insert []Evaluation
 	// Refresh updates existing rows by ID with an unchanged result:
-	// Report, KBVersion, TeamMapHash, Blockers, Warnings and EvaluatedAt.
+	// Report, KBVersion, TeamMapHash, Blockers, Warnings, EvaluatedAt and
+	// Baseline.
 	// Score, Ready and CreatedAt (the history point) stay.
 	Refresh []Evaluation
 	Outbox  []OutboxMessage
@@ -527,7 +547,7 @@ type Expectation struct {
 	// stored snapshot a re-evaluation judges is SnapshotID.
 	LatestSnapshotID int64
 	// Baselines maps every target whose baseline the pass read to the id
-	// of that target's newest decided evaluation
+	// of that target's newest baseline, decided or marked Baseline
 	// (LatestKnownEvaluation), 0 for none.
 	Baselines map[string]int64
 }
@@ -662,7 +682,8 @@ func recheckPush(ctx context.Context, tx *sql.Tx, b EvaluationBatch, tokenQuery 
 // the commit's transaction after the writer's lock (SQLite's one write
 // lock, Postgres' cluster row): latestID is the cluster's latest snapshot
 // (0 for none), and knownIDQuery selects the id of a (cluster_id, target)'s
-// newest decided evaluation. Nothing is checked without b.Expect.
+// newest baseline (decided or Baseline). Nothing is checked without
+// b.Expect.
 func checkExpectation(ctx context.Context, tx *sql.Tx, b EvaluationBatch, latestID int64, knownIDQuery string) error {
 	if b.Expect == nil {
 		return nil

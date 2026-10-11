@@ -21,7 +21,9 @@ minted for `*` read the whole fleet. A read token minted for teams, and
 the trusted proxy's header, read only those teams: the clusters one of
 them owns a namespace in (by the namespace attribution findings carry,
 after `--team-map`), and of those only their findings, suppressed
-findings and team scores. A finding that spans teams is cut to theirs:
+findings (those the objects' `upgradescope.basit.engineer/ignore`
+annotations accepted, which the server's evaluations apply; never the
+agent's `spec.ignore`) and team scores. A finding that spans teams is cut to theirs:
 only their teams, namespaces and objects, its title counting only
 theirs and its detail replaced by one that names only what is kept,
 without the folded apiserver caller rows (`callers`).
@@ -130,8 +132,13 @@ the cluster's next minor plus `serve --targets`, in one
 transaction. A push whose inventory equals the latest stored one
 (ignoring `collectedAt` and fields this server does not know) is a
 duplicate: 200, nothing new stored. A cluster name is bound to the
-`clusterId` (kube-system namespace UID) it first pushed; a push
-under that name from another UID, or with none, is a 409.
+first non-empty `clusterId` (kube-system namespace UID) pushed under
+it; from then on a push under that name from another UID, or with
+none, is a 409. A name registered without one is bound by the first
+`clusterId` pushed afterwards, from whichever cluster sends it, and
+that push continues the name's history: the server logs the adoption
+and sends no `became-ready` for it. Two pushers that both send no
+`clusterId` always share the name.
 
 A per-cluster token may push only as its own cluster (403 before
 anything is written). `clusterName` is an RFC 1123 subdomain of at
@@ -142,7 +149,10 @@ release names RFC 1123 subdomains, team labels label values. Its
 other values are within the limits collectors keep to: strings at
 most 16 KiB (a capability's reason 64 KiB, an object's field
 manager 128 printable bytes), at most 100 objects per API usage
-entry, each group/version/kind once per list, at most 200
+entry, no `count`, `objectsOmitted` or namespace count below zero in
+an API usage entry (`apiUsage`, `apiAuthorshipUnknown`, a CRD's
+`usage`, a Helm release's `manifestApis`) or a volume plugin entry,
+each group/version/kind once per list, at most 200
 unrecognized images and 32 capabilities. Anything else is 422,
 naming the field and the rule, before anything is stored. The free
 text a collector copies whole from the cluster is cut to the
@@ -401,8 +411,10 @@ CRDs merged into it, and the verdict counts only what the
 manifests introduce (findings tagged `source: manifest`); findings
 the cluster already has are tagged `source: cluster`. A removed or
 deprecated API a posted object uses, an add-on the manifests
-deploy, and a custom resource they write at a version the CRDs do
-not serve are always the manifests'.
+deploy, an in-tree volume plugin a posted pod template, Pod or
+PersistentVolume names (also when the cluster already has pods or
+volumes on it), and a custom resource they write at a version the CRDs
+do not serve are always the manifests'.
 
 With a team-scoped credential, `cluster` is judged as the scope's
 share of it only (its teams' namespaces, and what describes the
@@ -440,10 +452,12 @@ Suppression works as in `scan`: the `upgradescope.basit.engineer/ignore` and
 `cluster`, stored) objects, and the ignore rules of a
 `.upgradescope.yaml` sent in `config`. Suppressed findings count
 toward neither the verdict nor `fail-on`; the JSON answer lists
-them in `suppressed` with `suppressedCount`, SARIF as results with
-an external suppression, JUnit as skipped test cases, and Code
-Quality leaves them out. An expired rule no longer applies; it and
-an annotation without a reason are named in `warnings`. There is
+them in `suppressed` with `suppressedCount`, SARIF with no result
+for them (GitHub code scanning ignores a result's `suppressions` and
+would open an alert; one run-level note counts them instead), JUnit
+as skipped test cases, and Code Quality leaves them out. An expired rule
+no longer applies; it and an annotation without a reason are named in
+`warnings`. There is
 no baseline input: with `cluster`, the cluster's own findings are
 the baseline (`source: cluster`), and manifest-level debt is
 accepted with `scan --baseline` or ignore rules.
@@ -513,8 +527,11 @@ Auditor exports of a stored evaluation.
 ### `GET /api/v1/clusters/{id}/export`
 
 **Auditor export.** The stored evaluation of the latest snapshot as CSV (one summary
-row, one row per finding, one per capability not assessed) or a
-self-contained HTML report with the score history. Never a what-if:
+row, one row per finding, one `suppressed` row per finding or
+objects of one that the objects' ignore annotations accepted, with
+its severity, source, reason and objects in the detail, and one per
+capability not assessed) or a self-contained HTML report with the
+score history and a suppressed section. Never a what-if:
 404 when no stored evaluation exists for the target, or when the
 cluster already runs it. An export is at most
 `--max-snapshot-bytes`, as the report it renders is (HTML writes
@@ -886,7 +903,7 @@ The engine's report, as `scan --output json` writes it.
 | `ready` | boolean | yes | verdict == ready. |
 | `verdict` | [Verdict](#verdict) | yes | — |
 | `notAssessed` | array of [CapabilityGap](#capabilitygap) | no | — |
-| `suppressed` | array of [SuppressedFinding](#suppressedfinding) | no | — |
+| `suppressed` | array of [SuppressedFinding](#suppressedfinding) | no | What ignore rules or object annotations accepted, out of `findings`, the score and the verdict. A stored or read-time report (`GET /report`, the fleet, history, notifications, exports) applies the objects' `upgradescope.basit.engineer/ignore` annotations (source `annotation`), never the agent's `spec.ignore`; `/gate` applies them and its `config` rules. |
 | `unrecognizedImages` | array of string | no | Image repositories (host/path) no add-on image matcher recognised: a detection gap, not a finding (neither score nor verdict counts them). Sorted, deduplicated, at most 200. |
 | `unrecognizedImagesOmitted` | integer | no | Unrecognized image repositories beyond the 200 listed. |
 | `addOnEvidenceAgeSeconds` | integer | no | How old, in seconds (at least 1), the pod evidence the add-ons were detected from was when the agent reused its last full pod pass instead of listing every pod again (`--pod-pass-every`, `--pod-pass-max-age`): an add-on installed or upgraded since is reported as it was then, and a pass of `--pod-pass-max-age` or more is not reused (the age is that of the collection, so a viewer can see evidence about one interval older). Absent when every pod was read for this report, and from collectors that predate the field. The verdict does not depend on it. |
@@ -909,7 +926,7 @@ The report's fields other than its findings.
 | `ready` | boolean | yes | verdict == ready. |
 | `verdict` | [Verdict](#verdict) | yes | — |
 | `notAssessed` | array of [CapabilityGap](#capabilitygap) | no | — |
-| `suppressed` | array of [SuppressedFinding](#suppressedfinding) | no | — |
+| `suppressed` | array of [SuppressedFinding](#suppressedfinding) | no | What ignore rules or object annotations accepted, out of `findings`, the score and the verdict. A stored or read-time report (`GET /report`, the fleet, history, notifications, exports) applies the objects' `upgradescope.basit.engineer/ignore` annotations (source `annotation`), never the agent's `spec.ignore`; `/gate` applies them and its `config` rules. |
 | `unrecognizedImages` | array of string | no | Image repositories (host/path) no add-on image matcher recognised: a detection gap, not a finding (neither score nor verdict counts them). Sorted, deduplicated, at most 200. |
 | `unrecognizedImagesOmitted` | integer | no | Unrecognized image repositories beyond the 200 listed. |
 | `addOnEvidenceAgeSeconds` | integer | no | How old, in seconds (at least 1), the pod evidence the add-ons were detected from was when the agent reused its last full pod pass instead of listing every pod again (`--pod-pass-every`, `--pod-pass-max-age`): an add-on installed or upgraded since is reported as it was then, and a pass of `--pod-pass-max-age` or more is not reused (the age is that of the collection, so a viewer can see evidence about one interval older). Absent when every pod was read for this report, and from collectors that predate the field. The verdict does not depend on it. |
@@ -963,7 +980,7 @@ are not known. The same for every target.
 | `ready` | boolean | yes | verdict == ready. |
 | `verdict` | [Verdict](#verdict) | yes | — |
 | `notAssessed` | array of [CapabilityGap](#capabilitygap) | no | — |
-| `suppressed` | array of [SuppressedFinding](#suppressedfinding) | no | — |
+| `suppressed` | array of [SuppressedFinding](#suppressedfinding) | no | What ignore rules or object annotations accepted, out of `findings`, the score and the verdict. A stored or read-time report (`GET /report`, the fleet, history, notifications, exports) applies the objects' `upgradescope.basit.engineer/ignore` annotations (source `annotation`), never the agent's `spec.ignore`; `/gate` applies them and its `config` rules. |
 | `unrecognizedImages` | array of string | no | Image repositories (host/path) no add-on image matcher recognised: a detection gap, not a finding (neither score nor verdict counts them). Sorted, deduplicated, at most 200. |
 | `unrecognizedImagesOmitted` | integer | no | Unrecognized image repositories beyond the 200 listed. |
 | `addOnEvidenceAgeSeconds` | integer | no | How old, in seconds (at least 1), the pod evidence the add-ons were detected from was when the agent reused its last full pod pass instead of listing every pod again (`--pod-pass-every`, `--pod-pass-max-age`): an add-on installed or upgraded since is reported as it was then, and a pass of `--pod-pass-max-age` or more is not reused (the age is that of the collection, so a viewer can see evidence about one interval older). Absent when every pod was read for this report, and from collectors that predate the field. The verdict does not depend on it. |
@@ -1121,7 +1138,7 @@ are not known. The same for every target.
 | `ready` | boolean | yes | verdict == ready. |
 | `verdict` | [Verdict](#verdict) | yes | — |
 | `notAssessed` | array of [CapabilityGap](#capabilitygap) | no | — |
-| `suppressed` | array of [SuppressedFinding](#suppressedfinding) | no | — |
+| `suppressed` | array of [SuppressedFinding](#suppressedfinding) | no | What ignore rules or object annotations accepted, out of `findings`, the score and the verdict. A stored or read-time report (`GET /report`, the fleet, history, notifications, exports) applies the objects' `upgradescope.basit.engineer/ignore` annotations (source `annotation`), never the agent's `spec.ignore`; `/gate` applies them and its `config` rules. |
 | `unrecognizedImages` | array of string | no | Image repositories (host/path) no add-on image matcher recognised: a detection gap, not a finding (neither score nor verdict counts them). Sorted, deduplicated, at most 200. |
 | `unrecognizedImagesOmitted` | integer | no | Unrecognized image repositories beyond the 200 listed. |
 | `addOnEvidenceAgeSeconds` | integer | no | How old, in seconds (at least 1), the pod evidence the add-ons were detected from was when the agent reused its last full pod pass instead of listing every pod again (`--pod-pass-every`, `--pod-pass-max-age`): an add-on installed or upgraded since is reported as it was then, and a pass of `--pod-pass-max-age` or more is not reused (the age is that of the collection, so a viewer can see evidence about one interval older). Absent when every pod was read for this report, and from collectors that predate the field. The verdict does not depend on it. |
@@ -1195,7 +1212,7 @@ sent, unknown fields included, so a newer server can judge them.
 | `unrecognizedImagesOmitted` | integer | no | Unrecognized image repositories the cap dropped. |
 | `provider` | string | no | Known values: eks, gke, aks, other. The managed Kubernetes service the collector inferred, or `other` when the cluster shows none of the three; absent when it could not tell (the nodes were unreadable and the server version names no provider). A name this build does not know is accepted and has no support calendar (a newer agent may learn more providers); a value that is not a name of at most 63 bytes of letters, digits, `-`, `_` or `.` is refused (422). |
 | `crds` | array of object | no | CustomResourceDefinitions: versions, status.storedVersions, and the custom resources at a deprecated or unserved version. |
-| `volumePlugins` | array of object | no | The in-tree volume plugins (the `volumes` capability) the pods, PersistentVolumes and StorageClasses name, one entry per plugin by its field name in a pod's volumes or a PersistentVolume's spec (`glusterfs`, `awsElasticBlockStore`), a StorageClass counting for the plugin of its in-tree provisioner (`kubernetes.io/rbd`): `plugin`, `count` (the pods, PersistentVolumes and StorageClasses, or in files mode the pod templates, Pods, PersistentVolumes and StorageClasses, naming it), `namespaces` (that count per namespace; a bound PersistentVolume under its claim's, an unbound one and a StorageClass under the empty key), and `objects` (live, the PersistentVolumes and StorageClasses by name, never a pod; in files mode file, line, namespace and name; at most 100) and `objectsOmitted`. An agent that predates PersistentVolume and StorageClass reads sends pods only, and is still valid. At most 64 entries, each plugin once; a plugin must be a field name (at most 64 ASCII letters and digits, starting with a letter), no count negative, namespace keys and object refs namespace and object names (422 otherwise). An agent drops an entry that would be refused, marking `volumes` partial. An inventory without the `volumes` capability, as older agents push, is not assessed for them. |
+| `volumePlugins` | array of object | no | The in-tree volume plugins (the `volumes` capability) the pods, PersistentVolumes and StorageClasses name, one entry per plugin by its field name in a pod's volumes or a PersistentVolume's spec (`glusterfs`, `awsElasticBlockStore`), a StorageClass counting for the plugin of its in-tree provisioner (`kubernetes.io/rbd`): `plugin`, `count` (the pods, PersistentVolumes and StorageClasses, or in files mode the pod templates, Pods, PersistentVolumes and StorageClasses, naming it), `namespaces` (that count per namespace; a bound PersistentVolume under its claim's, an unbound one and a StorageClass under the empty key), and `objects` (live, the PersistentVolumes and StorageClasses by name, never a pod; in files mode file, line, namespace and name; at most 100) and `objectsOmitted`. An agent that predates PersistentVolume and StorageClass reads sends pods only, and is still valid. At most 64 entries, each plugin once; a plugin must be a field name (at most 64 ASCII letters and digits, starting with a letter), no `count`, `objectsOmitted` or namespace count negative, namespace keys and object refs namespace and object names (422 otherwise). An agent drops an entry that would be refused, marking `volumes` partial. An inventory without the `volumes` capability, as older agents push, is not assessed for them. |
 | `addOnEvidenceAgeSeconds` | integer | no | How old, in seconds, the pod evidence the add-ons were detected from was when the agent reused its last full pod pass instead of listing every pod again (`--pod-pass-every`, `--pod-pass-max-age`). Absent when every pod was read. Not part of the snapshot's identity, like collectedAt: a push that differs only in it is a duplicate and is not stored, so the stored report keeps the age it was first pushed with, as it keeps that push's `collectedAt` (the evidence is as of `collectedAt`). |
 | `apiServerStartTime` | string (date-time) | no | process_start_time_seconds of the kube-apiserver whose /metrics deprecatedCalls were read from, in whole seconds: apiserver_requested_deprecated_apis counts requests since then. Absent when the scrape did not report it. Not part of the snapshot's identity, like collectedAt: a push that differs only in it is a duplicate. The server ignores one before 2014 or more than 10 minutes after collectedAt. |
 

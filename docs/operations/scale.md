@@ -108,7 +108,8 @@ quote them.
   An earlier draft made 24, with pod pages of up to 2,000, whose worst case
   was past the agent's memory limit (see [The steady
   tick](#the-tick-after-226-and-228)). A tick that asks API discovery again
-  (at least hourly) makes 4 more. At the default interval of 10 minutes,
+  (at least hourly) makes 4 more, plus one for each GitOps group-version
+  the cluster serves (the lab served none). At the default interval of 10 minutes,
   31 requests are 0.052 requests a second (53 were 0.088).
 - **The first tick after the agent starts costs more**: it reads each Helm
   release once. On main `735751d` that was 1,053 requests in all, 36.7 s and
@@ -424,8 +425,9 @@ them without a watch (AG-01) and without reading pods less often:
   the RSS from 57.1 to 65.0 MiB (58.0 and 85.2 at `59d8561`, 68.5 and 95.2
   at `5da764e`).
 - API discovery is kept between ticks (`collect.DiscoveryCache`, PF-16):
-  4 requests to 0 on a steady tick. It is asked again (4 requests more on
-  that tick) when the server version changed (seen on the tick, before any
+  4 requests, plus one for each GitOps group-version the cluster serves
+  (6 with the Argo CD and Flux CRDs), to 0 on a steady tick. It is asked
+  again (as many requests more on that tick) when the server version changed (seen on the tick, before any
   step reads discovery), on the tick after the CRDs' groups, kinds or
   served versions changed or the CRD list failed, when it is an hour old,
   or when the last answer had an error. Custom resources that could not be

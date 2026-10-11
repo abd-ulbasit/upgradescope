@@ -6,7 +6,11 @@ import { Citations, Empty, ErrorState, Freshness, Loading } from "../ui";
 
 // Registry: browse the add-on EOL/compat dataset embedded in this server
 // binary (GET /api/v1/registry) — exactly what evaluations run against.
-export function Registry() {
+// The status shown is derived from the entry's dates and today's UTC date,
+// not read from the hand-maintained support.status (see effectiveStatus);
+// `now` is the injectable clock, for deterministic tests.
+export function Registry({ now }: { now?: Date } = {}) {
+  const today = utcDate(now ?? new Date());
   const reg = useAsync(getRegistry, []);
   const [q, setQ] = useState("");
 
@@ -54,7 +58,7 @@ export function Registry() {
       ) : (
         <div className="addon-grid">
           {visible.map((a) => (
-            <AddOnCard key={a.id} a={a} />
+            <AddOnCard key={a.id} a={a} today={today} />
           ))}
         </div>
       )}
@@ -62,29 +66,65 @@ export function Registry() {
   );
 }
 
-function AddOnCard({ a }: { a: AddOn }) {
+// utcDate is d's calendar date in UTC, YYYY-MM-DD: the form registry dates
+// are written in, so string comparison orders them.
+function utcDate(d: Date): string {
+  return d.toISOString().slice(0, 10);
+}
+
+type Effective = {
+  // CSS suffix and badge text.
+  tone: "supported" | "eol" | "unknown" | "extended";
+  label: string;
+  // The eol_date and extended_eol_date are on or before today. A date that
+  // is today has passed, as in the engine (a date is not "after" now).
+  eolPassed: boolean;
+  extPassed: boolean;
+};
+
+// effectiveStatus re-derives what the badge says from the dates: a stored
+// status is written when an entry is added and is stale once its date
+// passes. The engine's findings already use the dates; this keeps the
+// dashboard's display in step. The stored status stays as data.
+//   eol_date passed, extended_eol_date ahead -> extended support only
+//   eol_date passed otherwise                 -> eol
+//   anything else                             -> the stored status
+export function effectiveStatus(a: AddOn, today: string): Effective {
+  const { status, eol_date: eol, extended_eol_date: ext } = a.support;
+  const eolPassed = !!eol && eol <= today;
+  const extPassed = !!ext && ext <= today;
+  // Like the engine, an entry stored as eol ignores its extended date.
+  if (eolPassed && ext && !extPassed && status !== "eol") {
+    return { tone: "extended", label: `extended support only · until ${ext}`, eolPassed, extPassed };
+  }
+  if (eolPassed) {
+    return { tone: "eol", label: `eol · ${eol}`, eolPassed, extPassed };
+  }
+  return { tone: status as Effective["tone"], label: `${status}${eol ? ` · ${eol}` : ""}`, eolPassed, extPassed };
+}
+
+function AddOnCard({ a, today }: { a: AddOn; today: string }) {
+  const eff = effectiveStatus(a, today);
   return (
     <article className="card addon">
       <header className="head-row">
         <h2>{a.display_name}</h2>
-        <span className={`status status-${a.support.status}`}>
-          {a.support.status}
-          {a.support.eol_date ? ` · ${a.support.eol_date}` : ""}
-        </span>
+        <span className={`status status-${eff.tone}`}>{eff.label}</span>
       </header>
       <p className="muted">
         <code>{a.id}</code>
       </p>
       {a.support.extended_eol_date && (
         <p className="support-split">
-          {a.support.status === "eol" ? "Support ended" : "Supported"}
-          {" until "}
+          {a.support.status === "eol" || eff.extPassed
+            ? "Extended support ended "
+            : "Supported until "}
           {a.support.extended_eol_date}
           {a.support.extended_support_condition
             ? ` only if ${a.support.extended_support_condition}`
             : ""}
           {a.support.eol_date
-            ? `; for everyone else support ends ${a.support.eol_date}`
+            ? `; for everyone else support ${eff.eolPassed ? "ended" : "ends"} ${a.support.eol_date}`
             : ""}
           .
         </p>

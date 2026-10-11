@@ -202,6 +202,11 @@ A `scan` from a laptop needs the same reads (and makes no writes at all,
 which the end-to-end audit log check also verifies); what your identity
 cannot read is reported as not assessed.
 
+In the API server's audit log, `scan` and the agent send the user agent
+`upgradescope/<version> (<os>/<arch>)`, with the release version, and the
+agent also runs as its ServiceAccount, so the two together tell the callers
+and the releases apart.
+
 ## The server
 
 - **No Kubernetes access.** The server runs under its own ServiceAccount
@@ -234,7 +239,10 @@ cannot read is reported as not assessed.
   `--trusted-proxy-cidr`, a read whose TCP peer is in those ranges takes its
   team scope from that header; from anywhere else the header is ignored. It
   is only as safe as the proxy: it must strip what clients send in that
-  header, and the ranges must hold the proxy and nothing else. Every
+  header, and the ranges must hold the proxy and nothing else (`serve`
+  refuses a set of ranges that together hold every address of IPv4 or of
+  IPv6, but a partial cover starts: keeping the ranges to the proxy is the
+  operator's job). Every
   connection over loopback counts as the proxy when 127.0.0.1 is trusted:
   `kubectl port-forward` and a mesh sidecar that delivers traffic over
   localhost included
@@ -255,7 +263,12 @@ cannot read is reported as not assessed.
   `--webhook` are absolute http(s) URLs, naming the flag and never the
   value, and a failed delivery is logged, and stored in the outbox's
   `last_error`, with the URL's scheme and host only
-  (`https://hooks.slack.com/…`).
+  (`https://hooks.slack.com/…`). A URL that holds an `@` has its host
+  withheld too (`https://(host redacted)/…`), and the transport error that
+  follows is cut to its reason (`no such host`, `connection refused`,
+  `i/o timeout`, the TLS reason), so it names neither the host nor the
+  address dialed. A URL that does not parse is refused at startup with a
+  fixed text per kind of fault, never a fragment of the value.
 - **Admin commands never follow redirects.** `clusters delete|rename
   --server-url` treat any 3xx as an error naming its status and Location:
   Go would follow a 301 or 302 with a GET, which the admin token reads,

@@ -263,7 +263,7 @@ func TestIngestMismatchedTokenWritesNothing(t *testing.T) {
 
 func TestIngestTokenLookupStoreError(t *testing.T) {
 	st := newFakeStore()
-	st.errs["ValidToken"] = context.DeadlineExceeded
+	st.errs["IngestTokenCluster"] = context.DeadlineExceeded
 	ts := httptest.NewServer(newTestServer(t, st).Handler())
 	defer ts.Close()
 	resp, out := postSnapshot(t, ts, "any-non-shared", pushReqBody(t, testInventory()), true)
@@ -559,5 +559,44 @@ func TestIngestSkipsDefaultTargetWhenServerVersionUnparseable(t *testing.T) {
 	}
 	if len(st.snapshots) != 1 {
 		t.Fatalf("snapshots = %d, want 1", len(st.snapshots))
+	}
+}
+
+// The same inventory pushed again with a CRD's spec.versions (and a
+// capability's Skipped list) in another order is a duplicate, not a new
+// snapshot and history point: the report does not depend on either order
+// (#367), so the dedup hash must not either.
+func TestIngestDuplicateWhenCRDVersionsReordered(t *testing.T) {
+	st := newFakeStore()
+	s := newTestServer(t, st)
+	clock := &fakeClock{t: s.now()}
+	s.now = clock.now
+	ts := httptest.NewServer(s.Handler())
+	defer ts.Close()
+
+	build := func(versions []inventory.CRDVersion, skipped []string) []byte {
+		inv := testInventory()
+		inv.CRDs = []inventory.CRD{{Group: "cert-manager.io", Kind: "Certificate", Plural: "certificates", Versions: versions}}
+		helm := inv.Capabilities[inventory.CapHelm]
+		helm.Partial, helm.Skipped = true, skipped
+		inv.Capabilities[inventory.CapHelm] = helm
+		return pushReqBody(t, inv)
+	}
+	v1 := inventory.CRDVersion{Name: "v1", Served: true, Storage: true}
+	alpha := inventory.CRDVersion{Name: "v1alpha2", Served: true}
+
+	resp1, out1 := postSnapshot(t, ts, "ingest-tok", build([]inventory.CRDVersion{alpha, v1}, []string{"apps/v1 deployments", "v1 secrets"}), true)
+	if resp1.StatusCode != http.StatusAccepted {
+		t.Fatalf("first push status = %d (body %v), want 202", resp1.StatusCode, out1)
+	}
+	resp2, out2 := postSnapshot(t, ts, "ingest-tok", build([]inventory.CRDVersion{v1, alpha}, []string{"v1 secrets", "apps/v1 deployments"}), true)
+	if resp2.StatusCode != http.StatusOK || out2["duplicate"] != true {
+		t.Fatalf("reordered push: status %d, body %v, want 200 duplicate:true", resp2.StatusCode, out2)
+	}
+	if out1["snapshotId"] != out2["snapshotId"] {
+		t.Fatalf("snapshotId mismatch: %v vs %v", out1["snapshotId"], out2["snapshotId"])
+	}
+	if len(st.snapshots) != 1 {
+		t.Fatalf("snapshots after reordered push = %d, want 1", len(st.snapshots))
 	}
 }

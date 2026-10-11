@@ -62,7 +62,7 @@
     <td>removed-api</td>
     <td>
       <strong>extensions/v1beta1 Ingress removed in 1.22 (3 objects)</strong>
-      <div class="detail">3 object(s) still stored/served at this version: pay-prod (1), shared-tools (1), web-secret-ns (1).</div>
+      <div class="detail">3 object(s) still stored/served at this version: pay-prod (1), shared-tools (1), web-secret-ns (1). 1 object(s) suppressed (see suppressed).</div>
       
       <div class="cites"><a href="https://kubernetes.io/docs/reference/using-api/deprecation-guide/">https://kubernetes.io/docs/reference/using-api/deprecation-guide/</a> </div>
     </td>
@@ -72,6 +72,24 @@
   
 </table>
 
+<h2>suppressed (1)</h2>
+<p class="detail">Accepted findings: excluded from the score and the verdict, and listed here with what accepted them and why.</p>
+<table>
+  <tr><th>severity</th><th>category</th><th>finding</th><th>accepted by</th><th>reason</th></tr>
+  
+  <tr class="sev-blocker">
+    <td>blocker</td>
+    <td>removed-api</td>
+    <td>
+      <strong>extensions/v1beta1 Ingress removed in 1.22 (3 objects)</strong>
+      <div class="detail">3 object(s) still stored/served at this version: pay-prod (1), shared-tools (1), web-secret-ns (1).</div>
+      <div class="detail">Objects: web-secret-ns/web-secret-ingress</div>
+    </td>
+    <td>annotation</td>
+    <td>web-secret-reason</td>
+  </tr>
+  
+</table>
 
 <h2>not assessed</h2>
 <ul class="gaps">

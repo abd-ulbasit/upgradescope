@@ -21,7 +21,8 @@ a day; `0` keeps everything) prunes once at startup and then daily:
 - except each cluster's latest snapshot and its evaluations, however old:
   a cluster that has been silent longer than the window keeps its current
   state (and shows as stale);
-- and except each cluster's last decided (ready or blocked) evaluation of
+- and except each cluster's last notification baseline (a decided, ready
+  or blocked, evaluation, or an `unknown` one past the KB horizon, #380) of
   each target the server still compares it with, with its snapshot, however
   old: the baseline notifications are compared with
   ([Notifications](../operations.md#notifications)). Those targets are
@@ -30,7 +31,8 @@ a day; `0` keeps everything) prunes once at startup and then daily:
   default target, which an upgrade looks back to for the previous
   default's baseline. A target that stays `unknown` for longer than the
   window, or the previous default target after an upgrade, still has one
-  when it is next decided. The baseline of any other target (dropped from
+  when it is next decided; a decided evaluation under a newer `unknown`
+  baseline is no longer the baseline and ages out. The baseline of any other target (dropped from
   `--targets`, or more than three minors below a cluster's default after it
   upgraded) ages out like any evaluation, so these do not pile up. Usually
   the baseline is of the latest snapshot anyway; otherwise a cluster keeps
@@ -75,14 +77,15 @@ What one run reads. The evaluation step finds the old rows from an index on
 them oldest first and stopping at the cutoff, so a run with nothing older
 than the window reads the oldest index entries and no report. The
 subqueries that spare rows (each cluster's latest snapshot, and the newest
-decided evaluation of each cluster and target) run only when the index
+notification baseline, decided or `unknown` past the KB horizon, of each
+cluster and target) run only when the index
 range finds a row older than the cutoff, which in steady state is every
-daily run. The snapshot condition reads a covering index. The decided one
-walks `idx_evaluations_decided` and looks up the row of every decided
-evaluation for its leading columns (the index is partial, its predicate is
-re-checked against the table, so the plan says `USING INDEX`, not
-`USING COVERING INDEX`), never reading its report, so its cost
-follows the number of decided evaluations and not their size. A prune that
+daily run. The snapshot condition reads a covering index. The baseline one
+walks `idx_evaluations_baseline` (migration 0011) and looks up the row of
+every baseline evaluation for its leading columns (the index is partial,
+its predicate is re-checked against the table, so the plan says `USING
+INDEX`, not `USING COVERING INDEX`), never reading its report, so its cost
+follows the number of baseline evaluations and not their size. A prune that
 deletes nothing runs neither subquery. Before 0010 the step scanned the
 whole evaluations table, every run, the last short batch of a drain included; `created_at` is stored
 after the report on SQLite, so that read every report's overflow pages, all
@@ -248,8 +251,8 @@ decoded every inventory).
 ## What the history records
 
 `GET /api/v1/clusters/{id}/history` is a change log, not a sample taken at
-every evaluation: it returns one point (`at`, `score`, `ready`) per stored
-evaluation of the target, and a row is stored only when the result is new.
+every evaluation: it returns one point (`at`, `score`, `ready`, `verdict`) per
+stored evaluation of the target, and a row is stored only when the result is new.
 
 - **A row is added** when a pushed snapshot differs from the cluster's
   latest (one row per target, whatever its score), when a re-evaluation
@@ -274,9 +277,9 @@ Team attribution is part of the stored report, not of what is compared. A
 team-map change that leaves every verdict, score and finding as it was
 rewrites the row's report in place with the new teams: the earlier
 attribution is gone from the database as well as from the API, and
-`/history` keeps only `at`, `score` and `ready`. `/report`, `/teams` and the
-exports always read the latest stored evaluation, so they cannot answer
-which team owned a blocker at an earlier time. An auditor who needs that
+`/history` keeps only `at`, `score`, `ready` and `verdict`. `/report`,
+`/teams` and the exports always read the latest stored evaluation, so they
+cannot answer which team owned a blocker at an earlier time. An auditor who needs that
 keeps the exports from the time (`GET /api/v1/clusters/{id}/export`).
 
 ## Backup and restore

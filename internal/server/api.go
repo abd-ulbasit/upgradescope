@@ -476,31 +476,33 @@ func bearerToken(r *http.Request) string {
 // the optional shared Config.IngestToken (fleet-wide; single-cluster/dev
 // setups — when it is "" only per-cluster tokens work) and per-cluster
 // tokens minted via `upgradescope tokens create` (P3, spec §8) — those
-// return the cluster name the token is bound to.
+// return the cluster name the token is bound to and, read with it, the id
+// of the cluster registered under that name (0 when none is yet).
 // boundCluster == "" means the push may target any cluster. The HTTP error
 // (401 / 500) is written here; the cluster-match check happens in
-// handleIngest once the body names its cluster (403 there).
-func (s *Server) authIngest(w http.ResponseWriter, r *http.Request) (boundCluster string, ok bool) {
+// handleIngest once the body names its cluster (403 there), and boundID
+// lets it tell a rename or delete since auth (409) from a revoke (401).
+func (s *Server) authIngest(w http.ResponseWriter, r *http.Request) (boundCluster string, boundID int64, ok bool) {
 	token := bearerToken(r)
 	shared := s.tokens.ingest() // read once: one request, one value
 	if token != "" && shared != "" &&
 		subtle.ConstantTimeCompare([]byte(token), []byte(shared)) == 1 {
-		return "", true
+		return "", 0, true
 	}
 	if token == "" {
 		errJSON(w, http.StatusUnauthorized, "invalid or missing bearer token")
-		return "", false
+		return "", 0, false
 	}
-	name, valid, err := s.cfg.Store.ValidToken(r.Context(), token)
+	name, id, valid, err := s.cfg.Store.IngestTokenCluster(r.Context(), token)
 	if err != nil {
 		internalErr(w, "validating ingest token", err)
-		return "", false
+		return "", 0, false
 	}
 	if !valid {
 		errJSON(w, http.StatusUnauthorized, "invalid or missing bearer token")
-		return "", false
+		return "", 0, false
 	}
-	return name, true
+	return name, id, true
 }
 
 // maxSnapshotUnits caps what decoding one snapshot push may build, in
@@ -614,7 +616,7 @@ type pushRequest struct {
 // with the snapshot in one transaction (202), or — for a duplicate of the
 // latest snapshot — stale evaluations refreshed (200 duplicate).
 func (s *Server) handleIngest(w http.ResponseWriter, r *http.Request) {
-	boundCluster, ok := s.authIngest(w, r)
+	boundCluster, boundID, ok := s.authIngest(w, r)
 	if !ok {
 		return
 	}
@@ -719,16 +721,37 @@ func (s *Server) handleIngest(w http.ResponseWriter, r *http.Request) {
 	// last-seen bump. The lookup here only decides early: a UID conflict
 	// needs no evaluation, and a known cluster's latest snapshot decides
 	// whether this push is a duplicate.
+	//
+	// A per-cluster token's cluster was resolved at auth (boundID): when
+	// the name no longer resolves to it, the cluster was renamed or deleted
+	// while the body was read or the push waited for its slot, and the push
+	// stores nothing (409), as one that lands after this lookup does in the
+	// commit (store.ErrClusterChanged). A shared-token push names its
+	// cluster only in the body, so a delete or rename before this lookup
+	// lets it register the name afresh, like a push sent after it.
 	cluster := store.Cluster{Name: req.ClusterName, ClusterUID: inv.ClusterID, LastSeen: now}
+	adopting := false
 	existing, err := s.cfg.Store.ClusterByName(ctx, req.ClusterName)
 	switch {
 	case err == nil:
+		if boundID != 0 && existing.ID != boundID {
+			writeClusterChanged(w, req.ClusterName)
+			return
+		}
 		if existing.ClusterUID != "" && existing.ClusterUID != inv.ClusterID {
 			writeUIDConflict(w, &store.ClusterUIDConflictError{Name: req.ClusterName, StoredUID: existing.ClusterUID, PushedUID: inv.ClusterID})
 			return
 		}
 		cluster.ID = existing.ID
-	case !errors.Is(err, store.ErrNotFound):
+		// A name registered without a clusterId is bound by the first one
+		// pushed, from whichever cluster sends it (#368).
+		adopting = existing.ClusterUID == "" && inv.ClusterID != ""
+	case errors.Is(err, store.ErrNotFound):
+		if boundID != 0 {
+			writeClusterChanged(w, req.ClusterName)
+			return
+		}
+	default:
 		internalErr(w, "loading cluster", err)
 		return
 	}
@@ -743,14 +766,13 @@ func (s *Server) handleIngest(w http.ResponseWriter, r *http.Request) {
 		ReceivedAt:    now,
 		ServerVersion: inv.ServerVersion, // "" (degraded): ingestSnapshot inherits the last one
 		Inventory:     req.Inventory,
-	}, judgedView(inv, req.AgentVersion, req.KBVersion, s.cfg.KB), pushToken)
+	}, judgedView(inv, req.AgentVersion, req.KBVersion, s.cfg.KB), pushToken, adopting)
 	if errors.Is(err, store.ErrTokenRevoked) {
 		errJSON(w, http.StatusUnauthorized, "invalid or missing bearer token: it was revoked while this push was processed, and nothing was stored")
 		return
 	}
 	if errors.Is(err, store.ErrClusterChanged) {
-		errJSON(w, http.StatusConflict, fmt.Sprintf(
-			"cluster %q was renamed or deleted while this push was processed, and nothing was stored: push again", req.ClusterName))
+		writeClusterChanged(w, req.ClusterName)
 		return
 	}
 	var conflict *store.ClusterUIDConflictError
@@ -825,6 +847,13 @@ func decodePushedInventory(raw json.RawMessage) (inventory.Inventory, string) {
 
 // writeUIDConflict answers a push whose clusterId does not match the one
 // its cluster name is bound to.
+// writeClusterChanged answers a push whose cluster was renamed or deleted
+// after the push was authenticated: nothing was stored.
+func writeClusterChanged(w http.ResponseWriter, name string) {
+	errJSON(w, http.StatusConflict, fmt.Sprintf(
+		"cluster %q was renamed or deleted while this push was processed, and nothing was stored: push again", name))
+}
+
 func writeUIDConflict(w http.ResponseWriter, conflict *store.ClusterUIDConflictError) {
 	// Two clusters reporting one name would interleave their snapshots in
 	// one history and flap every score and alert, so the second one is

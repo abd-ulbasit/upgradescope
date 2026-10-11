@@ -60,18 +60,32 @@ Required checks:
   `--pod-pass-max-age`); that is no gap, since the pass was complete, and
   the report's `addOnEvidenceAgeSeconds` says how old it was. See
   [Scale and cost](../operations/scale.md).
+- **`volumes`**, for live clusters, when it is *partial* and skipped the
+  PersistentVolume or StorageClass list (refused, or failed on any page):
+  required when the knowledge base has a plugin removed at or before the
+  target (classification `removed`, not `csi-migration`) that the unread
+  list could have shown, a PersistentVolume source field for the
+  PersistentVolume list and an in-tree provisioner for the StorageClass
+  list. The earliest such removal is `scaleIO` at 1.22, so in practice the
+  gap is required at every target from 1.22: a refused list can hide an
+  `rbd` PersistentVolume, which blocks 1.31. CSI-migration plugins only ever
+  warn, so they never make it required. A *partial* `volumes` that skipped
+  only pods is optional, as `addons` is then a required gap already, and
+  one an older collector does not report at all is optional. See
+  [Volume plugins](volume-plugins.md).
 
 Not required, because a blocker cannot hide behind them, or because managed
 platforms routinely deny them: `deprecated-calls` (the apiserver's
 `/metrics`, whether it is denied or does not answer in time), `helm`
 (Secrets are often forbidden; the objects themselves are still checked by
-api-usage, and add-ons by their images and labels) and `crds` (CRD
+api-usage, and add-ons by their images and labels), `crds` (CRD
 versions are the add-ons', not the Kubernetes target's; see
-[CRD versions](api-usage-detection.md#crd-versions)). In files mode
-`api-usage` and `kb-coverage` are required and add-ons are assessed from
-the manifests without being required (an image injected at admission is
-not in them); `versions`, `deprecated-calls` and `helm` are reported with
-the reason `files mode`.
+[CRD versions](api-usage-detection.md#crd-versions)), and `volumes`
+outside the case above. In files mode `api-usage` and `kb-coverage` are
+required and add-ons are assessed from the manifests without being
+required (an image injected at admission is not in them); `volumes` is
+never required; `versions`, `deprecated-calls` and `helm` are reported
+with the reason `files mode`.
 
 ## What a verdict does not cover
 

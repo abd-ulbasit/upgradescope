@@ -145,6 +145,9 @@ func TestServeValidatesNotificationURLs(t *testing.T) {
 			"https:///services/T0/B0/SECRETSECRET",
 			"https://hooks.slack.com/services/T0/B0/SECRETSECRET\n",
 			"/services/T0/B0/SECRETSECRET",
+			"https://user:pa/ss@host/x",
+			"https://h:SECRETPORT/x",
+			"https://host/%zzSECRET",
 		} {
 			err := execServe(t, []string{"--" + flag, bad}, serveOK())
 			if err == nil || !strings.Contains(err.Error(), "invalid --"+flag+": want an absolute http(s) URL") {
@@ -153,6 +156,13 @@ func TestServeValidatesNotificationURLs(t *testing.T) {
 			}
 			if strings.Contains(err.Error(), "SECRET") {
 				t.Errorf("--%s %q: the refusal echoes the URL: %v", flag, bad, err)
+			}
+			// Nothing of the value beyond the flag name, not even a fragment
+			// net/url quotes in its own error (#371).
+			for _, frag := range []string{":pa", "pa/ss", "%zz", "invalid port", "invalid URL escape"} {
+				if strings.Contains(err.Error(), frag) {
+					t.Errorf("--%s %q: the refusal holds %q: %v", flag, bad, frag, err)
+				}
 			}
 		}
 	}

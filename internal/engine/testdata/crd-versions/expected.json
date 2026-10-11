@@ -6,7 +6,7 @@
       "citations": [
         "https://kubernetes.io/docs/tasks/extend-kubernetes/custom-resources/custom-resource-definition-versioning/"
       ],
-      "detail": "1 object(s) written through this version: shop (1). Written by: flux. CRD certificates.cert-manager.io marks v1alpha3 served: false (it serves v1alpha2, v1), so the apiserver rejects these objects at v1alpha3. CRD versions are set by the add-on that ships the CRD, independent of Kubernetes 1.35.",
+      "detail": "1 object(s) written through this version: shop (1). Written by: flux. CRD certificates.cert-manager.io marks v1alpha3 served: false (it serves v1, v1alpha2), so the apiserver rejects these objects at v1alpha3. CRD versions are set by the add-on that ships the CRD, independent of Kubernetes 1.35.",
       "key": "crd-version/unserved/cert-manager.io/v1alpha3/Certificate",
       "namespaces": [
         "shop"

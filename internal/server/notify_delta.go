@@ -80,6 +80,7 @@ func computeDelta(prev []findingHead, curr engine.Report, unassessed func(findin
 
 	prevBlockers := headKeys(prev, findingHead.blocker)
 	prevEOL := headKeys(prev, findingHead.eolApproaching)
+	readyPending := slices.ContainsFunc(prev, func(h findingHead) bool { return h.Resolved })
 
 	if unassessed != nil {
 		present := keySet(curr.Findings, func(engine.Finding) bool { return true })
@@ -115,9 +116,17 @@ func computeDelta(prev []findingHead, curr engine.Report, unassessed func(findin
 		}
 	}
 
-	if len(prevBlockers) > 0 && currBlockerCount == 0 && curr.Verdict == engine.VerdictReady &&
-		!slices.ContainsFunc(carried, findingHead.blocker) {
+	noneLeft := currBlockerCount == 0 && !slices.ContainsFunc(carried, findingHead.blocker)
+	if (len(prevBlockers) > 0 || readyPending) && noneLeft && curr.Verdict == engine.VerdictReady {
 		changes = append(changes, notify.Change{Kind: notify.KindBecameReady, Title: becameReadyTitle, Targets: target})
+	}
+	if noneLeft && curr.Verdict == engine.VerdictUnknown {
+		// An unknown pass that resolved the last blockers (deltaFor) is
+		// not ready, so it sends no became-ready; the first ready pass
+		// after it does. carried keeps them, Resolved, until a decided
+		// pass: they are no blockers of its baseline, so one that returns
+		// is new.
+		carried = append(carried, resolvedHeads(prev)...)
 	}
 
 	seenEOL := map[string]bool{}
@@ -231,9 +240,9 @@ func lookbackTargets(def inventory.Version) []inventory.Version {
 }
 
 // upgradeBaseline is the notification baseline of a default target with
-// no decided evaluation yet, because the cluster upgraded (1.35 → 1.36
-// makes the default target 1.37): the latest decided evaluation of the
-// nearest lower target within upgradeLookback minors, which was the
+// no baseline of its own yet (store.LatestKnownEvaluation), because the
+// cluster upgraded (1.35 → 1.36 makes the default target 1.37): the latest
+// baseline of the nearest lower target within upgradeLookback minors, which was the
 // default target before the upgrade. So a blocker the new target adds
 // (an API removed in 1.37) is announced, and blockers the cluster had
 // already been told about at the old target are not announced again.
@@ -247,7 +256,7 @@ func lookbackTargets(def inventory.Version) []inventory.Version {
 // target added to --targets is a new question, and announcing it would
 // page every cluster in the fleet on the restart. ErrNotFound when there
 // is no baseline. Each lower target it looks up is recorded in read, with
-// the id of its newest decided evaluation (0 for none).
+// the id of its newest baseline (0 for none).
 func (s *Server) upgradeBaseline(ctx context.Context, clusterID int64, cur engine.Report, read map[string]int64) (store.Evaluation, error) {
 	server, err := inventory.ParseVersion(cur.ServerVersion)
 	if err != nil || server.Next() != cur.Target {
@@ -268,6 +277,22 @@ func (s *Server) upgradeBaseline(ctx context.Context, clusterID int64, cur engin
 	return store.Evaluation{}, store.ErrNotFound
 }
 
+// resolvedHeads are the blockers of prev, a baseline whose blockers a
+// pass resolved, the ones it already carried Resolved included, as
+// Resolved heads: one per key.
+func resolvedHeads(prev []findingHead) []findingHead {
+	var out []findingHead
+	seen := map[string]bool{}
+	for _, h := range prev {
+		if h.Severity != engine.SevBlocker || seen[h.key()] {
+			continue
+		}
+		seen[h.key()] = true
+		out = append(out, findingHead{Category: h.Category, Severity: h.Severity, Key: h.Key, Title: h.Title, Resolved: true})
+	}
+	return out
+}
+
 func change(kind string, f engine.Finding, targets []string) notify.Change {
 	return notify.Change{Kind: kind, Key: f.Key, Severity: string(f.Severity), Title: f.Title, Detail: f.Detail, Targets: targets}
 }
@@ -280,7 +305,7 @@ type targetDelta struct {
 	carried []findingHead
 	// baselines are the baselines deltaFor read from the store: each
 	// target it looked up, the upgrade baseline's lower ones included, to
-	// the id of its newest decided evaluation (0 for none). The commit
+	// the id of its newest baseline (0 for none). The commit
 	// checks them (store.Expectation), so the delta is never committed
 	// against a baseline another writer replaced meanwhile.
 	baselines map[string]int64
@@ -431,13 +456,18 @@ type findingHead struct {
 	// it is missing from, plus deprecatedCallsHold. Zero for any other
 	// finding, and once the hold has ended.
 	HoldUntil time.Time `json:"holdUntil,omitzero"`
+	// Resolved marks a carried blocker an unknown pass saw resolved
+	// (computeDelta): no blocker of the baseline any more, kept so that
+	// the first ready pass sends the became-ready the unknown pass could
+	// not. Dropped by the first decided pass.
+	Resolved bool `json:"resolved,omitempty"`
 }
 
 func headOf(f engine.Finding) findingHead {
 	return findingHead{Category: f.Category, Severity: f.Severity, Key: f.Key, Title: f.Title}
 }
 
-func (h findingHead) blocker() bool { return h.Severity == engine.SevBlocker }
+func (h findingHead) blocker() bool { return h.Severity == engine.SevBlocker && !h.Resolved }
 
 func (h findingHead) eolApproaching() bool {
 	return h.Category == engine.CatEOLApproaching && h.Severity == engine.SevWarning
@@ -519,12 +549,17 @@ func withCarried(report []byte, carried []findingHead) ([]byte, error) {
 	return append(out, '}'), nil
 }
 
-// sameHeads reports whether a and b hold the same (severity, key) pairs.
+// sameHeads reports whether a and b hold the same (severity, key,
+// resolved) triples.
 func sameHeads(a, b []findingHead) bool {
 	sig := func(hs []findingHead) []string {
 		out := make([]string, 0, len(hs))
 		for _, h := range hs {
-			out = append(out, findingSignature(h))
+			sig := findingSignature(h)
+			if h.Resolved {
+				sig += "\x00resolved"
+			}
+			out = append(out, sig)
 		}
 		slices.Sort(out)
 		return slices.Compact(out)

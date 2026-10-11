@@ -497,7 +497,7 @@ func newBenchPostgres(t *testing.T) *benchDB {
 	}
 	u2 := *u
 	u2.Path = "/" + name
-	st, err := store.OpenPostgres(u2.String())
+	st, err := store.OpenPostgres(t.Context(), u2.String())
 	if err != nil {
 		t.Fatal(err)
 	}

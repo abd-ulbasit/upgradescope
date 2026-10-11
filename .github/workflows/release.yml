@@ -173,6 +173,7 @@ jobs:
     # hack/release-ci-permissions_test.sh keeps it in step with ci.yml.
     permissions:
       contents: read
+      issues: read # ci.yml's repo-checks job declares it: its hack/claims-trackers.sh step reads the claims ledger's tracker issues
       pull-requests: read # ci.yml's changes job declares it (skipped on tags)
       security-events: write # ci.yml's action job declares it; it uploads SARIF only on a dispatched fixture run, never on a tag
 
@@ -437,6 +438,34 @@ jobs:
               --certificate-oidc-issuer https://token.actions.githubusercontent.com >/dev/null
             echo "platform image $d signed"
           done
+      - name: Chart signature verifies (anonymously, default cosign)
+        run: |
+          identity="https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release.yml@${GITHUB_REF}"
+          cosign version
+          cosign verify "${CHART_REPO#oci://}/upgradescope:$VERSION" --certificate-identity "$identity" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com >/dev/null
+      # The oldest cosign the docs support (docs/operations/install.md: "cosign
+      # 3.x, or 2.6.3 or later"; v2.6.2 and older find no signatures: #377).
+      # Pinned installer, then the documented commands verbatim, for the image
+      # index, each platform digest and the chart. Later steps of this job run
+      # this cosign too, so nothing after here depends on the default one.
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: v2.6.3
+      - name: Documented cosign verify commands pass on the oldest supported cosign (v2.6.3)
+        run: |
+          got="$(cosign version 2>&1 | awk '/^GitVersion:/ { print $2 }')"
+          [ "$got" = v2.6.3 ] || { echo "::error::cosign is '$got', want v2.6.3"; exit 1; }
+          flags=(--certificate-identity-regexp '^https://github.com/abd-ulbasit/upgradescope/\.github/workflows/release\.yml@refs/tags/'
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com)
+          cosign verify "$IMAGE:$VERSION" "${flags[@]}" >/dev/null
+          for d in $(docker buildx imagetools inspect "$IMAGE:$VERSION" --format '{{json .Manifest}}' \
+              | jq -r '.manifests[] | select(.platform.os=="linux") | .digest'); do
+            cosign verify "$IMAGE@$d" "${flags[@]}" >/dev/null
+            echo "platform image $d verifies with cosign $got"
+          done
+          cosign verify "${CHART_REPO#oci://}/upgradescope:$VERSION" "${flags[@]}" >/dev/null
+          echo "chart verifies with cosign $got"
       - name: The image carries LICENSE, NOTICE and THIRD_PARTY_NOTICES in /licenses
         run: |
           cid="$(docker create --platform linux/amd64 "$IMAGE:$VERSION")"

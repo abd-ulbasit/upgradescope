@@ -1,6 +1,9 @@
 package inventory
 
 import (
+	"maps"
+	"slices"
+	"strings"
 	"time"
 
 	"k8s.io/apimachinery/pkg/version"
@@ -228,12 +231,41 @@ type Inventory struct {
 // cluster: CollectedAt (it changes every tick), APIServerStartTime (it
 // says which apiserver answered the /metrics scrape, and moves with HA
 // apiservers) and AddOnEvidenceAgeSeconds (it grows with each tick that
-// reuses a pod pass). The agent's and the server's snapshot hashes are
-// over this form, so a push that differs only in those is a duplicate.
+// reuses a pod pass). It also puts in a fixed order the two lists whose
+// order the report does not depend on but which a pusher may order
+// differently: each CRD's Versions (by Name) and each capability's Skipped
+// (#367); they are copied, so inv is not reordered. The agent's and the
+// server's snapshot hashes are over this form, so a push that differs only
+// in those is a duplicate.
 func (inv Inventory) Canonical() Inventory {
 	inv.CollectedAt, inv.APIServerStartTime, inv.AddOnEvidenceAgeSeconds = time.Time{}, time.Time{}, 0
+	if len(inv.CRDs) > 0 {
+		crds := make([]CRD, len(inv.CRDs))
+		copy(crds, inv.CRDs)
+		for i := range crds {
+			if vs := crds[i].Versions; len(vs) > 1 && !slices.IsSortedFunc(vs, compareCRDVersionName) {
+				crds[i].Versions = slices.SortedStableFunc(slices.Values(vs), compareCRDVersionName)
+			}
+		}
+		inv.CRDs = crds
+	}
+	var caps map[Capability]CapabilityStatus
+	for c, st := range inv.Capabilities {
+		if len(st.Skipped) > 1 && !slices.IsSorted(st.Skipped) {
+			if caps == nil {
+				caps = maps.Clone(inv.Capabilities)
+			}
+			st.Skipped = slices.Sorted(slices.Values(st.Skipped))
+			caps[c] = st
+		}
+	}
+	if caps != nil {
+		inv.Capabilities = caps
+	}
 	return inv
 }
+
+func compareCRDVersionName(a, b CRDVersion) int { return strings.Compare(a.Name, b.Name) }
 
 // CRD is one CustomResourceDefinition (apiextensions.k8s.io/v1): the
 // versions it serves and stores, and the custom resources that use a

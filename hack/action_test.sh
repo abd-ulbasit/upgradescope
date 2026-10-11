@@ -1339,8 +1339,10 @@ has "the summary says nothing is left after suppression" "$rt/summary" "No findi
 has "the summary counts the suppressed findings" "$rt/summary" "**Suppressed (2).**"
 has "the summary gives each suppression's reason and config file" "$rt/summary" "| blocker | networking.k8s.io/v1beta1 Ingress removed in 1.22 (1 object) | \`action/testdata/removed/all.yaml:2\` shop/web | shop's legacy Ingress is replaced before the upgrade (test fixture) | \`action/testdata/ignore-removed.yaml\` |"
 if grep -q '^::\(error\|warning\) ' "$work/out"; then fail "suppressed findings are not annotated" "$work/out"; else ok "suppressed findings are not annotated"; fi
-jq -e '.runs[0].results | length == 2 and all(.[]; .suppressions[0].justification != null)' "$(output sarif-file)" >/dev/null &&
-  ok "the SARIF keeps suppressed results with their justification" || fail "the SARIF keeps suppressed results with their justification" "$(output sarif-file)"
+# GitHub code scanning ignores a result's suppressions and opens an alert
+# for every result, so an accepted finding is not a SARIF result (#375).
+jq -e '(.runs[0].results | length == 0) and ([.runs[0].invocations[0].toolExecutionNotifications[].message.text] | any(startswith("2 findings accepted by ignore rules or annotations are not uploaded")))' "$(output sarif-file)" >/dev/null &&
+  ok "the SARIF has no result for suppressed findings, only a note that counts them" || fail "the SARIF has no result for suppressed findings, only a note that counts them" "$(output sarif-file)"
 
 # A baseline holding only the CronJob: the Ingress is new and fails the
 # gate; the CronJob is marked unchanged, annotated as a warning only.
@@ -1389,7 +1391,7 @@ expect "an injection payload in path is scanned as a path" 0 "### upgradescope: 
 [ ! -e "$work/pwned" ] && [ ! -e "$work/pwned2" ] && ! grep -qx INJECTED-COMMAND-RAN "$work/out" &&
   ok "the injection payload did not run" || fail "the injection payload did not run" "$work/out"
 
-# A v0.1.x release (what version: latest resolves to until v0.2.0 ships):
+# A v0.1.x release (what version: latest resolves to if someone moves GitHub's latest back):
 # no --output markdown, and JSON in the v0.1.1 Report shape, without
 # verdict, filesBase or finding objects. The gate and every output still
 # work. STUB_REPORT replaces the jq filter that reshapes the JSON.

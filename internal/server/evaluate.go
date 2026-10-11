@@ -15,6 +15,7 @@ import (
 	"github.com/abd-ulbasit/upgradescope/internal/inventory"
 	"github.com/abd-ulbasit/upgradescope/internal/server/notify"
 	"github.com/abd-ulbasit/upgradescope/internal/server/store"
+	"github.com/abd-ulbasit/upgradescope/internal/suppress"
 )
 
 // Evaluation passes. A verdict depends on more than the inventory: on the
@@ -134,13 +135,36 @@ func (s *Server) evaluateWithin(inv inventory.Inventory, target inventory.Versio
 	return rep, err
 }
 
-// evaluation runs the engine for one target and builds the row to store:
-// a report of at most maxReportBytes, encoded, or a *reportTooLargeError.
+// suppressAnnotated applies the objects' upgradescope.basit.engineer/ignore
+// annotations (each with its ignore-reason) to a report the server judges
+// a stored snapshot by, with the code scan, the agent and /gate use
+// (suppress.Apply), and with no rules: the agent's spec.ignore never
+// reaches the server (#44), so it is the annotations alone. An accepted
+// finding, or the accepted objects of one, leaves Findings for Suppressed
+// (source "annotation"), and score and verdict are recomputed, so the
+// stored verdict, the fleet, history, notifications, exports and GET
+// /report agree with the CR and /gate?cluster= (#381). An annotation
+// without a reason is not applied; its warning (scan prints it) has no
+// reader here and is dropped. Not in evaluateWithin: /gate shares it and
+// applies the annotations and its ?config= rules itself (suppressGate),
+// once.
+func suppressAnnotated(rep engine.Report, now time.Time) engine.Report {
+	rep, _ = suppress.Apply(rep, nil, suppress.Options{Now: now})
+	return rep
+}
+
+// evaluation runs the engine for one target, applies the objects' ignore
+// annotations (suppressAnnotated), and builds the row to store: a report
+// of at most maxReportBytes, encoded, or a *reportTooLargeError. Blockers
+// and warnings count what stays in Findings; teams include those of the
+// suppressed findings, so a team-scoped read still sees the cluster whose
+// only findings of its own are accepted.
 func (s *Server) evaluation(cluster store.Cluster, inv inventory.Inventory, target inventory.Version, now time.Time) (store.Evaluation, engine.Report, error) {
 	rep, err := s.evaluateWithin(inv, target, now)
 	if err != nil {
 		return store.Evaluation{}, engine.Report{}, err
 	}
+	rep = suppressAnnotated(rep, now)
 	repJSON, err := marshalJSON(rep)
 	if err != nil {
 		return store.Evaluation{}, engine.Report{}, fmt.Errorf("marshaling report (cluster %d, target %s): %w", cluster.ID, target, err)
@@ -171,8 +195,51 @@ func (s *Server) evaluation(cluster store.Cluster, inv inventory.Inventory, targ
 		CreatedAt:   now,
 		EvaluatedAt: now,
 		TeamMapHash: s.teamMapHash,
-		Teams:       clusterTeams(inv, rep),
+		Teams:       storedTeams(inv, rep),
+		Baseline:    notificationBaseline(rep),
 	}, rep, nil
+}
+
+// hidesNoFinding are the required gaps no finding comes from (no
+// category's engine.Sources names them, so engine.HiddenBy never lists
+// them): kb-coverage, a target past the knowledge base's horizon, and
+// target, a target that is not an upgrade. A pass unknown for them alone
+// saw everything its findings come from.
+var hidesNoFinding = map[inventory.Capability]bool{engine.GapKBCoverage: true, engine.GapTarget: true}
+
+// notificationBaseline reports whether rep, a new evaluation, is a
+// notification baseline (store.Evaluation.Baseline): a decided verdict,
+// or an unknown one whose required gaps all hide no finding
+// (hidesNoFinding). An unknown verdict behind a required gap that may
+// hide a blocker (a collector failure) is none (deltaFor).
+func notificationBaseline(rep engine.Report) bool {
+	if rep.Verdict != engine.VerdictUnknown {
+		return true
+	}
+	for _, g := range rep.NotAssessed {
+		if g.Required && !hidesNoFinding[g.Capability] {
+			return false
+		}
+	}
+	return true
+}
+
+// isBaseline reports whether a stored evaluation is a notification
+// baseline: decided, or marked one (notificationBaseline), as the store's
+// LatestKnownEvaluation selects them.
+func isBaseline(e store.Evaluation) bool { return verdictOf(e) != engine.VerdictUnknown || e.Baseline }
+
+// storedTeams is clusterTeams with the teams of rep's suppressed findings.
+func storedTeams(inv inventory.Inventory, rep engine.Report) []string {
+	teams := clusterTeams(inv, rep)
+	if len(rep.Suppressed) == 0 {
+		return teams
+	}
+	for _, sf := range rep.Suppressed {
+		teams = append(teams, sf.Teams...)
+	}
+	slices.Sort(teams)
+	return slices.Compact(teams)
 }
 
 // futureTolerance is how far ahead of this server's clock a stored
@@ -214,26 +281,50 @@ func sameResult(row store.Evaluation, stored []findingHead, rep engine.Report) b
 func findingSignature(h findingHead) string { return string(h.Severity) + "\x00" + h.key() }
 
 // baseline is a notification baseline the caller already holds: the
-// heads of the target's latest decided evaluation (storedHeads.baseline),
+// heads of the target's latest baseline evaluation (storedHeads.baseline),
 // when known.
 type baseline struct {
 	findings []findingHead
 	ok       bool
 }
 
-// deltaFor computes the notification delta of one new evaluation. The
-// baseline is the last evaluation with a decided verdict, so an "unknown"
-// pass (a collector failure) is neither a transition nor a reset; a pass
-// whose own verdict is unknown notifies nothing — what it could not see is
-// not news. A decided pass that did not assess a capability carries the
-// baseline's findings from it forward, when the baseline saw them with it
-// (computeDelta, unassessed). known is that baseline when the caller
-// holds it; otherwise deltaFor loads it, and decodes only its findings'
-// heads and its gaps, recording what it read (targetDelta.baselines) for
-// the commit to check. Failures are logged and never fail the pass.
+// deltaFor computes the notification delta of one new evaluation e. The
+// baseline is the target's last baseline evaluation: decided, or unknown
+// for gaps that hide no finding (notificationBaseline). A pass that did not
+// assess a capability carries the baseline's findings from it forward,
+// when the baseline saw them with it (computeDelta, unassessed). known is
+// that baseline when the caller holds it; otherwise deltaFor loads it, and
+// decodes only its findings' heads and its gaps, recording what it read
+// (targetDelta.baselines) for the commit to check. Failures are logged and
+// never fail the pass.
+//
+// Design (#380): an unknown pass contributes what it assessed. One whose
+// only required gaps hide no finding (kb-coverage: the target is past the
+// knowledge base's horizon; target) saw every capability a blocker comes
+// from, so it is a pass like a decided one: its delta is computed, with
+// the unassessed rule for its optional gaps, and it is the next pass's
+// baseline. A blocker it saw absent is resolved there, so its return is a
+// new-blocker; the first blocker after clean unknown passes is new, as on
+// a decided target. It has no blocker (verdictFor), so it never sends
+// new-blocker or became-ready itself; its eol-approaching changes are sent,
+// and blockers it resolved keep a became-ready pending for the first ready
+// pass (computeDelta). An unknown pass behind a required gap that may hide
+// a blocker (a collector failure) is neither a transition nor a reset: it
+// notifies nothing and is no baseline, so the pass after it compares with
+// the baseline before it.
+//
+// Standing blockers are not announced again: the baseline holds every
+// blocker a past pass saw. The first baseline of a target is silent, as
+// before (#34), whatever its verdict: a target newly added to --targets
+// asks a new question, and announcing what it finds would page the fleet
+// on the restart. A default target with no baseline after an upgrade is
+// compared with the previous default target's (upgradeBaseline). A
+// knowledge-base update re-judges against the stored baseline, decided or
+// unknown, so only what the update adds is news (NT-01c), whether or not
+// the cluster has a lower evaluation.
 func (s *Server) deltaFor(ctx context.Context, cluster store.Cluster, e store.Evaluation, cur engine.Report, known baseline, unassessed func(findingHead) bool) targetDelta {
 	d := targetDelta{target: notify.Target{Target: cur.Target.String(), Verdict: string(cur.Verdict), Score: cur.Score, Blockers: e.Blockers}}
-	if len(s.sinks) == 0 || cur.Verdict == engine.VerdictUnknown || cluster.ID == 0 {
+	if len(s.sinks) == 0 || !e.Baseline || cluster.ID == 0 {
 		return d // a cluster's first push has no baseline either
 	}
 	if known.ok {
@@ -247,13 +338,13 @@ func (s *Server) deltaFor(ctx context.Context, cluster store.Cluster, e store.Ev
 		d.baselines[target] = prev.ID
 	}
 	if errors.Is(err, store.ErrNotFound) {
-		// First decided evaluation of this target: after an upgrade, the
-		// previous default target's is the baseline (upgradeBaseline).
+		// First baseline of this target: after an upgrade, the previous
+		// default target's is the baseline (upgradeBaseline).
 		d.baselines[target] = 0
 		prev, err = s.upgradeBaseline(ctx, cluster.ID, cur, d.baselines)
 	}
 	if errors.Is(err, store.ErrNotFound) {
-		return d // first decided evaluation of this target: no delta
+		return d // first baseline of this target: no delta
 	}
 	if err != nil {
 		log.Printf("server: loading notification baseline (cluster %d, target %s): %v", cluster.ID, target, err)
@@ -531,19 +622,39 @@ func (s *Server) outboxFor(cluster store.Cluster, deltas *changeMerger, now time
 // again against what is there now, up to maxIngestAttempts times, so no
 // became-ready or new-blocker is lost or sent twice. The last conflict is
 // returned, and the agent retries the push.
-func (s *Server) ingestSnapshot(ctx context.Context, cluster store.Cluster, snap store.Snapshot, inv inventory.Inventory, token string) (int64, bool, error) {
+//
+// adopting says the push binds cluster.ClusterUID to a name registered
+// without a clusterId (#368): the history it continues may be another
+// cluster's, so its pass sends no became-ready, and once it commits one
+// line is logged with the name, the clusterId and the snapshot. Such a
+// push always checks the latest snapshot at commit, so a racing push
+// that bound the name first sends it round again, now as an ordinary
+// push or a 409.
+func (s *Server) ingestSnapshot(ctx context.Context, cluster store.Cluster, snap store.Snapshot, inv inventory.Inventory, token string, adopting bool) (int64, bool, error) {
 	for attempt := 1; ; attempt++ {
-		id, dup, err := s.ingestOnce(ctx, cluster, snap, inv, token)
+		id, dup, err := s.ingestOnce(ctx, cluster, snap, inv, token, adopting)
+		if err == nil && adopting && !dup {
+			// Structured, and quoted: the name and the clusterId are the
+			// pusher's text. The token is never logged.
+			log.Printf("server: cluster name adopted its first clusterId: cluster=%q clusterId=%q snapshotId=%d "+
+				"(it was registered by pushes with no clusterId, whose history this cluster now continues)",
+				cluster.Name, cluster.ClusterUID, id)
+		}
 		if !errors.Is(err, store.ErrConflict) || attempt == maxIngestAttempts {
 			return id, dup, err
 		}
 		log.Printf("server: push of cluster %q raced another writer (attempt %d), evaluating it again: %v", cluster.Name, attempt, err)
-		if cluster.ID == 0 { // registered by the push that raced this one
+		if cluster.ID == 0 || adopting { // registered, or bound, by the push that raced this one
 			c, err := s.cfg.Store.ClusterByName(ctx, cluster.Name)
 			if err != nil && !errors.Is(err, store.ErrNotFound) {
 				return 0, false, fmt.Errorf("loading cluster %q: %w", cluster.Name, err)
 			}
-			cluster.ID = c.ID
+			if cluster.ID == 0 {
+				cluster.ID = c.ID
+			}
+			// Never set cluster.ID from a cluster other than the one looked
+			// up: the commit's recheck refuses that one (ErrClusterChanged).
+			adopting = adopting && c.ID == cluster.ID && c.ClusterUID == ""
 		}
 	}
 }
@@ -555,7 +666,7 @@ func (s *Server) ingestSnapshot(ctx context.Context, cluster store.Cluster, snap
 const maxIngestAttempts = 3
 
 // ingestOnce is one attempt of ingestSnapshot.
-func (s *Server) ingestOnce(ctx context.Context, cluster store.Cluster, snap store.Snapshot, inv inventory.Inventory, token string) (int64, bool, error) {
+func (s *Server) ingestOnce(ctx context.Context, cluster store.Cluster, snap store.Snapshot, inv inventory.Inventory, token string, adopting bool) (int64, bool, error) {
 	var latestID int64 // the latest snapshot this attempt read; 0 for none
 	// A duplicate (the agent's hourly force-sync) is the common push: go
 	// straight to re-evaluating what is stale, instead of evaluating every
@@ -605,7 +716,7 @@ func (s *Server) ingestOnce(ctx context.Context, cluster store.Cluster, snap sto
 	now := s.now()
 	hold := s.callsHoldOf(inv, snap.ServerVersion, true)
 	batch := store.EvaluationBatch{Cluster: &cluster, Snapshot: &snap, IngestToken: token}
-	if len(s.sinks) > 0 {
+	if len(s.sinks) > 0 || adopting {
 		batch.Expect = &store.Expectation{LatestSnapshotID: latestID, Baselines: map[string]int64{}}
 	}
 	var deltas changeMerger // each target's changes, merged as they come
@@ -615,6 +726,9 @@ func (s *Server) ingestOnce(ctx context.Context, cluster store.Cluster, snap sto
 			return 0, false, err
 		}
 		d := s.deltaFor(ctx, cluster, e, rep, baseline{}, unassessedIn(rep, hold))
+		if adopting {
+			d.changes = slices.DeleteFunc(d.changes, func(c notify.Change) bool { return c.Kind == notify.KindBecameReady })
+		}
 		d.carried = s.keepCarried(&e, hold.stamp(d.carried))
 		batch.Insert = append(batch.Insert, e)
 		expectBaselines(batch.Expect, d)
@@ -707,13 +821,13 @@ func (s *Server) reevaluate(ctx context.Context, cluster store.Cluster, snapID i
 		if err != nil {
 			return false, &evaluationError{err}
 		}
-		// A decided current evaluation is the target's latest decided
-		// one, the baseline deltaFor would load again: evaluations are
-		// only added to the latest snapshot, so none is newer. An
-		// unchanged result (below) has no changes, but may carry less.
-		// Without sinks nothing is carried, and what the row carried is
-		// not compared: no notification reads that baseline.
-		known := baseline{findings: stored.baseline(), ok: decoded && verdictOf(cur) != engine.VerdictUnknown}
+		// A current evaluation that is a baseline (isBaseline) is the
+		// target's latest one, the baseline deltaFor would load again:
+		// evaluations are only added to the latest snapshot, so none is
+		// newer. An unchanged result (below) has no changes, but may
+		// carry less. Without sinks nothing is carried, and what the row
+		// carried is not compared: no notification reads that baseline.
+		known := baseline{findings: stored.baseline(), ok: decoded && isBaseline(cur)}
 		d := s.deltaFor(ctx, cluster, e, rep, known, unassessedIn(rep, hold))
 		d.carried = s.keepCarried(&e, hold.stamp(d.carried))
 		batch.Current[target.String()] = cur.ID // 0 when not found
@@ -725,7 +839,11 @@ func (s *Server) reevaluate(ctx context.Context, cluster store.Cluster, snapID i
 			}
 			expectBaselines(batch.Expect, d)
 		}
-		if decoded && sameResult(cur, stored.Findings, rep) && (len(s.sinks) == 0 || sameHeads(stored.CarriedForward, d.carried)) {
+		// A result that stops or starts being a baseline is a new row: a
+		// refresh would move the baseline under a delta computed against
+		// another, and drop that delta's changes.
+		if decoded && sameResult(cur, stored.Findings, rep) && isBaseline(cur) == e.Baseline &&
+			(len(s.sinks) == 0 || sameHeads(stored.CarriedForward, d.carried)) {
 			e.ID = cur.ID
 			batch.Refresh = append(batch.Refresh, e)
 			continue

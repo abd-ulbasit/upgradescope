@@ -18,7 +18,8 @@ Contents:
 5. [The server gate](#the-server-gate)
 6. [The agent: `spec.ignore`](#the-agent-specignore)
 7. [Finding keys](#finding-keys)
-8. [Who can turn the gate off](#who-can-turn-the-gate-off)
+8. [Code scanning and accepted findings](#code-scanning-and-accepted-findings)
+9. [Who can turn the gate off](#who-can-turn-the-gate-off)
 
 ## Ignore rules (`.upgradescope.yaml`)
 
@@ -27,11 +28,10 @@ to live with for now, such as an EOL ingress-nginx that is being migrated,
 or a removed API in manifests that are never deployed. A suppressed finding:
 
 - does not count toward the score, the verdict or the `--fail-on` gate;
-- is still reported, with its reason, in every output format: a `SUPPRESSED`
-  section and an `N suppressed` line in the table, a `suppressed` array in
-  JSON, and SARIF results that carry a `suppressions` entry (`kind:
-  external`, `justification` = the reason), so GitHub code scanning shows
-  them as dismissed instead of dropping them.
+- is still reported, with its reason, in the table (a `SUPPRESSED` section
+  and an `N suppressed` line), in JSON (a `suppressed` array), in the
+  Markdown step summary and in JUnit (skipped test cases). It is **not** a
+  SARIF result: see [Code scanning and accepted findings](#code-scanning-and-accepted-findings).
 
 ```yaml
 # .upgradescope.yaml
@@ -125,6 +125,45 @@ API. On a live cluster the collector keeps at most 16 KiB of each
 annotation (of `ignore`, the categories and keys that fit whole), as the
 server takes it.
 
+### Where annotations apply
+
+Every view that judges objects applies the annotations, with the same code:
+
+- `scan`, live or `--files`, and the MCP server's scan tools;
+- the agent, in each `status.targets[]` entry of its `ClusterReadiness`
+  ([The agent](#the-agent-specignore));
+- `/gate`, to the posted manifests and, with `?cluster=`, to the cluster's
+  stored objects ([The server gate](#the-server-gate));
+- the server's stored evaluations, into which the agent's pushes carry
+  each object's annotations: the dashboard (its fleet cells and the cluster
+  page's "N suppressed"), the fleet and team rollups, history,
+  notifications, the auditor exports and `GET /api/v1/clusters/{id}/report`,
+  read-time what-ifs included.
+
+On the server, an accepted finding counts toward neither the score, the
+verdict, `blockers` nor a notification. Annotating a blocked cluster's last
+blocker sends `became-ready`; a new object that arrives already annotated
+sends no `new-blocker`; removing the annotation makes the finding a
+`new-blocker` again. `GET /report` lists the accepted finding in
+`suppressed`, with `source: annotation` and the reason, and `/findings`
+lists only the open ones. The CSV export has one `suppressed` row per
+accepted finding (its severity, what accepted it, the reason and the
+objects, in the detail) and counts them in the summary row; the HTML export
+lists them in a suppressed section. An audit never loses an accepted
+finding.
+
+The server applies the annotations only, never the agent's `spec.ignore`,
+which the push does not carry (see [The agent](#the-agent-specignore)).
+
+An annotation is as trusted as write access to its object: whoever can edit
+the object can accept its finding in every view, the fleet's included. The
+exports and `GET /report` name each acceptance with its reason.
+
+An evaluation stored by an earlier server version picks the annotations up
+when it is next re-evaluated: on the next push that changes the inventory,
+when the knowledge base changes, or in the first background pass after UTC
+midnight.
+
 ## Baselines
 
 A baseline lets CI adopt the gate on an existing estate: the gate fails
@@ -214,10 +253,11 @@ Suppressed findings count toward neither the verdict nor `fail-on`. With
 finding whose posted objects are all suppressed is not the pull request's,
 and objects the cluster already has at that key stay the cluster's. The
 JSON answer lists them in `suppressed` with a `suppressedCount`, and names
-expired rules and annotations without a reason in `warnings`. SARIF carries
-the manifests' suppressed findings as results with an external suppression,
-JUnit as skipped test cases, and GitLab Code Quality leaves them out, as
-`scan` does. With `?cluster=`, a suppressed finding that is the pull
+expired rules and annotations without a reason in `warnings`. SARIF has no result
+for them (only a note that counts them; see [Code scanning and accepted
+findings](#code-scanning-and-accepted-findings)), JUnit lists them as
+skipped test cases, and GitLab Code Quality leaves them out, as `scan`
+does. With `?cluster=`, a suppressed finding that is the pull
 request's only because the gate fails closed (for example a posted CRD
 that drops a stored version) is in the JSON `suppressed` list but not in
 the SARIF or JUnit answer.
@@ -254,10 +294,17 @@ already rejects a rule without a reason or with a malformed `expires`. The
 agent catches the rest (for example, both `key` and `category`). `file`
 never matches live objects.
 
-The agent still pushes the raw inventory to the server. The server's
-dashboard does not apply `spec.ignore`, and neither does its gate, which
-applies the rules sent with each request instead
-([The server gate](#the-server-gate)).
+The agent pushes the raw inventory to the server: each object's
+annotations, but not `spec.ignore`. So the server applies the object
+annotations and never `spec.ignore`, both in its stored evaluations (the
+dashboard, the fleet, history, notifications, exports and `GET /report`;
+see [Where annotations apply](#where-annotations-apply)) and in its gate,
+which applies the rules sent with each request instead
+([The server gate](#the-server-gate)). A finding that `spec.ignore` alone
+accepts is suppressed in the `ClusterReadiness` status and open on the
+server. When the finding lists objects (API usage), annotating them
+accepts it in both; an add-on or version-skew finding lists none, so no
+server view can accept it yet.
 
 ## Finding keys
 
@@ -323,6 +370,33 @@ drops those entries (it recognises them by the "is not served until"
 title), so the blocker comes back once as new under its own key; write the
 baseline again (`--write-baseline`) after you have decided to accept it.
 
+## Code scanning and accepted findings
+
+GitHub code scanning does not read the SARIF `suppressions` property: it
+opens an alert for every located result at its level, whatever the gate
+decided. A result for an accepted finding would therefore show as an open
+alert in the Security tab (and on the pull request's diff) although the
+gate passed. So `scan --output sarif`, `/gate?format=sarif` and the
+Action's `sarif-file` **leave suppressed findings out of the results
+altogether**. Instead the run carries one note, "N findings accepted by
+ignore rules or annotations are not uploaded; see the JSON report", and
+`run.properties.suppressed` holds the count. The accepted findings, their
+reasons and expiry stay in the JSON report, the step summary and JUnit.
+
+What does stay a result:
+
+- **Baseline-unchanged findings.** A finding the baseline already had is
+  still a result, marked `baselineState: unchanged`, and code scanning
+  opens an alert for it like any other. `--baseline` changes the gate, not
+  what code scanning shows. To keep it out of the Security tab, accept the
+  finding with an ignore rule or annotation instead.
+- **Unsuppressed findings**, as always.
+
+To dismiss an alert that is already open, use the code-scanning alerts API
+or GitHub's `advanced-security/dismiss-alerts` action, which reads
+non-empty `suppressions[]` from a SARIF file you produce yourself; the
+SARIF written here does not carry any.
+
 ## Who can turn the gate off
 
 Everything on this page that makes a finding stop counting is a file in the
@@ -330,8 +404,8 @@ repository being judged: the ignore rules, the annotations in the manifests
 and the baseline. In CI on a `pull_request` those files come from the pull
 request's own tree, so **a pull request can suppress its own findings and
 the gate then passes.** Nothing is hidden (the suppressed findings, their
-reasons and the rule's file are in the table, the step summary, the JSON and
-the SARIF, and the change is in the diff), but the gate does not stop an
+reasons and the rule's file are in the table, the step summary and the
+JSON, and the change is in the diff), but the gate does not stop an
 author who wants past it unless you pin its inputs:
 
 - **Ignore rules.** `.upgradescope.yaml` is found in the scan root, then at

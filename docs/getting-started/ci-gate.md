@@ -141,7 +141,8 @@ suppress its own findings, and the gate then passes.** This is how any
 linter with an in-repository config or inline disable comments behaves, and
 it is not hidden: a suppressed finding is listed with its reason in the
 `SUPPRESSED` section and the `N suppressed` line of the table, in the step
-summary, and as a SARIF suppression, and the file that did it is in the
+summary, the JSON report and JUnit (the SARIF leaves it out, because code
+scanning would open an alert for it), and the file that did it is in the
 diff. But the gate is a control against a careless change, not against an
 author who wants to get past it, until you pin the inputs below.
 
@@ -270,13 +271,18 @@ manifests are judged inside the cluster's latest stored inventory: its
 version, nodes, add-ons, CRDs and team labels. Only what the manifests introduce
 counts toward the verdict, so a cluster's existing EOL add-on does not fail
 every pull request. The manifests' API usage, add-ons and CRDs are merged
-into the cluster's: an EOL add-on the manifests deploy, or a custom
-resource at a version the cluster's CRD (or a CRD in the manifests) does not
-serve, is the manifests' finding, also when the cluster already has the
-same. One case is not seen: the cluster lists its custom resources only at
-versions its own CRDs deprecate or do not serve, so live custom resources
-at a version that a posted CRD newly deprecates or stops serving are not
-judged.
+into the cluster's: an EOL add-on the manifests deploy, an in-tree volume
+plugin a pod template, Pod or PersistentVolume in them names (an `rbd`
+PersistentVolume at a 1.31 target, say), or a custom resource at a version
+the cluster's CRD (or a CRD in the manifests) does not serve, is the
+manifests' finding, also when the cluster already has the same. A volume
+plugin finding stays whole: it lists the cluster's objects beside the pull
+request's, and `clusterVerdict` stays blocked either way, but a pull request
+that adds nothing on a plugin does not fail on the cluster's use of it (it can
+still fail on something else). One case is not seen: the cluster lists its
+custom resources only at versions its own CRDs deprecate or do not serve, so
+live custom resources at a version that a posted CRD newly deprecates or stops
+serving are not judged.
 
 A `target` below 1.16, the oldest minor the knowledge base covers, is a 400
 that says to quote the version, not a verdict: YAML makes an unquoted

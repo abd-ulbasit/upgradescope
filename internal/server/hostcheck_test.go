@@ -209,7 +209,7 @@ func TestTrustedHeaderModeRefusesForeignHosts(t *testing.T) {
 // fail would answer 500 had the guard run after them.
 func TestHostCheckPrecedesCredentials(t *testing.T) {
 	st := newFakeStore()
-	st.errs["ValidToken"] = errors.New("store down")
+	st.errs["IngestTokenCluster"] = errors.New("store down")
 	st.errs["ValidReadToken"] = errors.New("store down")
 	st.errs["ListReadTokens"] = errors.New("store down")
 	s := newTestServer(t, st, func(c *Config) {

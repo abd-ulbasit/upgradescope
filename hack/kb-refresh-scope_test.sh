@@ -93,7 +93,7 @@ expr() {
     const e = src.trim().replace(/^\$\{\{([\s\S]*)\}\}$/, "$1")
       .replace(/\.([A-Za-z_]\w*(?:-[\w]+)+)/g, (_, k) => "[" + JSON.stringify(k) + "]");
     const v = new Function("github", "inputs", "needs", "steps", "cancelled", "always", "failure", "startsWith",
-      "return (" + e + ");")(ctx.github, ctx.inputs, ctx.needs, ctx.steps, () => false, () => true,
+      "return (" + e + ");")(ctx.github, ctx.inputs, ctx.needs, ctx.steps, () => Boolean(ctx.github.runCancelled), () => true,
       () => Object.values(ctx.needs).some((n) => n.result === "failure"),
       (s, p) => String(s).toLowerCase().startsWith(String(p).toLowerCase()));
     process.stdout.write(v === null || v === undefined ? "" : String(v));
@@ -349,7 +349,23 @@ audit() {
     # A pipeline whose run failed has its verify and PR jobs skipped: the
     # run job's failure reports it.
     expr_bad "$cond" true "$(jq -c '.needs["api-lifecycle-run"].result = "failure" | .needs["api-lifecycle-verify"].result = "skipped" | .needs["api-lifecycle-pr"].result = "skipped"' <<<"$ctx")" | tag "report: $e: "
+    # A job that hits its timeout-minutes ends "cancelled", not "failure"
+    # (#378): it is reported as a failure is, whichever of the seven it is.
+    for k in stage api-lifecycle-run registry-run api-lifecycle-verify registry-verify api-lifecycle-pr registry-pr; do
+      expr_bad "$cond" true "$(jq -c --arg k "$k" '.needs[$k].result = "cancelled"' <<<"$ctx")" | tag "report: $e: $k cancelled: "
+    done
+    # A person cancelling the whole run is not a failure to report: every
+    # job is then cancelled and cancelled() is true.
+    expr_bad "$cond" false "$(jq -c '.github.runCancelled = true | .needs |= map_values(.result = "cancelled")' <<<"$ctx")" | tag "report: $e: the whole run cancelled: "
   fi
+
+  # ---- every job ends: a hung job runs to the 6 h default otherwise, and a
+  # job that cannot time out cannot be reported when it hangs (#378).
+  for j in $(job_ids "$e"); do
+    n=$(field 4 timeout-minutes <<<"$(job "$e" "$j")")
+    n=$(sed 's/ *#.*//' <<<"$n")
+    [[ $n =~ ^[1-9][0-9]*$ ]] || echo "timeout: $e: job $j has no timeout-minutes"
+  done
 }
 
 real=$(audit "$entry" "$build") || true
@@ -478,7 +494,25 @@ mutant "a failed build run that report-failure ignores" report 's/ needs\.api-li
 mutant "a failed stage that report-failure ignores" report 's/needs\.stage\.result == .failure. \|\| *//' -
 mutant "a failed verify that report-failure ignores" report 's/ \|\|\n      needs\.api-lifecycle-verify\.result == .failure. \|\| needs\.registry-verify\.result == .failure.//' -
 
+mutant "a timed-out (cancelled) job that report-failure ignores" report 's/== .cancelled./== \x27failure\x27/g' -
+mutant "a timed-out PR job that report-failure ignores" report 's/ \|\|\n      needs\.api-lifecycle-pr\.result == .cancelled. \|\| needs\.registry-pr\.result == .cancelled.//' -
+mutant "a report-failure that also reports a person cancelling the run" report 's/!cancelled\(\) && \(/(/' -
+mutant "an api-lifecycle PR job without a timeout" timeout 's/(^  api-lifecycle-pr:\n.*?)    timeout-minutes: [^\n]*\n/$1/ms' -
+mutant "a registry PR job without a timeout" timeout 's/(^  registry-pr:\n.*?)    timeout-minutes: [^\n]*\n/$1/ms' -
+mutant "a report-failure job without a timeout" timeout 's/(^  report-failure:\n.*?)    timeout-minutes: [^\n]*\n/$1/ms' -
+
 wait
+
+# --- CONTRIBUTING.md: the dry run that proves the PR path (#378). The plain
+# dry run opens a PR only if the refresh changes something, which it rarely
+# does, so it proves nothing about the PR jobs; the forced-diff one does.
+contrib=CONTRIBUTING.md
+if grep -qF 'gh workflow run kb-refresh.yml --ref dryrun/kb-refresh' "$contrib" &&
+  grep -qiF 'forced-diff' "$contrib" && grep -qF 'proves nothing about the PR' "$contrib"; then
+  ok "$contrib documents the forced-diff dry run (gh workflow run kb-refresh.yml --ref dryrun/kb-refresh) and says the plain one proves nothing about the PR path"
+else
+  fail "$contrib does not document the forced-diff dry run: the command 'gh workflow run kb-refresh.yml --ref dryrun/kb-refresh', the word forced-diff and 'proves nothing about the PR'"
+fi
 
 # --- the entry workflow's scripts, against a stub gh --------------------------
 

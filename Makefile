@@ -37,7 +37,9 @@ web-test:
 	./hack/web-test.sh
 
 # The CI unit gate: gofmt, go vet, go test -race -count=1, for the main
-# module and every tools/ module. Needs only Go. CI runs it as two shards
+# module and every tools/ module. Needs only Go: the tests that render the
+# chart skip without helm (hack/test-nohelm_test.sh proves it; make chart-test
+# runs them). CI runs it as two shards
 # (TEST_SHARD=1/2, 2/2: every package in exactly one, balanced by
 # hack/test-durations.txt); TEST_SCOPE=readers runs only the packages whose
 # tests read the repository outside Go code (hack/test-readers.txt), for a
@@ -349,15 +351,18 @@ examples-test:
 .PHONY: claims-check
 claims-check:
 	./hack/claims-check.sh
+	./hack/docs-cosign-minimum.sh
 
 # Offline self-tests of the hack/ scripts CI is built from (stubs and
 # fixtures only: no network, cluster or Docker).
 .PHONY: hack-test
 hack-test:
 	./hack/claims-check_test.sh
+	./hack/claims-trackers_test.sh
 	./hack/shard_test.sh
 	./hack/test-heap_test.sh
 	./hack/test_test.sh
+	./hack/test-nohelm_test.sh
 	./hack/cross-build_test.sh
 	./hack/dashboard-smoke_test.sh
 	./hack/vulncheck_test.sh
@@ -385,6 +390,7 @@ hack-test:
 	./hack/check-asset-names_test.sh
 	./hack/check-host-leak_test.sh
 	./hack/release-footer_test.sh
+	./hack/docs-cosign-minimum_test.sh
 	./hack/check-breaking_test.sh
 	./hack/check-release-ancestry_test.sh
 	./hack/release-preflight_test.sh

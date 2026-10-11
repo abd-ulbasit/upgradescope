@@ -19,7 +19,14 @@ From v0.2.0 the chart is published, signed with cosign, as an OCI artifact:
     helm install upgradescope oci://ghcr.io/abd-ulbasit/charts/upgradescope \
       --version 0.2.0 -n upgradescope --create-namespace
 
-Before that release, or to run unreleased changes, install from a clone
+To verify the signature, use cosign 3.x, or 2.6.3 or later (older versions
+fail with `no signatures found`):
+
+    cosign verify ghcr.io/abd-ulbasit/charts/upgradescope:0.2.0 \
+      --certificate-identity-regexp '^https://github.com/abd-ulbasit/upgradescope/\.github/workflows/release\.yml@refs/tags/' \
+      --certificate-oidc-issuer https://token.actions.githubusercontent.com
+
+To run unreleased changes, install from a clone
 of the repository with `deploy/chart` in place of the OCI reference. The
 examples below use the clone path. A clone's chart defaults to the image
 of the release it was cut for; to run unreleased changes, also set
@@ -183,7 +190,7 @@ watches.
 | `get`/`list` Secrets and ConfigMaps (only with `rbac.helmSecrets=true`, the default, and an empty `rbac.helmSecretsNamespaces`, the default) | Helm release detection lists the objects labelled `owner=helm` (Helm's secrets and configmaps storage drivers) metadata-only, then reads one per release. RBAC cannot filter by label or type, so **this lets the agent read every Secret and ConfigMap in the cluster** |
 | `get`/`list` Argo CD Applications, Flux HelmReleases and Flux OCIRepositories (only with `rbac.gitops.argocd` and `rbac.gitops.flux`, both off by default) | The charts GitOps tools deploy: chart, version and repository from each Application source and HelmRelease, for add-on detection. Only those resources: no AppProjects, ApplicationSets or the Secrets that hold repository credentials |
 | `get`/`update`/`patch` on the CRD `clusterreadinesses.upgradescope.basit.engineer` only (only with `agent.manageCRD=true`, the default) | Keeping the CRD schema in step with the agent binary by server-side apply |
-| `get`/`list`/`create` clusterreadinesses; `update`/`patch` and status `get`/`update`/`patch` on the one named `agent.crName` | The agent's own results object |
+| `get`/`list`/`create` clusterreadinesses; `update`/`patch` and status `get`/`update`/`patch` on the one named `agent.crName` | The agent's own results object. `create` cannot be limited by name, so the agent can create a ClusterReadiness under any name (it cannot delete one); only the update and patch are limited to `agent.crName` |
 
 `rbac.helmSecretsNamespaces` narrows that read to the namespaces it lists:
 the ClusterRole then has no Secret or ConfigMap rule, each listed namespace

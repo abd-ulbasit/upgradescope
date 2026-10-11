@@ -31,7 +31,9 @@ and never in a public issue.
 | Docker | any, with buildx | only `make pg-test`, `make images`, `make docker-build` and `make e2e` |
 
 Unit tests, golden tests, lint and the build need **only Go**. No Docker, no
-cluster and no network beyond the Go module proxy.
+cluster and no network beyond the Go module proxy. The tests that render the
+chart skip when helm is not installed (`make hack-test` proves it with helm
+hidden from `PATH`); `make chart-test` runs them for real.
 
 ```sh
 git clone https://github.com/abd-ulbasit/upgradescope
@@ -346,6 +348,28 @@ bot PRs if anything changed; the dispatched runs show up under
 `bot/kb-refresh-build`). `kb-refresh.yml` dispatches `kb-refresh-build.yml`,
 which GitHub only finds on the default branch, so a change to either must be
 merged before the next scheduled run.
+
+That plain dry run proves nothing about the PR jobs unless the data happens to
+have moved: with nothing to regenerate both `*-pr` jobs log "nothing was
+regenerated" and stop (that is all run 38063551008 showed). The PR path (the
+verified-artifact handoff, the `git apply` allowlist, the checkout without a
+token, `create-pull-request`, the approval of the PR's held CI runs) needs a
+forced-diff dry run, on a throwaway branch whose data is behind what the
+sources say:
+
+```sh
+git switch -c dryrun/kb-refresh origin/main
+git revert --no-edit <the merge commit of an earlier bot refresh PR>   # e.g. #277's
+git push -u origin dryrun/kb-refresh
+gh workflow run kb-refresh.yml --ref dryrun/kb-refresh
+```
+
+The stage job pins the staging branch at that commit, the build runs regenerate
+what the revert undid, and `create-pull-request` opens bot PRs whose base is
+`dryrun/kb-refresh`. Check that each PR carries the regenerated files, that its
+held CI runs were approved and complete, then close both PRs with
+`gh pr close <n> --delete-branch` and delete `dryrun/kb-refresh`. Record the run
+URL in the KB-08 row of `docs/claims.md`.
 
 **Docker Hub pulls go through a mirror.** Docker Hub rate-limits anonymous
 pulls per source IP (`429 toomanyrequests`), and a hosted runner shares its IP

@@ -221,7 +221,8 @@ func postJSON(ctx context.Context, client *http.Client, label, url string, body 
 // CheckURL reports whether raw is a URL a notifier can deliver to: an
 // absolute http or https URL with a host, and nothing a request could not
 // carry. Its error never repeats the URL, whose path or query may be the
-// credential.
+// credential, nor any fragment of it: net/url's own error quotes the port or
+// the escape it choked on, so a fixed text per failure class stands in.
 func CheckURL(raw string) error {
 	u, err := url.Parse(raw)
 	if err != nil {
@@ -229,7 +230,7 @@ func CheckURL(raw string) error {
 		if errors.As(err, &ue) {
 			err = ue.Err
 		}
-		return fmt.Errorf("does not parse: %w", err)
+		return errors.New(checkReason(err)) // never the net/url error, which quotes the value
 	}
 	if u.Scheme != "http" && u.Scheme != "https" {
 		return errors.New("the scheme is not http or https")
@@ -244,6 +245,9 @@ func CheckURL(raw string) error {
 	}
 	return nil
 }
+
+// hostRedacted stands in for a host RedactURL withholds.
+const hostRedacted = "(host redacted)"
 
 // RedactURL is raw with nothing that could be a credential: its scheme and
 // host (with the port), and "/…" when anything followed them. The path of a
@@ -264,7 +268,7 @@ func RedactURL(raw string) string {
 		host, tail = rest[:i], rest[i:]
 	}
 	if strings.Contains(rest, "@") || !plainHost(host) {
-		host = "(host redacted)"
+		host = hostRedacted
 	}
 	out := strings.ToLower(scheme) + "://" + host
 	if tail != "" {
@@ -290,12 +294,24 @@ func plainHost(h string) bool {
 // redactedError is err with every URL it carries redacted: net/http's
 // *url.Error (a failed request or a URL that does not parse) prints the
 // whole URL, so its operation and cause are kept around RedactURL's form.
+// When RedactURL withholds the host, the cause is cut to its final reason
+// (finalReason): Go's "dial tcp 127.0.0.1:1: connect: connection refused"
+// and "lookup <name>: no such host" name the very address withheld.
 func redactedError(label, rawURL string, err error) error {
+	withheld := strings.Contains(RedactURL(rawURL), hostRedacted)
 	var ue *url.Error
 	if errors.As(err, &ue) {
-		return &deliveryError{msg: fmt.Sprintf("%s: %s %s: %s", label, ue.Op, RedactURL(rawURL), Scrub(ue.Err.Error(), rawURL)), err: ue.Err}
+		cause := Scrub(ue.Err.Error(), rawURL)
+		if withheld {
+			cause = finalReason(ue.Err)
+		}
+		return &deliveryError{msg: fmt.Sprintf("%s: %s %s: %s", label, ue.Op, RedactURL(rawURL), cause), err: ue.Err}
 	}
-	return &deliveryError{msg: label + ": " + Scrub(err.Error(), rawURL), err: err}
+	cause := Scrub(err.Error(), rawURL)
+	if withheld {
+		cause = finalReason(err)
+	}
+	return &deliveryError{msg: label + ": " + cause, err: err}
 }
 
 // Scrub is msg with every copy of rawURL in it, as written or as Go quotes

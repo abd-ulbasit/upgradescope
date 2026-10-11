@@ -9,10 +9,12 @@ import (
 	"github.com/abd-ulbasit/upgradescope/internal/sarif/sariftest"
 )
 
-// Suppressed findings stay in the SARIF as results carrying an external
-// suppression with the rule's reason, so code scanning shows them as
-// dismissed rather than losing them; unanchored ones are notes.
-func TestWriteSuppressed(t *testing.T) {
+// GitHub code scanning ignores a result's "suppressions" and opens an
+// alert for every located result at its level (#375), so suppressed
+// findings are not results at all. Located ones are counted in one
+// run-level note; unanchored ones stay notes (never alerts); the
+// unsuppressed result is untouched.
+func TestWriteSuppressedOmitted(t *testing.T) {
 	r := testReport()
 	ing := r.Findings[1]
 	ing.Objects = []inventory.ObjectRef{{Namespace: "shop", Name: "old", File: "legacy/old.yaml", Line: 2}}
@@ -26,27 +28,42 @@ func TestWriteSuppressed(t *testing.T) {
 	sariftest.AssertGitHubAcceptable(t, raw)
 	run := log.Runs[0]
 
-	if len(run.Results) != 2 {
-		t.Fatalf("results = %+v, want the ComponentStatus result and the suppressed Ingress", run.Results)
+	if len(run.Results) != 1 || run.Results[0].RuleID == "removed-api/networking.k8s.io/v1beta1/Ingress" {
+		t.Fatalf("results = %+v, want only the unsuppressed ComponentStatus result", run.Results)
 	}
-	if s := run.Results[0].Suppressions; len(s) != 0 {
-		t.Errorf("unsuppressed result has suppressions %+v", s)
+	for _, rl := range run.Tool.Driver.Rules {
+		if rl.ID == "removed-api/networking.k8s.io/v1beta1/Ingress" {
+			t.Errorf("rule %s listed although it has no result", rl.ID)
+		}
 	}
-	sup := run.Results[1]
-	if sup.RuleID != "removed-api/networking.k8s.io/v1beta1/Ingress" || sup.Locations[0].PhysicalLocation.ArtifactLocation.URI != "legacy/old.yaml" {
-		t.Errorf("suppressed result = %+v", sup)
-	}
-	if len(sup.Suppressions) != 1 || sup.Suppressions[0].Kind != "external" || sup.Suppressions[0].Justification != "legacy/ is not deployed" {
-		t.Errorf("suppressions = %+v, want one external with the reason", sup.Suppressions)
+	if strings.Contains(string(raw), `"suppressions"`) || strings.Contains(string(raw), "legacy/old.yaml") {
+		t.Errorf("SARIF still carries the suppressed located finding:\n%s", raw)
 	}
 	if run.Properties.Suppressed != 2 || run.Properties.Findings != 1 {
 		t.Errorf("properties = %+v, want findings 1, suppressed 2", run.Properties)
 	}
 
-	notes := run.Invocations[0].ToolExecutionNotifications
-	if len(notes) != 1 || notes[0].Level != "note" || notes[0].Properties["findingKey"] != "eol-addon/ingress-nginx" ||
-		!strings.Contains(notes[0].Message.Text, "Suppressed (migrating in Q1; until 2026-12-31)") {
-		t.Errorf("notifications = %+v, want the suppressed add-on as a note", notes)
+	var texts []string
+	for _, n := range run.Invocations[0].ToolExecutionNotifications {
+		if n.Level != "note" {
+			t.Errorf("notification %+v is not a note", n)
+		}
+		texts = append(texts, n.Message.Text)
+	}
+	all := strings.Join(texts, "\n")
+	if !strings.Contains(all, "1 finding accepted by ignore rules or annotations is not uploaded; see the JSON report") {
+		t.Errorf("notifications lack the run-level count:\n%s", all)
+	}
+	if !strings.Contains(all, "Suppressed (migrating in Q1; until 2026-12-31)") {
+		t.Errorf("notifications lack the unanchored suppressed add-on:\n%s", all)
+	}
+}
+
+// With nothing suppressed there is no run-level note.
+func TestWriteNoSuppressedNoNote(t *testing.T) {
+	_, raw := writeLog(t, testReport())
+	if strings.Contains(string(raw), "accepted by ignore rules") {
+		t.Errorf("note emitted without suppressed findings:\n%s", raw)
 	}
 }
 

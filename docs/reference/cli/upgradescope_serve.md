@@ -7,7 +7,13 @@ Run the upgradescope server: snapshot ingest, REST API, history, notifications
 Run the upgradescope server. It accepts snapshots that agents push,
 evaluates them against every target, keeps the history, serves the REST API
 and the dashboard at /, and sends Slack or webhook notifications when a
-cluster's readiness changes.
+cluster's readiness changes: a new blocker, all blockers resolved, or an
+add-on entering its end-of-life window. Each pass is compared with the
+target's last baseline, an evaluation that is decided or unknown only
+because the target is past the knowledge base's horizon. A target's first
+baseline is silent (after an upgrade, the previous default target's is
+used), and a pass that is unknown because a collector failed sends nothing
+and is no baseline (docs/operations.md, Notifications).
 
 It listens on loopback by default. On any other address, the read API needs
 a credential: --read-token (fleet-wide), read tokens minted with
@@ -70,7 +76,7 @@ upgradescope serve [flags]
       --tls-cert-file string           PEM certificate (chain) to serve HTTPS directly, TLS 1.2 minimum; requires --tls-key-file; a new handshake re-reads the pair when either file changed (checked at most once a second), so a renewal needs no restart
       --tls-key-file string            PEM private key for --tls-cert-file
       --trust-team-header string       DANGEROUS unless the proxy strips client-supplied copies: scope a read from a --trusted-proxy-cidr peer to the teams this request header lists, comma separated and each percent-encoded where it must be (an authenticating proxy's group header, e.g. X-Forwarded-Groups; never the whole fleet, '*' included); needs --trusted-proxy-cidr
-      --trusted-proxy-cidr strings     with --trust-team-header: the source CIDRs (the TCP peer, never X-Forwarded-For) of the proxy that sets that header, repeatable or comma separated, e.g. 10.42.0.0/16
+      --trusted-proxy-cidr strings     with --trust-team-header: the source CIDRs (the TCP peer, never X-Forwarded-For) of the proxy that sets that header, repeatable or comma separated, e.g. 10.42.0.0/16; a set of ranges that together hold every address of IPv4 or of IPv6 (0.0.0.0/0, or 0.0.0.0/1 with 128.0.0.0/1) is refused, but keeping the ranges to the proxy and nothing else is your job
       --webhook string                 generic webhook URL: POSTed one versioned JSON notification per cluster and evaluation pass (schema in api/webhook.schema.json) (visible in process listings: prefer $UPGRADESCOPE_WEBHOOK_URL or --webhook-file)
       --webhook-file string            read --webhook from this file, e.g. a mounted Secret (surrounding whitespace is trimmed); the file is re-read when it changes (checked at most every 5s, when it is next needed), so a rotated Secret needs no restart. A value from the flag or the environment is read once
       --webhook-secret string          sign generic webhook requests: X-Upgradescope-Signature: sha256=<hex HMAC-SHA256 of the body with this key> (visible in process listings: prefer $UPGRADESCOPE_WEBHOOK_SECRET or --webhook-secret-file)

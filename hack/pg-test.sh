@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# pg-test.sh — run the Postgres store conformance suite against a real
-# Postgres (make pg-test; CI's pg-conformance job).
+# pg-test.sh — run the Postgres store conformance suite, and the server
+# tests that run on both stores, against a real Postgres (make pg-test; CI's
+# pg-conformance job).
 #
 #   ./hack/pg-test.sh                       # throwaway postgres:17-alpine container
 #   PG_VERSION=14 ./hack/pg-test.sh         # another major (postgres:14-alpine)
@@ -58,3 +59,21 @@ trap 'rm -f "$out"; [ -z "${CONTAINER:-}" ] || docker stop "$CONTAINER" >/dev/nu
 go test ./internal/server/store/... -run 'Postgres' -count=1 -race -v "$@" 2>&1 | tee "$out"
 grep -q '^--- PASS: TestPostgresConformance' "$out" ||
   { echo "pg-test: TestPostgresConformance did not pass (skipped?)" >&2; exit 1; }
+
+# The server package's tests that run on both stores (forEachStore: the
+# notification baselines of #380, the stored annotations of #381, ...) skip
+# their postgres subtest without the DSN, so they run here too. They run after
+# the store package, never beside it: both packages migrate the same database
+# under one advisory lock, and the store's migration-lock tests probe that lock.
+# The list is read from the test files, so a new forEachStore test joins it.
+names=$(awk '/^func Test[A-Za-z0-9_]*\(t \*testing\.T\)/ { match($0, /Test[A-Za-z0-9_]*/); cur = substr($0, RSTART, RLENGTH) }
+  /forEachStore\(/ && cur != "" { print cur; cur = "" }' internal/server/*_test.go | sort -u | paste -sd'|' -)
+[ -n "$names" ] || { echo "pg-test: found no forEachStore test in internal/server" >&2; exit 1; }
+go test ./internal/server/ -run "^(${names})\$" -count=1 -race -v "$@" 2>&1 | tee "$out"
+grep -Eq '^ *--- PASS: [A-Za-z0-9_]+/postgres' "$out" ||
+  { echo "pg-test: no internal/server postgres subtest passed (skipped?)" >&2; exit 1; }
+if grep -Eq '^ *--- SKIP: [A-Za-z0-9_]+/postgres' "$out"; then
+  echo "pg-test: an internal/server postgres subtest skipped:" >&2
+  grep -E '^ *--- SKIP: [A-Za-z0-9_]+/postgres' "$out" >&2
+  exit 1
+fi

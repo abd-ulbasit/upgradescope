@@ -31,31 +31,63 @@ type Postgres struct {
 
 var _ Store = (*Postgres)(nil)
 
+// pgPingTimeout bounds the connection check at open, so a wrong DSN or an
+// unreachable server fails fast. It bounds nothing else: see OpenPostgres.
+const pgPingTimeout = 10 * time.Second
+
 // OpenPostgres connects to dsn (any pgx-accepted form, e.g.
 // postgres://user:pass@host:5432/db), verifies the connection with a ping,
 // and applies the embedded pgmigrations. Fails fast on unreachable or
-// unauthorized servers instead of deferring the error to the first query.
-func OpenPostgres(dsn string) (*Postgres, error) {
+// unauthorized servers instead of deferring the error to the first query:
+// the ping has its own pgPingTimeout.
+//
+// The wait on the migration lock and the migrations themselves run on ctx
+// with no added deadline, as SQLite's do: a long migration, or a replica
+// queued behind another replica's migrations, takes as long as it takes,
+// and the deployment's startupProbe is the bound. Cancelling ctx (serve's
+// SIGTERM) abandons the in-flight statement promptly, with an error that
+// wraps ctx.Err().
+func OpenPostgres(ctx context.Context, dsn string) (*Postgres, error) {
+	sub, err := fs.Sub(pgMigrationsFS, "pgmigrations")
+	if err != nil {
+		return nil, fmt.Errorf("embedded pgmigrations: %w", err)
+	}
+	return openPostgres(ctx, dsn, sub)
+}
+
+// openPostgres is OpenPostgres with the migration set injected (the test
+// seam: the embedded FS cannot hold a deliberately slow migration).
+func openPostgres(ctx context.Context, dsn string, fsys fs.FS) (*Postgres, error) {
 	db, err := sql.Open("pgx", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open postgres: %w", err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	if err := db.PingContext(ctx); err != nil {
-		_ = db.Close()
-		return nil, fmt.Errorf("ping postgres: %w", err)
-	}
-	sub, err := fs.Sub(pgMigrationsFS, "pgmigrations")
+	pingCtx, cancel := context.WithTimeout(ctx, pgPingTimeout)
+	err = db.PingContext(pingCtx)
+	cancel()
 	if err != nil {
 		_ = db.Close()
-		return nil, fmt.Errorf("embedded pgmigrations: %w", err)
+		return nil, fmt.Errorf("ping postgres: %w", withCtxErr(ctx, err))
 	}
-	if _, err := migratePostgres(ctx, db, sub); err != nil {
+	if _, err := migratePostgres(ctx, db, fsys); err != nil {
 		_ = db.Close()
+		if cerr := ctx.Err(); cerr != nil {
+			// Each migration is its own transaction: the interrupted one
+			// rolled back (server-side, see migratePostgres) and is not recorded.
+			return nil, fmt.Errorf("migrate postgres: interrupted (%w); the migrations not yet recorded run on the next start: %w", cerr, err)
+		}
 		return nil, fmt.Errorf("migrate postgres: %w", err)
 	}
 	return &Postgres{db: db}, nil
+}
+
+// withCtxErr makes err match ctx.Err() under errors.Is once ctx is done,
+// whatever shape the driver gave the interrupted statement's error.
+func withCtxErr(ctx context.Context, err error) error {
+	if cerr := ctx.Err(); cerr != nil && !errors.Is(err, cerr) {
+		return fmt.Errorf("%w: %w", cerr, err)
+	}
+	return err
 }
 
 // Close closes the underlying connection pool.
@@ -202,7 +234,7 @@ func (p *Postgres) RenameCluster(ctx context.Context, name, newName string) erro
 // Prune deletes evaluations created before cutoff, then the snapshots
 // received before it that no evaluation refers to any more, sparing each
 // cluster's latest snapshot and its evaluations and each (cluster,
-// target)'s newest decided evaluation (the notification baseline), then
+// target)'s newest notification baseline (decided or Baseline), then
 // those baselines baselines does not spare, in bounded batches of one
 // transaction each (prune.go). A snapshot that becomes non-latest between
 // the statements keeps its evaluations, so it stays until the next run.
@@ -351,11 +383,12 @@ func (p *Postgres) LatestSnapshotHeads(ctx context.Context) (map[int64]Snapshot,
 func scanEvaluationPg(rs rowScanner) (Evaluation, error) {
 	var e Evaluation
 	var gaps sql.NullString
-	var hold sql.NullBool
+	var hold, baseline sql.NullBool
 	if err := rs.Scan(&e.ID, &e.ClusterID, &e.SnapshotID, &e.Target, &e.KBVersion,
-		&e.Score, &e.Ready, &e.Blockers, &e.Warnings, &e.Report, &e.CreatedAt, &e.EvaluatedAt, &e.TeamMapHash, &gaps, &e.TeamsUnknown, &hold); err != nil {
+		&e.Score, &e.Ready, &e.Blockers, &e.Warnings, &e.Report, &e.CreatedAt, &e.EvaluatedAt, &e.TeamMapHash, &gaps, &e.TeamsUnknown, &hold, &baseline); err != nil {
 		return Evaluation{}, err
 	}
+	e.Baseline = baseline.Valid && baseline.Bool
 	e.NotAssessed = notAssessedBytes(gaps)
 	e.CarriesHold = carriesHoldColumn(hold)
 	e.CreatedAt = e.CreatedAt.UTC()
@@ -380,10 +413,10 @@ func insertEvaluationPg(ctx context.Context, x sqlExecer, e Evaluation) (int64, 
 	}
 	var id int64
 	err := x.QueryRowContext(ctx, `
-		INSERT INTO evaluations (cluster_id, snapshot_id, target, kb_version, score, ready, blockers, warnings, report, created_at, evaluated_at, team_map_hash, not_assessed, teams, carries_hold)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) RETURNING id`,
+		INSERT INTO evaluations (cluster_id, snapshot_id, target, kb_version, score, ready, blockers, warnings, report, created_at, evaluated_at, team_map_hash, not_assessed, teams, carries_hold, baseline)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16) RETURNING id`,
 		e.ClusterID, e.SnapshotID, e.Target, e.KBVersion, e.Score, e.Ready, e.Blockers, e.Warnings, e.Report,
-		created, evaluated, e.TeamMapHash, notAssessedOf(e.Report), teamsColumn(e.Teams), CarriesHold(e.Report)).Scan(&id)
+		created, evaluated, e.TeamMapHash, notAssessedOf(e.Report), teamsColumn(e.Teams), CarriesHold(e.Report), e.Baseline).Scan(&id)
 	if err != nil {
 		return 0, fmt.Errorf("insert evaluation: %w", err)
 	}
@@ -430,7 +463,7 @@ func (p *Postgres) CurrentEvaluationSummary(ctx context.Context, clusterID int64
 }
 
 // LatestKnownEvaluation returns the newest evaluation for (cluster, target)
-// that is ready or has a blocker, or ErrNotFound.
+// that is ready, has a blocker, or is marked a baseline, or ErrNotFound.
 func (p *Postgres) LatestKnownEvaluation(ctx context.Context, clusterID int64, target string) (Evaluation, error) {
 	return p.queryEvaluation(ctx, fmt.Sprintf("latest known evaluation for cluster %d target %s", clusterID, target),
 		pgLatestKnownQuery, clusterID, target)
@@ -440,12 +473,12 @@ func (p *Postgres) LatestKnownEvaluation(ctx context.Context, clusterID int64, t
 // pins: each walks an index of migration 0009 backwards.
 const (
 	pgLatestKnownQuery = `SELECT ` + evaluationColumns + ` FROM evaluations
-		WHERE cluster_id = $1 AND target = $2 AND (ready OR blockers > 0)
+		WHERE cluster_id = $1 AND target = $2 AND (ready OR blockers > 0 OR baseline)
 		ORDER BY id DESC LIMIT 1`
 	// pgLatestKnownIDQuery is the commit's baseline check
 	// (Expectation.Baselines): the id LatestKnownEvaluation returns.
 	pgLatestKnownIDQuery = `SELECT id FROM evaluations
-		WHERE cluster_id = $1 AND target = $2 AND (ready OR blockers > 0)
+		WHERE cluster_id = $1 AND target = $2 AND (ready OR blockers > 0 OR baseline)
 		ORDER BY id DESC LIMIT 1`
 	// pgScoreHistoryQuery is newest first; ScoreHistory reverses it.
 	pgScoreHistoryQuery = `SELECT created_at, score, ready, blockers FROM evaluations
@@ -570,9 +603,9 @@ func (p *Postgres) CommitEvaluations(ctx context.Context, b EvaluationBatch) (in
 			evaluated = time.Now().UTC()
 		}
 		if err := execOne(ctx, tx, fmt.Sprintf("commit evaluations: refresh evaluation %d", e.ID), `
-			UPDATE evaluations SET report = $1, not_assessed = $2, kb_version = $3, team_map_hash = $4, teams = $5, blockers = $6, warnings = $7, evaluated_at = $8, carries_hold = $9
-			WHERE id = $10 AND cluster_id = $11`,
-			e.Report, notAssessedOf(e.Report), e.KBVersion, e.TeamMapHash, teamsColumn(e.Teams), e.Blockers, e.Warnings, evaluated, CarriesHold(e.Report), e.ID, b.ClusterID); err != nil {
+			UPDATE evaluations SET report = $1, not_assessed = $2, kb_version = $3, team_map_hash = $4, teams = $5, blockers = $6, warnings = $7, evaluated_at = $8, carries_hold = $9, baseline = $10
+			WHERE id = $11 AND cluster_id = $12`,
+			e.Report, notAssessedOf(e.Report), e.KBVersion, e.TeamMapHash, teamsColumn(e.Teams), e.Blockers, e.Warnings, evaluated, CarriesHold(e.Report), e.Baseline, e.ID, b.ClusterID); err != nil {
 			return 0, false, err
 		}
 	}
@@ -728,6 +761,26 @@ func (p *Postgres) ValidToken(ctx context.Context, token string) (string, bool, 
 		return "", false, fmt.Errorf("validate token: %w", err)
 	}
 	return name, true, nil
+}
+
+// IngestTokenCluster resolves a presented plaintext token to its cluster
+// name and the id registered under that name (0 for none yet), in one
+// statement, so one snapshot sees both: a rename moves them together.
+func (p *Postgres) IngestTokenCluster(ctx context.Context, token string) (string, int64, bool, error) {
+	var name string
+	var id int64
+	err := p.db.QueryRowContext(ctx, `
+		SELECT t.cluster_name, COALESCE(c.id, 0) FROM tokens t
+		LEFT JOIN clusters c ON c.name = t.cluster_name
+		WHERE t.token_hash = $1 AND t.revoked_at IS NULL`,
+		HashToken(token)).Scan(&name, &id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", 0, false, nil
+	}
+	if err != nil {
+		return "", 0, false, fmt.Errorf("validate token: %w", err)
+	}
+	return name, id, true, nil
 }
 
 // RevokeToken revokes every active token of clusterName, or ErrNotFound

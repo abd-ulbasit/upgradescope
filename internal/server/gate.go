@@ -226,6 +226,11 @@ func (s *Server) evaluateGate(w http.ResponseWriter, r *http.Request, g gateRequ
 			u.Objects[i].File = g.artifact
 		}
 	}
+	for _, u := range manifests.VolumePlugins { // the same for the in-tree volume plugins the stream names (#365)
+		for i := range u.Objects {
+			u.Objects[i].File = g.artifact
+		}
+	}
 
 	target := g.target
 	sc := scopeOf(r)
@@ -408,7 +413,9 @@ type manifestContent struct {
 
 // manifestsOwn collects the objects and namespaces of the manifests and of
 // their side of the merge (mergeManifests), whose CRD usage holds the
-// manifests' custom resources.
+// manifests' custom resources, and of their in-tree volume plugin rows
+// (#365), whose refs a team-scoped gate's volume plugin finding keeps
+// (gateResponse.scope).
 func manifestsOwn(invs ...inventory.Inventory) manifestContent {
 	m := manifestContent{objects: map[inventory.ObjectRef]bool{}, namespaces: map[string]bool{}, images: map[string]bool{}}
 	usage := func(us []inventory.APIUsage) {
@@ -425,6 +432,9 @@ func manifestsOwn(invs ...inventory.Inventory) manifestContent {
 		usage(inv.APIUsage)
 		for _, c := range inv.CRDs {
 			usage(c.Usage)
+		}
+		for _, v := range inv.VolumePlugins {
+			usage([]inventory.APIUsage{{Namespaces: v.Namespaces, Objects: v.Objects}})
 		}
 		for _, a := range inv.AddOns {
 			for _, ns := range a.Namespaces {

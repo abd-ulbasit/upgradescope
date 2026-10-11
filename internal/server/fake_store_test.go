@@ -199,7 +199,7 @@ func (f *fakeStore) RenameCluster(_ context.Context, name, newName string) error
 
 // Prune mirrors the real stores: evaluations before cutoff, then
 // unreferenced snapshots before it, sparing each cluster's latest and each
-// (cluster, target)'s newest decided evaluation.
+// (cluster, target)'s newest baseline (decided, or marked Baseline).
 func (f *fakeStore) Prune(_ context.Context, cutoff time.Time, baselines store.PruneBaselines) (store.PruneResult, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -425,7 +425,7 @@ func (f *fakeStore) LatestKnownEvaluation(_ context.Context, clusterID int64, ta
 func (f *fakeStore) latestKnownLocked(clusterID int64, target string) (store.Evaluation, bool) {
 	for i := len(f.evals) - 1; i >= 0; i-- {
 		e := f.evals[i]
-		if e.ClusterID == clusterID && e.Target == target && (e.Ready || e.Blockers > 0) {
+		if e.ClusterID == clusterID && e.Target == target && (e.Ready || e.Blockers > 0 || e.Baseline) {
 			return e, true
 		}
 	}
@@ -719,6 +719,24 @@ func (f *fakeStore) ValidToken(_ context.Context, token string) (string, bool, e
 		return "", false, nil
 	}
 	return tk.cluster, true, nil
+}
+
+func (f *fakeStore) IngestTokenCluster(_ context.Context, token string) (string, int64, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := f.errs["IngestTokenCluster"]; err != nil {
+		return "", 0, false, err
+	}
+	tk, ok := f.tokens[token]
+	if !ok || tk.revoked {
+		return "", 0, false, nil
+	}
+	for id, c := range f.clusters {
+		if c.Name == tk.cluster {
+			return tk.cluster, id, true, nil
+		}
+	}
+	return tk.cluster, 0, true, nil
 }
 
 func (f *fakeStore) RevokeToken(_ context.Context, clusterName string) error {

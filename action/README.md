@@ -396,7 +396,7 @@ commit worked there; now it must be a release tag, `latest` or
 
 | Output | |
 |---|---|
-| `sarif-file` | Path to the SARIF report. It is complete when the gate fails, so upload it with the `if:` in the example above (`!cancelled() && steps.gate.outputs.sarif-file != ''`, plus the fork guard). It is set only when the gate exits 0 or 2, and not when the scan itself failed (exit 1) or was killed, so that condition skips the upload instead of failing on an empty file. |
+| `sarif-file` | Path to the SARIF report. Findings accepted by an ignore rule or annotation are not results in it (code scanning ignores SARIF suppressions and would open an alert for them); one note counts them, and the JSON report lists them. Findings the baseline already had stay results, marked `unchanged`. It is complete when the gate fails, so upload it with the `if:` in the example above (`!cancelled() && steps.gate.outputs.sarif-file != ''`, plus the fork guard). It is set only when the gate exits 0 or 2, and not when the scan itself failed (exit 1) or was killed, so that condition skips the upload instead of failing on an empty file. |
 | `report-json` | Path to the JSON report, the same as `upgradescope scan --output json`. |
 | `verdict` | `ready`, `blocked` or `unknown`. `unknown` means no blocker was found but a required check could not run. |
 | `ready` | `true` when the verdict is `ready`, otherwise `false`. |
@@ -462,7 +462,11 @@ cannot write the step summary, so a warning replaces it.
     https://github.com/abd-ulbasit/upgradescope/.github/workflows/release.yml@refs/tags/<tag>
     --certificate-oidc-issuer https://token.actions.githubusercontent.com`:
     `checksums.txt` must be signed by that workflow at that tag, and the
-    archive is held to it by its sha256;
+    archive is held to it by its sha256. No cosign minimum beyond
+    `verify-blob`'s applies: it verifies `checksums.txt.sigstore.json` on
+    every cosign tested, 2.4.3 to 3.1.3. (The release's image and chart
+    signatures, which this step does not check, need cosign 3.x or 2.6.3 or
+    later: [Install](https://abd-ulbasit.github.io/upgradescope/operations/install/));
   - with neither, the step fails and says so: install `gh` (2.68 or later)
     or `cosign` (`sigstore/cosign-installer`) before the action, or set
     `verify-provenance: false`.
@@ -487,7 +491,7 @@ cannot write the step summary, so a warning replaces it.
   verified is the build: which workflow, tag and kind of runner produced
   the archive. Not that the release's code is free of bugs.
 - **Without provenance.** Two releases predate provenance, v0.1.0 and v0.1.1
-  (GitHub's latest until v0.2.0 ships): `gh attestation verify` finds no
+  (the only two stable releases before v0.2.0): `gh attestation verify` finds no
   attestation for their archives. They are named, not found by a version
   comparison, so every other tag is verified, a prerelease suffix such as
   `-beta` included, and one without provenance fails the step. v0.2.0-rc.2
@@ -503,8 +507,7 @@ cannot write the step summary, so a warning replaces it.
   downloaded. Such a latest means someone moved GitHub's latest back to a
   release nothing can verify (what anything that can edit the releases
   would do to install a binary of its choosing), or that the action is at
-  a release candidate, which GitHub's latest skips, before a stable
-  release from v0.2.0 on is latest.
+  a release candidate, which GitHub's latest skips.
   Set `version` to the action's release, or `verify-provenance: false` to
   install it on the checksum alone. At a commit SHA, a branch or `@v0`,
   `latest` is not compared with the action's release.

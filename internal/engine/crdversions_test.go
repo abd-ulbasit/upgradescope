@@ -120,7 +120,7 @@ func TestEvalCRDVersionsUnservedInUse(t *testing.T) {
 	if want := "cert-manager.io/v1alpha3 Certificate is not served by its CRD (1 object)"; f.Title != want {
 		t.Errorf("Title = %q, want %q", f.Title, want)
 	}
-	for _, want := range []string{"CRD certificates.cert-manager.io marks v1alpha3 served: false", "it serves v1alpha2, v1", "Written by: flux."} {
+	for _, want := range []string{"CRD certificates.cert-manager.io marks v1alpha3 served: false", "it serves v1, v1alpha2", "Written by: flux."} {
 		if !strings.Contains(f.Detail, want) {
 			t.Errorf("Detail lacks %q:\n%s", want, f.Detail)
 		}

@@ -13,12 +13,33 @@ only through a new release.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-11
+
 The first release built, signed and published by CI. It changes a lot
 of scanning behaviour and gating, so read **Changed** before you upgrade
 a CI gate.
 
 ### Added
 
+- `scan` and the agent send a `User-Agent` of `upgradescope/<version>
+  (<os>/<arch>)` on every request to the Kubernetes API server, with the
+  version `upgradescope version` reports (the agent's is its image's build),
+  so an audit log tells releases apart. client-go's default, which every
+  build sent before, read `upgradescope/v0.0.0 (...) kubernetes/$Format`; an
+  audit-log filter or alert that matches that string must match the
+  `upgradescope/` prefix instead.
+  `docs/operations/security-model-and-rbac.md` says how to pick
+  upgradescope's requests out of the audit log (#379).
+- CI: `hack/claims-trackers.sh`, a step of the repo-checks job, asks GitHub
+  about every issue a claims-ledger row names as its tracker (the `#N` after
+  `not true yet`, `not automated (yet)`, `not audited` or `under repair` in
+  its Proven-by cell) and fails when one is not open, so a fix that closes a
+  tracker cannot leave the ledger citing it. Without a token or without `gh`
+  it skips with a notice (`CLAIMS_TRACKERS_REQUIRE=1` makes the skip a
+  failure); it is not part of the offline `make claims-check`. The
+  repo-checks job now reads issues (`issues: read`), and the release
+  workflow's `ci` job, which calls `ci.yml`, grants it, without which GitHub
+  would refuse to start the next release run (#366).
 - The knowledge base carries 21 hand-written migration notes, each cited to an
   https page (`internal/kb/data/migrations.json`, which `tools/gen-kb` and the
   weekly refresh never write), for the removed or deprecated kinds whose
@@ -114,8 +135,10 @@ a CI gate.
   accept `--server-ca-file`, a PEM bundle of CA certificates trusted on top of
   the system roots, for a server behind a private CA, as the agent's flag of
   the same name is. It needs an `https` server URL, and a missing file or a
-  file with no certificate stops the command. Verification is never skipped;
-  `$SSL_CERT_FILE` still adds roots, for the whole process (#347).
+  file with no certificate stops the command. Verification is never skipped.
+  On Linux and other Unix systems, `$SSL_CERT_FILE` and `$SSL_CERT_DIR` also
+  change the system roots, for the whole process; Go ignores them on macOS
+  and Windows, where `--server-ca-file` is the way (#347, #372).
 - In-tree volume plugins that Kubernetes removed, or moved behind a CSI
   driver, are now `volume-plugin` findings, keyed `volume-plugin/<plugin>`,
   from a cited, hand-written dataset of 16 plugins
@@ -532,7 +555,8 @@ a CI gate.
   parameter (at most 32 KiB; an invalid config is a 422). Suppressed
   findings count toward neither the verdict nor `fail-on`; the JSON
   answer lists them in `suppressed` with `suppressedCount` and names
-  expired rules and annotations without a reason in `warnings`; SARIF marks them suppressed, JUnit skips
+  expired rules and annotations without a reason in `warnings`; SARIF leaves
+  them out and counts them in one note (#375, under **Changed**), JUnit skips
   them and Code Quality leaves them out. The gate has no baseline input:
   with `?cluster=` the cluster is its baseline (#44).
 - The server's report-shaped responses, a cluster's report and the gate's
@@ -668,6 +692,87 @@ a CI gate.
 
 ### Changed
 
+- Snapshot hashes ignore the order of a CRD's `spec.versions` and of a
+  capability's skipped list: the server's duplicate check and the agent's
+  snapshot hash sort both first, on copies, and the stored inventory keeps
+  spec order. After the upgrade, a cluster whose inventory has a CRD's
+  versions out of name order, or an unsorted skipped list, stores its first
+  push or agent tick as one new snapshot with one history point; a later
+  push that only reorders them is a `200` duplicate. A report no longer
+  depends on either order: the `crd-version` finding's detail lists the
+  versions a CRD serves sorted, `(it serves v1, v1alpha2)` where it read
+  `(it serves v1alpha2, v1)`, and `notAssessed[].skipped` is sorted. That
+  sentence is the only change in report text; verdicts, scores, keys,
+  severities and the SARIF and Code Quality fingerprints are unchanged
+  (#367).
+- A push with a per-cluster token whose cluster is renamed or deleted at any
+  point after it was authenticated (while its body uploads, while it waits
+  for its ingest slot, or after its lookup) answers `409` ("renamed or
+  deleted") and stores nothing. Before the lookup it answered `401`
+  ("revoked"), though the token was not revoked, so a script or alert that
+  reads that `401` as a revoked token now sees a `409`. A revoked token
+  still answers `401`. A push with the shared ingest token names its cluster
+  only in its body, so for it the guarantee starts at the server's cluster
+  lookup: a delete or rename before that lets the push register the name
+  afresh, as the operations guide says (#369).
+- A live `scan` or agent whose PersistentVolume or StorageClass list is
+  refused or fails, on any page, has a required `volumes` gap whenever the
+  knowledge base has an in-tree plugin removed at or before the target that
+  the unread list could show (a PersistentVolume source for the
+  PersistentVolume list, an in-tree provisioner for the StorageClass list),
+  which is any target from 1.22. Such a cluster reads `unknown`, not
+  `ready`: `scan` and the gate exit `2` unless `--allow-incomplete`, and the
+  `ClusterReadiness` `Ready` condition is `Unknown`. Before, an `rbd`
+  PersistentVolume or a `kubernetes.io/rbd` StorageClass behind the refused
+  list read `READY`, exit `0`. In practice this is an agent with its own
+  RBAC (`rbac.create=false`) that lacks the `get` and `list` rules on
+  `persistentvolumes` and `storageclasses` (#362, below), or a transient
+  list error; the chart's RBAC grants both. A plugin that moved to CSI never
+  makes the gap required, and a skipped pod list stays covered by `addons`
+  (#374).
+- SARIF (`scan --output sarif`, `/api/v1/gate?format=sarif` and the Action's
+  `sarif-file`) no longer has a result for a finding that an ignore rule or
+  annotation accepted. GitHub code scanning ignores a result's
+  `suppressions` and opened an alert for each located accepted finding,
+  where the guide said they showed as dismissed. One run-level note counts
+  them instead, and the JSON report, the step summary and JUnit still list
+  them with their reasons. This replaces "SARIF marks them suppressed" from
+  the gate's suppression (#44, under **Added**). A finding unchanged against
+  a baseline is still a result and still opens an alert, and the guide says
+  so. CI gains a dispatched check, off the default branch, that the
+  suppressed fixture's SARIF leaves no open code-scanning alert (#375).
+- Notifications: an `unknown` pass past the knowledge base's horizon is a
+  notification baseline (see **Fixed**), which changes three things. A
+  knowledge-base update that first decides a cluster's default target
+  announces the blockers the update adds even when the cluster has no
+  decided evaluation of a lower target (a cluster first seen on the newest
+  minor); that first decided evaluation used to be silent. Such an `unknown`
+  pass sends `eol-approaching`. Retention keeps each target's newest
+  baseline, so a decided evaluation under a newer `unknown` baseline ages
+  out after `--retention`. Migration 0011 (SQLite and Postgres) adds
+  `evaluations.baseline` and replaces the partial index
+  `idx_evaluations_decided` with `idx_evaluations_baseline`. On Postgres
+  the first start builds the index inside the migration's transaction,
+  which blocks writes to `evaluations` (the old replicas' pushes included)
+  until it is built: on a large database, upgrade in a quiet window, or add
+  the column and build the index first with `CREATE INDEX CONCURRENTLY`, as
+  `docs/operations/upgrade.md` shows, and the migration finds both. An
+  `unknown` evaluation stored before 0011 is not a baseline (#380).
+- The auditor CSV export (`GET /api/v1/clusters/{id}/export?format=csv`)
+  has a new row type, `suppressed` in the severity column, one per finding
+  an object annotation accepted (see **Fixed**), with the severity, source,
+  reason and objects in its detail, and the summary row's detail ends with
+  `, N suppressed` when N is above 0. A parser that expects only the
+  `summary`, `not-assessed`, `blocker`, `warning` and `info` rows must skip
+  or read it. An export with nothing accepted is unchanged (#381).
+- The `READY` column of `kubectl get ucr` is the first target's verdict,
+  the string `ready`, `blocked` or `unknown`
+  (`.status.targets[0].verdict`). In v0.1.1 it was the boolean
+  `.status.targets[0].ready`, `true` or `false`, so a script that matches
+  the column against `true` must match `ready`, or read
+  `.status.targets[0].ready`, which the status still carries. The **Added**
+  entry for the readiness verdict introduced the column without saying it
+  replaced the boolean (#366).
 - `scan --files` on a directory that holds an unrendered Helm chart (a
   `Chart.yaml` with templates that contain `{{ }}`) no longer reads `READY`
   100/100 behind a warning for every template. It prints one hint per chart
@@ -1464,8 +1569,10 @@ a CI gate.
   binds is loopback or you pass `--allow-anonymous-read`. Connections have read, write
   and idle timeouts. Snapshot and gate bodies are capped
   (`--max-snapshot-bytes`, `--max-gate-bytes`). Responses carry CSP and
-  other security headers. A push whose cluster ID differs from the ID
-  that first registered the cluster name is refused with 409. Stored
+  other security headers. A cluster name is bound to the first non-empty
+  cluster ID pushed under it (a name first registered with none is bound
+  by the first ID pushed after it, #368), and a push with another ID, or
+  none, is then refused with 409. Stored
   verdicts are re-evaluated, and reads come from the latest snapshot.
   Ingest and notifications are written atomically through an outbox.
 - Chart: the agent's ClusterRole names every rule; it has no wildcards.
@@ -1594,6 +1701,135 @@ a CI gate.
 
 ### Fixed
 
+- The dashboard's Registry page no longer shows a stale stored status. An
+  entry's badge is now derived from its dates and today's UTC date (a date on
+  or before today has passed, as in the scan's own rule): a passed `eol_date`
+  with an extended date still ahead reads "extended support only · until
+  <date>", and a passed `eol_date` otherwise reads "eol · <date>". The split
+  line is in the past tense once a date has passed. RKE2 Ingress NGINX read
+  "supported · 2026-03-31" seven months after that date. Scans and verdicts
+  were never affected, since they use the dates. The retention page now lists
+  `verdict` among the fields `GET /history` returns (#383).
+- Postgres: `serve`, `tokens` and `clusters` no longer fail every start with
+  "context deadline exceeded" after 10 s when a migration runs longer, or
+  when another replica holds the migration lock, which a starting replica
+  now waits on as documented. Only the connection check at open is still
+  bounded, at 10 s; as on SQLite, the startupProbe bounds the migrations.
+  SIGINT or SIGTERM during the migrations stops `serve` promptly with an
+  "interrupted" error, and the interrupted migration is not recorded, so the
+  next start runs it again. The migration session sets
+  `client_connection_check_interval=2s` (PostgreSQL 14 and later), so a pod
+  killed mid-migration does not leave a statement such as migration 0010's
+  `CREATE INDEX` running on the server with its locks and the migration lock
+  (#364).
+- `/api/v1/gate?cluster=` blames a pull request's in-tree volume plugin on
+  the manifests. A PR that added a PersistentVolume with `spec.rbd`, or a
+  pod template with an inline `gitRepo` volume, to a cluster that already
+  used the plugin answered `200 ready`, with an empty SARIF, a JUnit "no
+  findings" and an empty Code Quality report; it is now `422 blocked` with
+  `source: manifest`, as without `?cluster=`. The finding stays whole (the
+  cluster's objects and the PR's), `clusterVerdict` is unchanged, and a PR
+  that adds none still passes. The PR's volume-plugin objects carry
+  `?path=`, with or without `?cluster=`, so SARIF, JUnit and Code Quality
+  report them at the PR's file, where an object with no file was dropped as
+  "no file location". A cluster whose stored row already listed 100 objects
+  no longer pushes the PR's object out of the finding, SARIF or Code
+  Quality: the merge keeps every ref, and the listing is cut after
+  suppression. A team-scoped gate's share is under **Security** (#365).
+- A cluster name first registered by a push with no `clusterId` (an agent
+  that could not read `kube-system`) is bound by the first `clusterId`
+  pushed after it, from whichever cluster sends it, and that push continues
+  the name's history, as before; the docs now say so in place of "two
+  clusters cannot share a name". The server logs it (`server: cluster name
+  adopted its first clusterId: cluster=... clusterId=... snapshotId=...`),
+  and the adopting push sends no `became-ready` notification, since the
+  history it continues may be another cluster's. Two pushers that both send
+  no `clusterId` share the name: give each agent its own `--cluster-name`
+  (#368).
+- Documentation: `--server-ca-file`'s help and every page that names
+  `$SSL_CERT_FILE` or `$SSL_CERT_DIR` say that the two change the system
+  roots on Linux and other Unix systems only; Go ignores them on macOS and
+  Windows, where `--server-ca-file` is the way. A test fails on a page, this
+  changelog included, that names either variable without Linux, macOS and
+  Windows (#372).
+- Ingest refuses (`422`, naming the field) a negative `count`,
+  `objectsOmitted` or namespace count in every API usage list, `apiUsage`,
+  `apiAuthorshipUnknown`, a CRD's `usage` and a Helm release's
+  `manifestApis`, as it did for `volumePlugins` alone; a count of 0 is
+  accepted. Such a push was stored and read "(-5 objects)", and a negative
+  Helm manifest row was dropped by the engine with no finding, so a `helm
+  upgrade` blocker vanished and the score read 100. The agent repairs its
+  inventory before it pushes: it drops the bad entry (a bad Helm manifest
+  row drops its release, a bad CRD usage row its CRD), names an API usage
+  entry in `api-usage`'s skipped list and a release in `helm`'s, and marks
+  the capability partial. An agent that sends a negative count now gets
+  `422` where it got `202`; no released agent writes one. The #351 and #361
+  entries took this check as given for every list; it held for volume
+  plugins only (#373).
+- `go test ./deploy/chart/`, and so `make test`, skips the chart tests on a
+  machine without `helm` instead of failing the package: the read-closure
+  test called `t.Skip` on the parent test from a subtest. `make hack-test`
+  runs the helm-calling packages with `helm` hidden from `PATH` and fails
+  unless they pass with skips (#376).
+- Documentation: the documented `cosign verify` of the image and of the
+  chart (`docs/operations/install.md`, the chart README and the release
+  notes' Verify block) states the minimum cosign, 3.x or 2.6.3 or later: the
+  signatures are cosign 3 bundles, and cosign 2.6.2 and older exit `10` with
+  `no signatures found`. `cosign verify-blob` of `checksums.txt` works from
+  2.4.3. The release workflow's verify job runs the documented commands with
+  cosign v2.6.3 as well as the default, and `make claims-check` fails a
+  section of those pages that shows `cosign verify` without the minimum
+  (#377).
+- CI: kb-refresh opens or updates its failure issue when one of its jobs
+  times out or is cancelled: a job that hits `timeout-minutes` concludes
+  `cancelled`, which the report did not match, so a timed-out stage, run or
+  verify job opened none. A person cancelling the whole run stays quiet. Its
+  two pull-request jobs and the report job have a 15-minute timeout, and
+  CONTRIBUTING.md documents the forced-diff dry run, the one way to exercise
+  the pull-request path on demand (#378).
+- `upgradescope tokens create --read` honours `$UPGRADESCOPE_DB_URL` and
+  `--db-url-file`. It ignored both, opened the default `./upgradescope.db`,
+  printed a token that the server answered `401` to, and inside the chart's
+  distroless pod failed with a read-only filesystem error, which broke the
+  first step of the chart's NOTES for every Postgres hub without
+  `server.readToken`. Every `tokens` subcommand resolves and opens the
+  database the same way now (#382).
+- The server's stored and read-time evaluations apply the objects'
+  `upgradescope.basit.engineer/ignore` annotations (with
+  `ignore-reason`), as `scan`, the agent and `/gate` already did. The stored
+  verdict and score, fleet cells, history, notifications (annotating the
+  last blocker sends `became-ready`; an object that arrives already
+  annotated sends no `new-blocker`), `GET /api/v1/clusters/{id}/report`
+  (`suppressed`, source `annotation`) and the dashboard's suppressed count
+  now agree with the `ClusterReadiness` status and `/gate?cluster=`. The
+  agent's `spec.ignore` still never reaches the server. Auditor exports list
+  the accepted findings: the CSV has one `suppressed` row per accepted
+  finding and a suppressed count in the summary row (under **Changed**), and
+  the HTML export has a suppressed section. Evaluations stored before the
+  upgrade pick this up at their next re-evaluation: the next changed push, a
+  knowledge-base change, or the first pass after UTC midnight (#381).
+- Notifications on a cluster on the newest minor, whose default target is
+  past the knowledge base's horizon and so reads `unknown` when clean: its
+  first blocker (an EOL add-on, say) is now a `new-blocker`, and a blocker
+  that an `unknown` pass saw resolved is announced again when it returns.
+  Both were silent, because an `unknown` pass was never a baseline. A pass
+  whose only required gaps hide no finding (`kb-coverage`, `target`) saw
+  everything a blocker comes from, so it is now compared like a decided one
+  and is the next pass's baseline, and the blockers it resolved keep a
+  `became-ready` pending for the first `ready` pass. A pass that is
+  `unknown` behind a required gap that hides findings (a collector failure,
+  knowledge-base skew) still sends nothing and is not a baseline (#380).
+- Documentation: `go install` from the module proxy builds a binary whose
+  `upgradescope version` prints `commit: unknown` and `built: unknown`, as
+  `docs/operations/install.md` now says (it said the commit was reported).
+  The README's verify block sets `VERSION` and downloads the files it
+  checks, so it runs as pasted. The authorship note says what the public
+  history shows. The README, SECURITY.md, the chart's `rbac.create` docs
+  and the security page say that the agent's `create` on
+  `clusterreadinesses` cannot be limited by name, so it can create a
+  ClusterReadiness under any name, and that it never deletes one. The
+  claims ledger names no closed issue as a tracker, and the rows round 3
+  passed moved into the area tables (#366).
 - A remediation never sends a manifest to a less mature API than the one it
   uses (alpha before beta before GA, from the version name). A
   `flowcontrol.apiserver.k8s.io/v1` manifest checked at target 1.18 was told
@@ -1676,7 +1912,8 @@ a CI gate.
   longer wraps negative when the gate adds a manifest, which dropped the
   cluster's own finding from the proposed state and could change the
   verdict. The decrement for a replaced object no longer goes below zero
-  (#361).
+  (#361). Ingest refused a negative stored count in `volumePlugins` only,
+  not in the API usage lists, until #373 (see above).
 - A live `scan` and the agent read PersistentVolumes and StorageClasses for
   in-tree volume plugins. An `rbd` (or other in-tree) PersistentVolume behind
   a claim, counted under its bound claim's namespace, or a StorageClass whose
@@ -1901,10 +2138,11 @@ a CI gate.
   in `istio-system` read clean; it now gets the ended 1.28 line's
   blocker. The manifest gate replaces every install of an add-on in a
   namespace its manifests deploy it to (#165).
-- The same inventory gives the same report whatever the order of its rows:
-  deprecated-API caller rows are sorted before they are judged and folded
-  into usage findings, whose evidence sentence listed subresources in the
-  order the rows arrived (#165).
+- The same inventory gives the same report whatever the order of its
+  deprecated-API caller rows (and, since #367, of a CRD's `spec.versions`
+  and a capability's skipped list): caller rows are sorted before they are
+  judged and folded into usage findings, whose evidence sentence listed
+  subresources in the order the rows arrived (#165).
 - Knowledge base: `rbac.authorization.k8s.io/v1alpha1` (ClusterRole,
   ClusterRoleBinding, Role, RoleBinding; removed in 1.23) and
   `node.k8s.io/v1alpha1` RuntimeClass (removed in 1.24) now block at the
@@ -1947,6 +2185,35 @@ a CI gate.
 
 ### Security
 
+- A team-scoped `/api/v1/gate?cluster=` no longer sees other teams' in-tree
+  volume-plugin evidence. The share it evaluates keeps a cluster's
+  volume-plugin counts in the scope's teams' namespaces only, and drops the
+  cluster-scoped counts (unbound PersistentVolumes and StorageClasses) and
+  the cluster's PersistentVolume and StorageClass names. Before, a
+  volume-plugin finding a PR introduced (blamed on the manifests since #365,
+  see **Fixed**) merged every team's evidence, so a team-scoped read token
+  learned other teams' `rbd` pod, PersistentVolume and StorageClass counts
+  from its count, title and detail, and the share's cluster verdict and
+  score depended on other teams' volume plugins. A live PersistentVolume ref
+  carries no namespace, so the share also drops the scope's own
+  PersistentVolumes bound to its claims: their
+  `upgradescope.basit.engineer/ignore` annotations cannot accept a finding
+  in a team-scoped `?cluster=` gate, where before (while the share leaked)
+  they could. `docs/operations/auth.md` says so, and that a scoped read of a
+  finding whose namespaces are all the scope's keeps the cluster-scoped refs
+  it names, such as the cluster's StorageClass names (#365).
+- `serve --trusted-proxy-cidr` refuses a set of ranges that together hold
+  every address of IPv4 or of IPv6, however they are split across flags
+  (`0.0.0.0/1` with `128.0.0.0/1`), not only a single `/0`; such a set let
+  any client set the team header. A partial cover is still accepted, and
+  keeping the ranges to the proxy remains the operator's job (#370).
+- For a webhook URL that holds an `@`, a delivery error in the log and in
+  `outbox.last_error` is cut to its reason (no such host, connection
+  refused, i/o timeout, the TLS reason), and no longer names the DNS name or
+  the dialed `ip:port`, which the transport error carried past the withheld
+  host (see the #240 entry). `serve`'s refusal of a bad `--slack-webhook` or
+  `--webhook` URL uses a fixed text per kind of failure and no longer quotes
+  part of the value (#371).
 - `clusters list`, `clusters delete`, `clusters rename` and `mcp --server-url`
   warn on stderr when a token would go over plain `http` to a host that is not
   loopback (`localhost`, `127.0.0.1`, `::1`), saying that the bearer token
@@ -1956,16 +2223,18 @@ a CI gate.
   warning, and the request is still sent, so scripts that work keep working;
   an `https` URL, a loopback host and a call with no token print nothing.
   `mcp` warned already; `clusters` did not (#347).
-- A pushed inventory's `volumePlugins` is validated like its API usage. Ingest
-  refuses (422), naming the field, a `plugin` that is not a field name (at
-  most 64 ASCII letters and digits, starting with a letter, so control
-  characters and long names fail), a plugin listed twice or more than 64
-  entries, a negative `count`, `objectsOmitted` or namespace count, a
-  namespace key or object reference that is not a Kubernetes name, and more
-  than 100 objects in an entry. The agent repairs its own inventory before it
-  pushes: it drops an entry with a bad plugin or count, and the bad objects
-  and namespace keys of the others, names what it dropped, and marks `volumes`
-  partial, so one hostile pod cannot make every push of a cluster fail (#351).
+- A pushed inventory's `volumePlugins` is validated like its API usage
+  (namespace keys, object references and the cap on objects; the API usage
+  lists refuse negative counts too only since #373). Ingest refuses (422),
+  naming the field, a `plugin` that is not a field name (at most 64 ASCII
+  letters and digits, starting with a letter, so control characters and long
+  names fail), a plugin listed twice or more than 64 entries, a negative
+  `count`, `objectsOmitted` or namespace count, a namespace key or object
+  reference that is not a Kubernetes name, and more than 100 objects in an
+  entry. The agent repairs its own inventory before it pushes: it drops an
+  entry with a bad plugin or count, and the bad objects and namespace keys
+  of the others, names what it dropped, and marks `volumes` partial, so one
+  hostile pod cannot make every push of a cluster fail (#351).
 - Text that a manifest or the cluster controls (titles, details, object
   names, files, namespaces, warnings, the `clusters` and `tokens` list
   commands, `serve`'s `--team-map` logs and the binary's own error text) is
@@ -2021,12 +2290,18 @@ a CI gate.
   an empty allowlist (#259).
 - Slack and generic webhook URLs, which are secrets, never reach the
   server's log or the outbox's `last_error` past `scheme://host/…`, and
-  the host is withheld too when the URL holds an `@` (#240).
+  the host is withheld too when the URL holds an `@` (#240); the dial
+  error still named it until #371 (above).
 - A snapshot push authenticated before its token was revoked, or before its
   cluster was deleted or renamed, no longer commits: both stores re-check
   the token and the cluster inside the commit transaction. A revoked token
   answers `401`, a rename or delete `409`, with nothing stored and no
-  duplicate cluster created (#240).
+  duplicate cluster created (#240). That held from the server's cluster
+  lookup on: a rename or delete before it answered a per-cluster push `401`
+  and let a shared-token push register the name again. Since #369 a
+  per-cluster push answers `409` at any point after authentication; for a
+  shared-token push the guarantee still starts at the lookup (see
+  **Changed**).
 - The oauth2-proxy example sets `--pass-host-header=false`, so the upstream
   sees the Host the server's new check accepts. The
   `docs/operations/auth.md` danger box now states that group naming in the
@@ -2229,6 +2504,7 @@ First release.
   deprecated-callers signal is then reported as not assessed.
 - `kind: List` items are not expanded in `--files` mode.
 
-[Unreleased]: https://github.com/abd-ulbasit/upgradescope/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/abd-ulbasit/upgradescope/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/abd-ulbasit/upgradescope/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/abd-ulbasit/upgradescope/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/abd-ulbasit/upgradescope/releases/tag/v0.1.0

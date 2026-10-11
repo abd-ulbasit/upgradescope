@@ -64,8 +64,10 @@ func TestOlderAgentVolumesNotAssessed(t *testing.T) {
 	}
 }
 
-// Volume plugin entries are validated like API usage entries: a namespace
-// key that is no namespace name is refused (422) before anything is stored.
+// Volume plugin entries get the identifier checks of API usage entries (and
+// the non-negative counts, see TestIngestRefusesNegativeUsageCounts): a
+// namespace key that is no namespace name is refused (422) before anything
+// is stored.
 func TestIngestRefusesInvalidVolumePlugins(t *testing.T) {
 	h := newHarness(t, Config{KB: volumesKB()}, aug1)
 	inv := glusterInventory()

@@ -182,7 +182,7 @@ ones after it. client-go's `rest.Config.Timeout` (`--request-timeout`, default
 | `addons` | pod container and init-container images and labels (the `kube-system` pods from the `versions` step's read, the other namespaces from its own list), `networking.k8s.io/v1` IngressClasses, plus the Helm releases from the `helm` step | Matches registry matchers. An image matcher of two or more segments is a repository-path suffix on whole segments of the normalised reference (a one-segment matcher is that repository exactly, unless an entry writes it `"*/name"` to match under any registry prefix, which only a distinctive name may), so mirrors and pull-through caches match; provider builds (GKE, AKS) match only entries written for them. A chart matcher names a Helm release's chart or a pod's `helm.sh/chart` label. A pod running an image no matcher claims, whose `app.kubernetes.io/name`, `helm.sh/chart` chart name or `app.kubernetes.io/part-of` names an add-on, is that add-on, at its `app.kubernetes.io/version` when the name label (or, without one, the chart label) named it. An image an entry claims but that names no version (a digest, `:latest`) takes the same label version of its pod when the labels name the same add-on; a tag that names a version is never overridden (#301). An IngressClass with controller `k8s.io/ingress-nginx` is ingress-nginx, without a version, unless ingress-nginx, a vendor build of it or Traefik (which can serve that class) was found otherwise. Each namespace is its own install: a Helm release's `appVersion` wins there over image tags and labels on its release line (major.minor), and otherwise the oldest version its image tags and labels give; image tags and labels on another line than every release in the namespace are a second install there, at their oldest version, so an older canary revision beside a newer release is judged (#165). Image repositories no image matcher claims go to `unrecognizedImages` and never become findings. In files mode the same matcher runs over manifest pod templates and IngressClasses. |
 | `api-usage` | discovery, then one **metadata-only, paged** list per resource that still serves a version the knowledge base flags, at a non-deprecated version | Detects *authorship*, not servability. See below. |
 | `crds` | `apiextensions.k8s.io/v1` CustomResourceDefinitions, then, for each CRD with a deprecated or unserved version, one **metadata-only, paged** list of its custom resources at a served version that is not deprecated | Records `spec.versions` and `status.storedVersions`, and the custom resources a field manager still writes through a deprecated or unserved version (the same authorship rules as `api-usage`). A forbidden custom-resource list (the agent is granted none) makes it partial. In files mode, CRD manifests give the versions and every custom resource in the files counts; one without its CRD in the files makes it partial. See [CRD versions](concepts/api-usage-detection.md#crd-versions). |
-| `volumes` | nothing of its own: the in-tree volume plugins named by the pods the `versions` step (kube-system) and the `addons` step (the other namespaces) list anyway, or, between full pod passes, by the held pass | Optional: an inventory without it (an older collector's) is a gap, never clean. Counts pods per plugin and namespace, naming no pod. In files mode, pod template, Pod and PersistentVolume manifests, located by file and line. Live PersistentVolumes are not read (that needs RBAC on `persistentvolumes`). See [in-tree volume plugins](concepts/volume-plugins.md). |
+| `volumes` | the in-tree volume plugins named by the pods the `versions` step (kube-system) and the `addons` step (the other namespaces) list anyway, or, between full pod passes, by the held pass; and, of its own, one **paged** list of the PersistentVolumes and one of the `storage.k8s.io/v1` StorageClasses (`limit=500`; `get`/`list` on both, no `watch`) on every tick since #362, also between full pod passes | Optional: an inventory without it (an older collector's) is a gap, never clean. Counts pods per plugin and namespace, naming no pod; a PersistentVolume's in-tree source under its bound claim's namespace (none when unbound), and a StorageClass whose provisioner is a plugin's in-tree one, each named. A refused or failed list (no RBAC on them, say) makes it partial, naming the list, and that gap is required when the knowledge base has a plugin removed by the target that the unread list could show (#374). In files mode, pod template, Pod, PersistentVolume and StorageClass manifests, located by file and line. See [in-tree volume plugins](concepts/volume-plugins.md). |
 
 Every cluster-wide list is paged (`limit=500`; the pod and node lists size
 their later pages, see [API cost per tick](#api-cost-per-tick)). The
@@ -224,7 +224,7 @@ cluster. The requests of one tick are:
   is half what it was.
   The types are nodes, namespaces, pods in
   `kube-system`, pods in the other namespaces, IngressClasses,
-  CustomResourceDefinitions, the `owner=helm` Secrets and the `owner=helm`
+  PersistentVolumes, StorageClasses, CustomResourceDefinitions, the `owner=helm` Secrets and the `owner=helm`
   ConfigMaps (both are still attempted with `rbac.helmSecrets=false`, and
   the API server refuses them), and a metadata-only list for each resource
   the knowledge base flags that the cluster still serves at a non-deprecated
@@ -305,7 +305,7 @@ cluster. The requests of one tick are:
   a second read only when the status write conflicts). The agent keeps API
   discovery between ticks (#228, `collect.DiscoveryCache`): a steady tick
   asks for `/version` only, and asks for the groups and resources again
-  (4 requests) when the server version changed (on that tick, before any
+  (4 requests, plus one for each GitOps group-version the cluster serves: 6 on a tick with the Argo CD and Flux CRDs, observed in round 3) when the server version changed (on that tick, before any
   step reads them), on the tick after the CRDs' groups, kinds or served
   versions changed or the CRD list failed, when the answer is an hour old,
   or when the last answer had an error, which is never kept. The CRDs it is
@@ -511,7 +511,7 @@ always give the same bytes out.
 | `addon-no-data` | info | A detected add-on whose version has no lifecycle data: no version, a version between tracked lines or newer than the newest, or a product without lines. |
 | `unknown-api` | info | An object of a built-in API group (core, or any group the generator's scheme registers (`k8s.io/api` plus the apiextensions and apiregistration schemes), whether or not the knowledge base has entries for it) at a version or kind the knowledge base does not know: whether the target serves it was not assessed. CRD groups produce nothing. |
 | `crd-version` | blocker / warning / info | A CRD's own versions, whatever the target: custom resources at a version the CRD does not serve (blocker); custom resources written through a `deprecated: true` version (warning, quoting its `deprecationWarning`; info when none is found); a `status.storedVersions` entry the CRD no longer serves (warning). |
-| `volume-plugin` | blocker / warning / info | An in-tree volume plugin a pod, pod template or PersistentVolume names, from the knowledge base's cited dataset: removed with no migration path at or before the target (blocker) or in the minor after it (warning); served only through a named CSI driver at the target (warning, never a blocker); deprecated only, or removed later (info). See [in-tree volume plugins](concepts/volume-plugins.md). |
+| `volume-plugin` | blocker / warning / info | An in-tree volume plugin a pod, pod template, PersistentVolume or StorageClass (by its provisioner) names, from the knowledge base's cited dataset: removed with no migration path at or before the target (blocker) or in the minor after it (warning); served only through a named CSI driver at the target (warning, never a blocker); deprecated only, or removed later (info). See [in-tree volume plugins](concepts/volume-plugins.md). |
 | `version-skew` | blocker / warning / info | Kubelets that would fall more than 3 minors behind after the upgrade (blocker), or are already behind (warning). Controller-manager or scheduler newer than the apiserver (blocker), or too far behind (warning). HA apiserver spread, and kube-proxy rules, including a kube-proxy too far from the kubelet on its own node (warning). Unparseable kubelet versions (info). |
 | `support-lifecycle` | blocker / warning | A cluster on EKS, GKE or AKS whose Kubernetes minor leaves the provider's standard support within 90 days (warning) or already has (blocker), whatever the target. It states the date and, where the provider's price is cited, the annual extended-support cost at list price with its as-of date. See [managed-provider support](concepts/support-lifecycle.md). |
 | `kb-stale` | warning | The cluster or the target is newer than the newest minor the knowledge base knows (`maxKnownK8s`). |
@@ -772,12 +772,16 @@ if it is deleted, and writes status with conflict retry.
 - **Notifications**: after each evaluation, the server diffs the new report
   against the previous one for that cluster and target, using finding keys.
   It emits `new-blocker` (capped at 5, plus an "N more" summary),
-  `became-ready` and `eol-approaching` events. Nothing is sent on a
-  cluster's first evaluation, and nothing is sent for unchanged snapshots.
-  When a cluster upgrades, its new default target has no earlier
-  evaluation; the previous default target's last decided evaluation is the
-  baseline, so blockers the new target adds are announced and ones the
-  cluster already had are not.
+  `became-ready` and `eol-approaching` events. The previous one is the
+  target's last baseline: a decided evaluation, or an `unknown` one whose
+  only required gaps hide no finding (`kb-coverage`, a target past the
+  knowledge base's horizon; `target`), which saw everything a blocker
+  comes from (#380). An `unknown` pass behind a collector failure sends
+  nothing and is no baseline. Nothing is sent on a cluster's first
+  evaluation, and nothing is sent for unchanged snapshots. When a cluster
+  upgrades, its new default target has no earlier evaluation; the previous
+  default target's last baseline is the baseline, so blockers the new
+  target adds are announced and ones the cluster already had are not.
 - **Dashboard**: the SPA under `web/` is built into
   `internal/server/webdist/` and embedded. Static assets are served without
   auth, and the SPA sends the read token on API calls. The build tag

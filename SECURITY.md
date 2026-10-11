@@ -78,7 +78,9 @@ In scope:
     the object named `agent.crName` and its `status` (by `resourceNames`).
 
   The agent writes only its own `ClusterReadiness` object and, with
-  `manageCRD`, that CRD. Report anything that makes the agent write anything
+  `manageCRD`, that CRD, except that `create` on `clusterreadinesses` cannot
+  be limited by name, so it can create a ClusterReadiness under any name (it
+  never deletes one). Report anything that makes the agent write anything
   else, any way to obtain or abuse its ServiceAccount token, and any leak of
   Secret contents beyond the Helm release metadata the agent needs. The
   breadth of the grants listed above is known, so a report that only
@@ -183,7 +185,8 @@ Out of scope:
   chart's `values.yaml` both document that this leaves the read API open. A
   missing token is a configuration choice, not a vulnerability. So is a
   `--trust-team-header` proxy that passes client-supplied copies of the
-  header on, or a `--trusted-proxy-cidr` wider than the proxy: the docs
+  header on, or a `--trusted-proxy-cidr` wider than the proxy (`serve` refuses only
+  a set of ranges that together hold every address): the docs
   say both make the header spoofable, and an identity provider that lets
   users name groups (a group `interns,payments` reads as payments): the
   docs make filtering the groups claim a condition of the mode. A web

@@ -31,7 +31,7 @@ func pgDSN(t *testing.T) string {
 // search_path pinned, and drops it on cleanup.
 func freshPostgres(t *testing.T) store.Store {
 	t.Helper()
-	s, err := store.OpenPostgres(freshSchemaDSN(t))
+	s, err := store.OpenPostgres(context.Background(), freshSchemaDSN(t))
 	if err != nil {
 		t.Fatalf("OpenPostgres: %v", err)
 	}
@@ -94,12 +94,12 @@ func TestPostgresConformance(t *testing.T) {
 // is cached by the store.
 func testReadTokenMintedThroughAnotherHandle(t *testing.T) {
 	dsn := freshSchemaDSN(t)
-	serving, err := store.OpenPostgres(dsn)
+	serving, err := store.OpenPostgres(context.Background(), dsn)
 	if err != nil {
 		t.Fatalf("OpenPostgres (serve): %v", err)
 	}
 	defer serving.Close()
-	minting, err := store.OpenPostgres(dsn)
+	minting, err := store.OpenPostgres(context.Background(), dsn)
 	if err != nil {
 		t.Fatalf("OpenPostgres (tokens create): %v", err)
 	}
@@ -141,7 +141,7 @@ func testReadTokenMintedThroughAnotherHandle(t *testing.T) {
 func testPreFreshnessWriter(t *testing.T) {
 	ctx := context.Background()
 	dsn := freshSchemaDSN(t)
-	s, err := store.OpenPostgres(dsn)
+	s, err := store.OpenPostgres(context.Background(), dsn)
 	if err != nil {
 		t.Fatalf("OpenPostgres: %v", err)
 	}
@@ -188,7 +188,7 @@ func testConcurrentMigrations(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			s, err := store.OpenPostgres(dsn)
+			s, err := store.OpenPostgres(context.Background(), dsn)
 			if err == nil {
 				err = s.Close()
 			}
@@ -238,7 +238,7 @@ func testConcurrentMigrations(t *testing.T) {
 // instead of deferring connection errors to the first query.
 func TestPostgresOpenBadDSN(t *testing.T) {
 	pgDSN(t) // gate: only meaningful where a pg environment exists at all
-	if _, err := store.OpenPostgres("postgres://nobody:wrong@127.0.0.1:1/none?connect_timeout=1&sslmode=disable"); err == nil {
+	if _, err := store.OpenPostgres(context.Background(), "postgres://nobody:wrong@127.0.0.1:1/none?connect_timeout=1&sslmode=disable"); err == nil {
 		t.Fatal("OpenPostgres(bad dsn) succeeded, want error")
 	}
 }

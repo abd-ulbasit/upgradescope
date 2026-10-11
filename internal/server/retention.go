@@ -19,7 +19,8 @@ import (
 //
 // One older evaluation, and its snapshot, is kept past the window for the
 // targets the server can still compare against: a cluster's newest
-// decided evaluation of each target it evaluates, and of the
+// notification baseline (decided, or unknown past the KB horizon, #380)
+// of each target it evaluates, and of the
 // upgradeLookback minors below its default target (the baselines of an
 // upgrade, upgradeBaseline). A target the server no longer evaluates for
 // the cluster (dropped from --targets, or the previous defaults of a

@@ -230,8 +230,13 @@ removed from `--targets`, which is never rewritten, never puts it back in
 the old team's.
 
 **Which findings and teams.** Of an in-scope cluster's report, a scoped
-read keeps the findings (and suppressed findings) attributed to one of
-its teams, and the team scores of its teams. Findings no team owns, such
+read keeps the findings (and suppressed findings: those the objects'
+`upgradescope.basit.engineer/ignore` annotations accepted, which the
+server's evaluations apply; never the agent's `spec.ignore`, see
+[Where annotations apply](../guides/suppressions-and-baselines.md#where-annotations-apply))
+attributed to one of its teams, and the team scores of its teams. A
+suppressed finding whose accepted objects are all another team's is left
+out. Findings no team owns, such
 as a cluster-wide add-on in a namespace without a team, are left out:
 they are not the scope's to see. A team's score is still computed from
 the whole report, so the team's verdict is the one the fleet-wide view
@@ -261,6 +266,19 @@ it does not list may be another team's or no team's, and its count and
 unchanged. A suppressed finding is cut the same way, and one whose
 accepted objects are all another team's is left out. A finding wholly the
 scope's is served exactly as the fleet-wide view serves it.
+
+**Cluster-scoped objects in a finding of the scope's.** A cut keeps the
+objects in the scope's namespaces, and an object in no namespace only
+when no namespace of the finding was cut. So a finding whose namespaces
+are all the scope's keeps the cluster-scoped objects it names, as an
+API-usage finding over cluster-scoped API objects does. For an in-tree
+volume plugin these are the cluster's unbound PersistentVolumes and its
+StorageClasses: a team that is the only one with `rbd` pods reads the
+names of the cluster's `rbd` StorageClasses and unbound PersistentVolumes
+in `GET /api/v1/clusters/{id}/report`, and in the findings and export
+reads. This is what a scoped reader can learn of the cluster's own
+storage. The gate's share drops these names
+([in-tree volume plugins in the gate](#what-a-team-scoped-read-sees)).
 
 **What the caps still decide.** The caps are applied before any scope,
 and they do not divide by team. A collector lists at most 100 objects per
@@ -326,6 +344,33 @@ their names, namespaces or teams. Concretely:
   status `?fail-on` gives judge only what the PR introduces, and do not
   depend on the caps.
 
+**In-tree volume plugins in the gate.** The agent counts a volume
+plugin's pods per namespace, a bound PersistentVolume under its claim's
+namespace, and an unbound PersistentVolume or a StorageClass under no
+namespace, and names the PersistentVolumes and StorageClasses without a
+namespace. The share keeps the counts in the scope's namespaces only, and
+none of the names: a finding the PR's objects join (`source: manifest`)
+counts, titles and details the scope's pods and the PersistentVolumes
+bound to its claims, and the PR's objects, which are the only ones it
+lists, the scope's counted in `objectsOmitted`. Another team's pods and
+PersistentVolumes, and the cluster's unbound PersistentVolumes and
+StorageClasses, never reach it, nor the cluster verdict or the score: a
+cluster where only another team uses a plugin answers the scope as one
+where nobody does. The share cannot tell the scope's pods from the
+PersistentVolumes bound to its claims, so a finding of the share's own
+that the PR does not join counts them together as PersistentVolumes or
+StorageClasses.
+
+The share also drops the scope's PersistentVolumes bound to its claims
+from every listing: a live PersistentVolume ref carries no namespace, so
+the share cannot tell the scope's from another team's, and keeps only
+their counts. Their `upgradescope.basit.engineer/ignore` annotations
+therefore cannot accept a volume-plugin finding in a team-scoped
+`?cluster=` gate: the finding stays open there, where the fleet-wide
+gate, which lists them, can accept it. To accept it in a team-scoped gate,
+send a `?config=` rule without object selectors, which takes the finding
+whole, or gate with a fleet-wide token.
+
 Tests pin this, with payments' two Ingresses unlisted behind web's
 hundred in `a-web` against a cluster of payments' two alone: the finding
 lists only the PR's Ingress there; where payments' Helm release stores
@@ -384,7 +429,7 @@ scoped caller is the cluster's name and data.
 | `GET /api/v1/clusters/{id}/export` (CSV, HTML) | `404` outside the scope; the scope's findings, cut to it, and teams |
 | `GET /api/v1/fleet` | in-scope clusters only |
 | `GET /api/v1/fleet/teams` | in-scope clusters, the scope's teams |
-| `POST /api/v1/gate` | without `?cluster=`: exactly as fleet-wide, it reads no stored data and every finding is the manifests'. With `?cluster=`: `404` outside the scope. Otherwise the gate runs on the scope's share of the cluster, never on the whole cluster: the API usage, custom resources, Helm releases, GitOps charts and add-ons in the namespaces of the scope's teams, and what describes the cluster as a whole (version, nodes, control plane, CRD definitions, capabilities); never another team's evidence, a namespace no team owns, cluster-scoped usage or the apiserver's deprecated-call rows. Everything in the answer is decided from that share and the manifests: the findings (a finding the PR's objects are in counts, titles and details only the PR's objects and the scope's, even when the PR names another team's namespace, where its objects are attributed to no team), the verdict and `X-Upgradescope-Verdict`, the status `?fail-on` gives, the cluster verdict, the score and the scope's team scores. Of the share's own findings, the scope's; the manifests' unrecognized images only; suppression warnings of the share only. The exception is which of the scope's objects the share lists where the collector's 100-objects-per-API cap left some unlisted, and what follows from that (a Helm release's own finding, whether the scope's annotations and rules can accept a finding, and so the findings, score and cluster verdict), never the verdict, its header or the status ([what the caps still decide](#what-a-team-scoped-read-sees)). So a CI status depends on who asks ([the gate with a team-scoped token](#the-gate-with-a-team-scoped-token)) |
+| `POST /api/v1/gate` | without `?cluster=`: exactly as fleet-wide, it reads no stored data and every finding is the manifests'. With `?cluster=`: `404` outside the scope. Otherwise the gate runs on the scope's share of the cluster, never on the whole cluster: the API usage, custom resources, Helm releases, GitOps charts, add-ons and in-tree volume plugin counts in the namespaces of the scope's teams, and what describes the cluster as a whole (version, nodes, control plane, CRD definitions, capabilities); never another team's evidence, a namespace no team owns, cluster-scoped usage (unbound PersistentVolumes and StorageClasses on a volume plugin included), the cluster's PersistentVolume and StorageClass names or the apiserver's deprecated-call rows. Everything in the answer is decided from that share and the manifests: the findings (a finding the PR's objects are in counts, titles and details only the PR's objects and the scope's, even when the PR names another team's namespace, where its objects are attributed to no team), the verdict and `X-Upgradescope-Verdict`, the status `?fail-on` gives, the cluster verdict, the score and the scope's team scores. Of the share's own findings, the scope's; the manifests' unrecognized images only; suppression warnings of the share only. The exception is which of the scope's objects the share lists where the collector's 100-objects-per-API cap left some unlisted, and what follows from that (a Helm release's own finding, whether the scope's annotations and rules can accept a finding, and so the findings, score and cluster verdict), never the verdict, its header or the status ([what the caps still decide](#what-a-team-scoped-read-sees)). So a CI status depends on who asks ([the gate with a team-scoped token](#the-gate-with-a-team-scoped-token)) |
 | `GET /api/v1/registry` | as fleet-wide: the public knowledge base |
 | `GET /metrics` | `403`: its per-cluster series name every cluster, so it takes a fleet-wide credential (Prometheus gets `--read-token` or a `*` token) |
 
@@ -559,7 +604,12 @@ The two flags go together, and the mode is off by default.
        NodePort or Ingress that reaches the server's port, and a
        `--trusted-proxy-cidr` that covers the proxy's addresses and
        nothing else. A pod CIDR is not "the proxy": every pod in it could
-       send the header.
+       send the header. `serve` refuses only the extreme: a set of ranges
+       that together hold every address of IPv4 or of IPv6 (`0.0.0.0/0`,
+       `::/0`, or `0.0.0.0/1` with `128.0.0.0/1`, however they are split
+       across flags) would trust the header from any client. A partial
+       cover such as `0.0.0.0/1` or `10.0.0.0/8` starts, and keeping the
+       ranges to the proxy remains your job.
     2. **The proxy removes every client-supplied copy of the header**
        before it forwards a request, on every route it forwards,
        authenticated or not, and then sets it from the signed-in session
