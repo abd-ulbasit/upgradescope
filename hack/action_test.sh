@@ -15,8 +15,9 @@
 #     no source build ever with verify-provenance true (a failed download installs
 #     nothing), the go install fallback only with verify-provenance false
 #     and a Go toolchain, the pre-provenance releases (exactly v0.1.0 and
-#     v0.1.1, never by version), a latest moved back to one of them at an
-#     action ref that publishes provenance (fails), mutants of both checks,
+#     v0.1.1, never by version), a latest moved back to one of them from
+#     any ref (a release tag, a branch, a commit SHA: fails), mutants of
+#     both checks,
 #     the version comparator, and version: preinstalled;
 #   - action/run.sh scan: exit codes, outputs, annotations and the step
 #     summary on action/testdata, the allow-incomplete, config, baseline
@@ -364,6 +365,7 @@ release v9.9.5 none
 release v9.9.4 ok
 release v9.9.9-rc.1 ok
 release v0.2.0-rc.2 ok
+release v0.2.0 ok
 release v0.2.0-rc.10 ok
 release v0.2.0-beta ok
 release v0.2.0-rc.2a ok
@@ -992,8 +994,6 @@ for t in v0.1.0 v0.1.1; do
     "::warning::$t predates provenance (v0.1.0 and v0.1.1 publish none; every other release is verified): $asset ($t) is checked only against checksums.txt from the same release"
   [ "$(grep -c '^::warning' "$work/out")" = 1 ] && ok "$t warns once" || fail "$t warns once" "$work/out"
 done
-run install "$work/stub-curl:" INPUT_VERSION=latest STUB_LATEST=v0.1.1
-expect "latest at v0.1.1 (GitHub's latest today) installs with a warning" 0 "::warning::v0.1.1 predates provenance"
 hasnt "a release from before provenance runs no verifier" "$work/calls" "attestation"
 for t in v0.2.0-rc.1 v0.1.2; do
   run install "$work/stub-curl:" INPUT_VERSION=$t
@@ -1134,35 +1134,47 @@ for t in v0.1.2 v0.1.10 v0.0.9 v0.1 v0.1.1-rc.1 v0.1.1-hotfix v0.1.0-beta v0.2.0
   prepro "$t" no
 done
 
-# Latest moved back: an action at a release tag from v0.2.0-rc.2 on, given
-# a latest that is v0.1.0 or v0.1.1 (moved back, or below the release
-# candidate the action is at), fails before it downloads anything.
-# verify-provenance: false installs it, with its warnings; an action at a
-# release before v0.2.0-rc.2, at a branch, or in another repository keeps
-# the warning.
-for ref in v0.2.0-rc.2 v0.2.0 v9.9.9; do
+# Latest moved back: v0.2.0 is GitHub's latest, so a latest that is v0.1.0 or
+# v0.1.1 means it was moved back (tampering or an accident). It fails from
+# every ref (a release tag, a branch, a commit SHA, another repository's
+# ref, no ref), before it downloads anything, and never falls back to go
+# install. verify-provenance: false installs it on the checksum alone, with
+# its warnings. An explicit version: v0.1.1 is another path (above).
+for ref in "" v0.2.0-rc.1 v0.2.0-rc.2 v0.2.0 v9.9.9 v0.1.1 main v0 "$sha_none"; do
   for latest in v0.1.0 v0.1.1; do
-    run install "$work/stub-curl:" INPUT_VERSION=latest "$own" ACTION_REF=$ref STUB_LATEST=$latest
-    expect "latest moved back to $latest fails at the action ref $ref" 1 \
-      "version latest is $latest, which predates provenance and cannot be verified, but this action is at $ref, and every release from v0.2.0-rc.2 on publishes provenance: GitHub's latest was moved back, or skips the release candidate this action is at; nothing was installed"
-    has "latest moved back to $latest at $ref says how to pin or opt out" "$work/out" \
-      "Set version: $ref, or verify-provenance: false to install $latest on the checksum alone"
-    hasnt "latest moved back to $latest at $ref downloads nothing" "$work/calls" "$releases/download/"
-    installed_nothing && ok "latest moved back to $latest at $ref installs nothing" ||
-      fail "latest moved back to $latest at $ref installs nothing" "$work/out"
+    for vs in latest ""; do
+      # An unset version at a release tag ref is that tag, not latest.
+      [[ -z $vs && $ref =~ ^v[0-9]+\.[0-9]+\.[0-9]+ ]] && continue
+      run install "$work/stub-curl:$work/stub-go:" INPUT_VERSION=$vs "$own" ACTION_REF=$ref STUB_LATEST=$latest
+      expect "${vs:-an unset version}, resolving to latest v0.1.x ($latest), fails at the action ref '${ref:-none}'" 1 \
+        "version latest is $latest, which predates provenance and cannot be verified, but GitHub's latest is v0.2.0 or newer and every release from v0.2.0 on publishes provenance: GitHub's latest was moved back (by tampering or by accident); nothing was installed"
+      has "...and says how to pin or opt out ($latest, '${ref:-none}')" "$work/out" \
+        "Set version: to a release such as v0.2.0, or verify-provenance: false to install $latest on the checksum alone"
+      hasnt "...downloads nothing ($latest, '${ref:-none}')" "$work/calls" "$releases/download/"
+      hasnt "...never runs go install ($latest, '${ref:-none}')" "$work/calls" "go "
+      installed_nothing && ok "...installs nothing ($latest, '${ref:-none}')" || fail "...installs nothing ($latest, '${ref:-none}')" "$work/out"
+    done
   done
 done
+run install "$work/stub-curl:$work/stub-go:" INPUT_VERSION=latest ACTION_REPOSITORY=other/wrapper ACTION_REF=v9.9.9 STUB_LATEST=v0.1.1
+expect "latest moved back fails at another repository's release ref too" 1 "version latest is v0.1.1, which predates provenance"
+run install "$work/stub-curl:$work/stub-go:" INPUT_VERSION=latest STUB_LATEST=v0.1.1 INPUT_VERIFY_PROVENANCE=false
+expect "latest moved back installs with verify-provenance: false, with no ref" 0 "installed upgradescope v0.1.1 from"
 run install "$work/stub-curl:" INPUT_VERSION=latest "$own" ACTION_REF=v9.9.9 STUB_LATEST=v0.1.1 INPUT_VERIFY_PROVENANCE=false
-expect "latest moved back installs with verify-provenance: false" 0 "installed upgradescope v0.1.1 from"
+expect "latest moved back installs with verify-provenance: false at a release ref" 0 "installed upgradescope v0.1.1 from"
 has "latest moved back with verify-provenance: false warns that it is older" "$work/out" \
   "::warning::version latest is v0.1.1, older than this action's own release v9.9.9"
 has "latest moved back with verify-provenance: false warns that it is unverified" "$work/out" "::warning::verify-provenance is false"
-for ref in v0.2.0-rc.1 v0.1.1 main; do
-  run install "$work/stub-curl:" INPUT_VERSION=latest "$own" ACTION_REF=$ref STUB_LATEST=v0.1.1
-  expect "latest at v0.1.1 installs with a warning at the action ref $ref" 0 "::warning::v0.1.1 predates provenance"
+# The moved-back latest is a 'latest' only: an explicit older tag keeps its
+# documented path (installed on the checksum with a warning, above), and a
+# latest that is v0.2.0 passes at a branch and at a commit SHA.
+for ref in main "$sha_none"; do
+  run install "$work/stub-curl:" INPUT_VERSION=latest "$own" ACTION_REF=$ref STUB_LATEST=v0.2.0
+  expect "latest resolving to v0.2.0 installs at the action ref '$ref'" 0 "installed upgradescope v0.2.0 from $releases/download/v0.2.0/$asset"
+  has "...after verifying its provenance ('$ref')" "$work/out" "provenance OK: $asset (v0.2.0)"
 done
-run install "$work/stub-curl:" INPUT_VERSION=latest ACTION_REPOSITORY=other/wrapper ACTION_REF=v9.9.9 STUB_LATEST=v0.1.1
-expect "latest at v0.1.1 installs with a warning at another repository's release ref" 0 "::warning::v0.1.1 predates provenance"
+run install "$work/stub-curl:" INPUT_VERSION=v0.1.1 "$own" ACTION_REF=main
+expect "an explicit v0.1.1 still installs on the checksum, with a warning, at a branch" 0 "::warning::v0.1.1 predates provenance"
 
 # Mutants: each edit of action/run.sh below reopens a hole closed above, and
 # the case named with it must catch it. Each case first passes on
@@ -1182,6 +1194,18 @@ unattested_v012_fails() {
 moved_back_fails() {
   run install "$work/stub-curl:" INPUT_VERSION=latest "$own" ACTION_REF=v0.2.0-rc.2 STUB_LATEST=v0.1.1
   [ "$code" = 1 ] && installed_nothing
+}
+moved_back_at_main_fails() {
+  run install "$work/stub-curl:" INPUT_VERSION=latest "$own" ACTION_REF=main STUB_LATEST=v0.1.1
+  [ "$code" = 1 ] && installed_nothing
+}
+moved_back_at_sha_fails() {
+  run install "$work/stub-curl:" INPUT_VERSION=latest "$own" ACTION_REF=$sha_none STUB_LATEST=v0.1.1
+  [ "$code" = 1 ] && installed_nothing
+}
+latest_v020_at_main_installs() {
+  run install "$work/stub-curl:" INPUT_VERSION=latest "$own" ACTION_REF=main STUB_LATEST=v0.2.0
+  [ "$code" = 0 ] && grep -qF "installed upgradescope v0.2.0 from" "$work/out"
 }
 moved_back_opt_out_installs() {
   run install "$work/stub-curl:" INPUT_VERSION=latest "$own" ACTION_REF=v9.9.9 STUB_LATEST=v0.1.1 INPUT_VERIFY_PROVENANCE=false
@@ -1207,11 +1231,15 @@ mutant "the pre-provenance check by version again (release_older against v0.2.0-
 mutant "the list matches v0.1.* by prefix" unattested_v012_fails 's/^    v0\.1\.0 \| v0\.1\.1\) return 0 ;;$/    v0.1.*) return 0 ;;/'
 mutant "the list matches v0.1.1 by prefix" tampered_hotfix_fails 's/^    v0\.1\.0 \| v0\.1\.1\) return 0 ;;$/    v0.1.0* | v0.1.1*) return 0 ;;/'
 mutant "the list is empty" pre_provenance_installs 's/^    v0\.1\.0 \| v0\.1\.1\) return 0 ;;$/    "") return 0 ;;/'
-mutant "no moved-back check" moved_back_fails 's/ && pre_provenance "\$tag" &&$/ \&\& false \&\&/'
-mutant "the moved-back check only above v0.2.0-rc.2, not at it" moved_back_fails \
-  's/! release_older "\$ref" "\$provenance_since"/release_older "\$provenance_since" "\$ref"/'
+mutant "no moved-back check" moved_back_fails 's/^    if pre_provenance "\$tag" && /    if false \&\& /'
+mutant "no moved-back check (a branch ref)" moved_back_at_main_fails 's/^    if pre_provenance "\$tag" && /    if false \&\& /'
+mutant "the moved-back check only at a release tag ref (the old rule)" moved_back_at_main_fails \
+  's/^    if pre_provenance "\$tag" && /    if [[ \$ref =~ \$release_tag ]] \&\& pre_provenance "\$tag" \&\& /'
+mutant "the moved-back check only at a release tag ref (the old rule)" moved_back_at_sha_fails \
+  's/^    if pre_provenance "\$tag" && /    if [[ \$ref =~ \$release_tag ]] \&\& pre_provenance "\$tag" \&\& /'
+mutant "the moved-back check refuses every latest" latest_v020_at_main_installs 's/^    if pre_provenance "\$tag" && /    if true \&\& /'
 mutant "the moved-back check ignores verify-provenance: false" moved_back_opt_out_installs \
-  's/^      \[ "\$\{INPUT_VERIFY_PROVENANCE:-true\}" != false \]; then$/      true; then/'
+  's/ && \[ "\$\{INPUT_VERIFY_PROVENANCE:-true\}" != false \]; then$/; then/ if /^    if pre_provenance "\$tag"/'
 
 # release_older, the comparator behind newest and the latest-versus-ref
 # checks (never the pre-provenance one), on its own: semver order, the core
