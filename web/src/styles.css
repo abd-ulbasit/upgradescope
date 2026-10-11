@@ -626,6 +626,10 @@ h1 .badge {
   color: var(--bad);
   background: color-mix(in srgb, var(--bad) 14%, transparent);
 }
+.status-extended {
+  color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 14%, transparent);
+}
 .status-unknown {
   color: var(--muted);
   background: var(--panel-2);
