@@ -170,7 +170,8 @@ on every finding to paste into a ticket.
 
 The verdict is `blocked` on any blocker, `unknown` when a required check
 (API usage, the knowledge base covering the target, and for a live cluster
-its versions and add-ons) was not assessed, and `ready` otherwise. For a
+its versions, its add-ons, and its PersistentVolumes and StorageClasses
+when a removed volume plugin could hide in them) was not assessed, and `ready` otherwise. For a
 given inventory, knowledge base, target and **date** the result is the same;
 end-of-life dates move verdicts on their own.
 [Verdict and score](https://abd-ulbasit.github.io/upgradescope/concepts/verdict-and-score/).

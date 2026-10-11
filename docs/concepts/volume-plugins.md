@@ -125,7 +125,18 @@ workload and baselines work on it as on any other finding.
   `list` on `persistentvolumes` and `storageclasses` for this. A refused or
   failed list makes `volumes` partial, with a reason naming what was not
   read (for example "list persistentvolumes: ... forbidden ...;
-  PersistentVolumes were not checked"). It is not a hard error.
+  PersistentVolumes were not checked"). It is not a hard error, but it is
+  a required gap when the unread list could hide a blocker (#374): the
+  knowledge base has a `removed` plugin, removed at or before the target,
+  that a PersistentVolume can name (for the PersistentVolume list) or that
+  has an in-tree provisioner (for the StorageClass list). From 1.22
+  (`scaleIO`) that is every target, so the verdict is `unknown` and the
+  gate exits 2 unless `--allow-incomplete`, where the same cluster with
+  the lists allowed reads `blocked` on an `rbd` PersistentVolume.
+  `csi-migration` plugins only warn and never make the gap required. A
+  hand-written agent role (`rbac.create=false`) without the two rules
+  therefore reads `unknown`, not `ready`, at those targets. See
+  [Verdict and score](verdict-and-score.md).
 - **Still not traced.** A pod that uses an in-tree plugin through a claim
   is found through the PersistentVolume the claim is bound to, not traced
   from the pod: the finding names the PersistentVolume and counts it under
@@ -140,8 +151,9 @@ workload and baselines work on it as on any other finding.
 not report it: a v0.1.x or v0.2.0 release-candidate agent, or a files
 inventory saved by an older CLI. Its report then has a `volumes` gap,
 "not reported by the collector", so the cluster reads as not assessed for
-volume plugins, never as clean. The gap is optional and changes no
-verdict.
+volume plugins, never as clean. That gap, unlike a partial one that
+skipped a PersistentVolume or StorageClass list, is optional and changes
+no verdict.
 
 A newer agent can push to an older server. The server ignores fields and
 capabilities it does not know, so it accepts the push and judges what it

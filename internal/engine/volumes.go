@@ -26,12 +26,50 @@ const CatVolumePlugin Category = "volume-plugin"
 const volumesNotReported = "not reported by the collector, which predates in-tree volume plugin checks; upgrade it to assess volume plugins"
 
 // volumesGap is the gap of an inventory that does not report the volumes
-// capability at all; the capability is optional, so it is never required.
+// capability at all (an older collector's); it is never required. A
+// partial one is assessmentGaps' (volumesPartialRequired).
 func volumesGap(inv inventory.Inventory) []CapabilityGap {
 	if _, ok := inv.Capabilities[inventory.CapVolumes]; ok {
 		return nil
 	}
 	return []CapabilityGap{{Capability: inventory.CapVolumes, Reason: volumesNotReported}}
+}
+
+// pvSourcePlugins are the JSON names of corev1.PersistentVolumeSource's
+// fields: the in-tree plugins a PersistentVolume can name, so the ones an
+// unread PersistentVolume list can hide. The engine keeps its own copy
+// rather than import k8s.io/api (DO-04); TestPVSourcePluginsMatchesTheAPI
+// pins it to the API.
+var pvSourcePlugins = map[string]bool{
+	"awsElasticBlockStore": true, "azureDisk": true, "azureFile": true, "cephfs": true,
+	"cinder": true, "csi": true, "fc": true, "flexVolume": true, "flocker": true,
+	"gcePersistentDisk": true, "glusterfs": true, "hostPath": true, "iscsi": true,
+	"local": true, "nfs": true, "photonPersistentDisk": true, "portworxVolume": true,
+	"quobyte": true, "rbd": true, "scaleIO": true, "storageos": true, "vsphereVolume": true,
+}
+
+// volumesPartialRequired reports whether a partial volumes capability that
+// skipped what skipped names can hide a blocker at target (#374): it names
+// the PersistentVolume list and k has a removed plugin a PersistentVolume
+// can name (pvSourcePlugins), or the StorageClass list and k has a removed
+// plugin with an in-tree provisioner, removed at or before target. A
+// csi-migration plugin only ever warns, so it never makes the gap
+// required; a skipped pod list neither, as addons' gap already is.
+func volumesPartialRequired(k kb.KB, skipped []string, target inventory.Version) bool {
+	pvs := slices.Contains(skipped, inventory.SkippedPersistentVolumes)
+	classes := slices.Contains(skipped, inventory.SkippedStorageClasses)
+	if !pvs && !classes {
+		return false
+	}
+	for _, p := range k.VolumePlugins {
+		if p.Classification != kb.VolumeRemoved || p.Removed == nil || p.Removed.Compare(target) > 0 {
+			continue
+		}
+		if (pvs && pvSourcePlugins[p.Plugin]) || (classes && p.Provisioner != "") {
+			return true
+		}
+	}
+	return false
 }
 
 // evalVolumePlugins judges inv.VolumePlugins against k.VolumePlugins at
