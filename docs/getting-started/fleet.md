@@ -66,15 +66,18 @@ that cluster:
 ```sh
 kubectl create namespace upgradescope
 kubectl -n upgradescope create secret generic push-token --from-literal=serverToken=<token>
-helm install upgradescope deploy/chart -n upgradescope \
+helm install upgradescope oci://ghcr.io/abd-ulbasit/charts/upgradescope --version 0.2.0 \
+  -n upgradescope \
   --set agent.clusterName=prod-eu-1 \
   --set agent.serverUrl=https://upgradescope.example.com \
   --set agent.existingSecret=push-token
 ```
 
-A chart from a clone defaults to the image of the release it was cut for.
-To run unreleased changes, add `--set image.repository=... --set image.tag=...`
-naming an image you build and push yourself ([In-cluster](in-cluster.md)
+The published chart defaults to its release's image, pinned by digest. A
+chart from a clone (`deploy/chart`) defaults to the image of the release it
+was cut for. To run unreleased changes, install from a clone and add
+`--set image.repository=... --set image.tag=...` naming an image you build
+and push yourself ([In-cluster](in-cluster.md)
 shows how).
 
 The agent pushes its inventory when it changes and at least hourly
