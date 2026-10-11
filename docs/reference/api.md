@@ -21,7 +21,9 @@ minted for `*` read the whole fleet. A read token minted for teams, and
 the trusted proxy's header, read only those teams: the clusters one of
 them owns a namespace in (by the namespace attribution findings carry,
 after `--team-map`), and of those only their findings, suppressed
-findings and team scores. A finding that spans teams is cut to theirs:
+findings (those the objects' `upgradescope.basit.engineer/ignore`
+annotations accepted, which the server's evaluations apply; never the
+agent's `spec.ignore`) and team scores. A finding that spans teams is cut to theirs:
 only their teams, namespaces and objects, its title counting only
 theirs and its detail replaced by one that names only what is kept,
 without the folded apiserver caller rows (`callers`).
@@ -513,8 +515,11 @@ Auditor exports of a stored evaluation.
 ### `GET /api/v1/clusters/{id}/export`
 
 **Auditor export.** The stored evaluation of the latest snapshot as CSV (one summary
-row, one row per finding, one per capability not assessed) or a
-self-contained HTML report with the score history. Never a what-if:
+row, one row per finding, one `suppressed` row per finding or
+objects of one that the objects' ignore annotations accepted, with
+its severity, source, reason and objects in the detail, and one per
+capability not assessed) or a self-contained HTML report with the
+score history and a suppressed section. Never a what-if:
 404 when no stored evaluation exists for the target, or when the
 cluster already runs it. An export is at most
 `--max-snapshot-bytes`, as the report it renders is (HTML writes
@@ -886,7 +891,7 @@ The engine's report, as `scan --output json` writes it.
 | `ready` | boolean | yes | verdict == ready. |
 | `verdict` | [Verdict](#verdict) | yes | — |
 | `notAssessed` | array of [CapabilityGap](#capabilitygap) | no | — |
-| `suppressed` | array of [SuppressedFinding](#suppressedfinding) | no | — |
+| `suppressed` | array of [SuppressedFinding](#suppressedfinding) | no | What ignore rules or object annotations accepted, out of `findings`, the score and the verdict. A stored or read-time report (`GET /report`, the fleet, history, notifications, exports) applies the objects' `upgradescope.basit.engineer/ignore` annotations (source `annotation`), never the agent's `spec.ignore`; `/gate` applies them and its `config` rules. |
 | `unrecognizedImages` | array of string | no | Image repositories (host/path) no add-on image matcher recognised: a detection gap, not a finding (neither score nor verdict counts them). Sorted, deduplicated, at most 200. |
 | `unrecognizedImagesOmitted` | integer | no | Unrecognized image repositories beyond the 200 listed. |
 | `addOnEvidenceAgeSeconds` | integer | no | How old, in seconds (at least 1), the pod evidence the add-ons were detected from was when the agent reused its last full pod pass instead of listing every pod again (`--pod-pass-every`, `--pod-pass-max-age`): an add-on installed or upgraded since is reported as it was then, and a pass of `--pod-pass-max-age` or more is not reused (the age is that of the collection, so a viewer can see evidence about one interval older). Absent when every pod was read for this report, and from collectors that predate the field. The verdict does not depend on it. |
@@ -909,7 +914,7 @@ The report's fields other than its findings.
 | `ready` | boolean | yes | verdict == ready. |
 | `verdict` | [Verdict](#verdict) | yes | — |
 | `notAssessed` | array of [CapabilityGap](#capabilitygap) | no | — |
-| `suppressed` | array of [SuppressedFinding](#suppressedfinding) | no | — |
+| `suppressed` | array of [SuppressedFinding](#suppressedfinding) | no | What ignore rules or object annotations accepted, out of `findings`, the score and the verdict. A stored or read-time report (`GET /report`, the fleet, history, notifications, exports) applies the objects' `upgradescope.basit.engineer/ignore` annotations (source `annotation`), never the agent's `spec.ignore`; `/gate` applies them and its `config` rules. |
 | `unrecognizedImages` | array of string | no | Image repositories (host/path) no add-on image matcher recognised: a detection gap, not a finding (neither score nor verdict counts them). Sorted, deduplicated, at most 200. |
 | `unrecognizedImagesOmitted` | integer | no | Unrecognized image repositories beyond the 200 listed. |
 | `addOnEvidenceAgeSeconds` | integer | no | How old, in seconds (at least 1), the pod evidence the add-ons were detected from was when the agent reused its last full pod pass instead of listing every pod again (`--pod-pass-every`, `--pod-pass-max-age`): an add-on installed or upgraded since is reported as it was then, and a pass of `--pod-pass-max-age` or more is not reused (the age is that of the collection, so a viewer can see evidence about one interval older). Absent when every pod was read for this report, and from collectors that predate the field. The verdict does not depend on it. |
@@ -963,7 +968,7 @@ are not known. The same for every target.
 | `ready` | boolean | yes | verdict == ready. |
 | `verdict` | [Verdict](#verdict) | yes | — |
 | `notAssessed` | array of [CapabilityGap](#capabilitygap) | no | — |
-| `suppressed` | array of [SuppressedFinding](#suppressedfinding) | no | — |
+| `suppressed` | array of [SuppressedFinding](#suppressedfinding) | no | What ignore rules or object annotations accepted, out of `findings`, the score and the verdict. A stored or read-time report (`GET /report`, the fleet, history, notifications, exports) applies the objects' `upgradescope.basit.engineer/ignore` annotations (source `annotation`), never the agent's `spec.ignore`; `/gate` applies them and its `config` rules. |
 | `unrecognizedImages` | array of string | no | Image repositories (host/path) no add-on image matcher recognised: a detection gap, not a finding (neither score nor verdict counts them). Sorted, deduplicated, at most 200. |
 | `unrecognizedImagesOmitted` | integer | no | Unrecognized image repositories beyond the 200 listed. |
 | `addOnEvidenceAgeSeconds` | integer | no | How old, in seconds (at least 1), the pod evidence the add-ons were detected from was when the agent reused its last full pod pass instead of listing every pod again (`--pod-pass-every`, `--pod-pass-max-age`): an add-on installed or upgraded since is reported as it was then, and a pass of `--pod-pass-max-age` or more is not reused (the age is that of the collection, so a viewer can see evidence about one interval older). Absent when every pod was read for this report, and from collectors that predate the field. The verdict does not depend on it. |
@@ -1121,7 +1126,7 @@ are not known. The same for every target.
 | `ready` | boolean | yes | verdict == ready. |
 | `verdict` | [Verdict](#verdict) | yes | — |
 | `notAssessed` | array of [CapabilityGap](#capabilitygap) | no | — |
-| `suppressed` | array of [SuppressedFinding](#suppressedfinding) | no | — |
+| `suppressed` | array of [SuppressedFinding](#suppressedfinding) | no | What ignore rules or object annotations accepted, out of `findings`, the score and the verdict. A stored or read-time report (`GET /report`, the fleet, history, notifications, exports) applies the objects' `upgradescope.basit.engineer/ignore` annotations (source `annotation`), never the agent's `spec.ignore`; `/gate` applies them and its `config` rules. |
 | `unrecognizedImages` | array of string | no | Image repositories (host/path) no add-on image matcher recognised: a detection gap, not a finding (neither score nor verdict counts them). Sorted, deduplicated, at most 200. |
 | `unrecognizedImagesOmitted` | integer | no | Unrecognized image repositories beyond the 200 listed. |
 | `addOnEvidenceAgeSeconds` | integer | no | How old, in seconds (at least 1), the pod evidence the add-ons were detected from was when the agent reused its last full pod pass instead of listing every pod again (`--pod-pass-every`, `--pod-pass-max-age`): an add-on installed or upgraded since is reported as it was then, and a pass of `--pod-pass-max-age` or more is not reused (the age is that of the collection, so a viewer can see evidence about one interval older). Absent when every pod was read for this report, and from collectors that predate the field. The verdict does not depend on it. |
