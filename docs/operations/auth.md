@@ -262,6 +262,19 @@ unchanged. A suppressed finding is cut the same way, and one whose
 accepted objects are all another team's is left out. A finding wholly the
 scope's is served exactly as the fleet-wide view serves it.
 
+**Cluster-scoped objects in a finding of the scope's.** A cut keeps the
+objects in the scope's namespaces, and an object in no namespace only
+when no namespace of the finding was cut. So a finding whose namespaces
+are all the scope's keeps the cluster-scoped objects it names, as an
+API-usage finding over cluster-scoped API objects does. For an in-tree
+volume plugin these are the cluster's unbound PersistentVolumes and its
+StorageClasses: a team that is the only one with `rbd` pods reads the
+names of the cluster's `rbd` StorageClasses and unbound PersistentVolumes
+in `GET /api/v1/clusters/{id}/report`, and in the findings and export
+reads. This is what a scoped reader can learn of the cluster's own
+storage. The gate's share drops these names
+([in-tree volume plugins in the gate](#what-a-team-scoped-read-sees)).
+
 **What the caps still decide.** The caps are applied before any scope,
 and they do not divide by team. A collector lists at most 100 objects per
 API across the whole cluster, in the order a live List returns them
@@ -342,6 +355,16 @@ where nobody does. The share cannot tell the scope's pods from the
 PersistentVolumes bound to its claims, so a finding of the share's own
 that the PR does not join counts them together as PersistentVolumes or
 StorageClasses.
+
+The share also drops the scope's PersistentVolumes bound to its claims
+from every listing: a live PersistentVolume ref carries no namespace, so
+the share cannot tell the scope's from another team's, and keeps only
+their counts. Their `upgradescope.basit.engineer/ignore` annotations
+therefore cannot accept a volume-plugin finding in a team-scoped
+`?cluster=` gate: the finding stays open there, where the fleet-wide
+gate, which lists them, can accept it. To accept it in a team-scoped gate,
+send a `?config=` rule without object selectors, which takes the finding
+whole, or gate with a fleet-wide token.
 
 Tests pin this, with payments' two Ingresses unlisted behind web's
 hundred in `a-web` against a cluster of payments' two alone: the finding
