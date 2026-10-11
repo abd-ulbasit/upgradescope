@@ -67,7 +67,7 @@ level=INFO msg="tick complete" duration=2.41s push=ok consecutiveFailures=0 capa
 | `msg` | `tick complete` (INFO, or WARN when only the push failed) or `tick failed` (ERROR, with `err`); `agent stopping` (INFO) on a graceful stop |
 | `duration` | wall time of the tick |
 | `push` | `off` (CRD-only), `unchanged` (same inventory, hourly force-sync not due), `ok`, `failed` (with `pushError`) |
-| `consecutiveFailures` | the failure the line reports, in a row: failed ticks on a `tick failed` line, failed pushes on a line whose push failed (1 after the first; a retry between ticks that delivers the snapshot ends the streak); 0 otherwise |
+| `consecutiveFailures` | the failure the line reports, in a row: failed ticks on a `tick failed` line, failed pushes on a line whose push failed (1 after the first; a retry between ticks that delivers the snapshot ends the streak, and so does a tick whose push is `ok` or `unchanged`); 0 otherwise |
 | `capabilities.<name>` | whether that collector could read what it needs; `status.notAssessed` on the CR says why not |
 | `targets.<minor>.verdict/score/blockers` | the evaluation per target |
 | `crdError` | the ClusterReadiness CRD could not be brought up to date (WARN); retried every tick until it succeeds, see below |

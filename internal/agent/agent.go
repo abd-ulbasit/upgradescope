@@ -478,7 +478,9 @@ type runner struct {
 	// retryPending is set by a tick whose push failed transiently and left
 	// its snapshot buffered in the pusher, of hash pendingHash: loop
 	// retries it between ticks (retryBuffered) until it is delivered or the
-	// next tick, which offers its own, is due (#386). Only loop's goroutine
+	// next tick, which offers its own, is due (#386); every tick clears it
+	// first (maybePush), so it never outlives the tick after the failed
+	// push unless that tick fails the same way. Only loop's goroutine
 	// touches these, the ticks and the retries alike, so a retry never
 	// runs during a tick and never sends a snapshot older than the latest.
 	retryPending bool

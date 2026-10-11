@@ -62,9 +62,9 @@ tick has written the status, so `helm install --wait` waits for a first
 answer. A push to a server does not hold that back: with the in-chart
 server (`server.enabled=true`), which may not be listening yet at the
 first tick, the agent retries the snapshot between ticks (after 10s,
-doubling to every 2 minutes), so the first snapshot reaches the server
-within about a minute of both pods being ready, not at the next tick
-([Fleet server](fleet.md#connect-agents)). To block a script or pipeline on readiness:
+doubling to every 2 minutes), so the first snapshot usually reaches the
+server within seconds of it starting to listen, at most about 2.5 minutes
+after, not at the next tick ([Fleet server](fleet.md#connect-agents)). To block a script or pipeline on readiness:
 
 ```sh
 kubectl wait clusterreadiness/cluster --for=condition=Ready --timeout=15m
