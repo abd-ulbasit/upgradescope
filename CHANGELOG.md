@@ -28,6 +28,16 @@ a CI gate.
   `upgradescope/` prefix instead.
   `docs/operations/security-model-and-rbac.md` says how to pick
   upgradescope's requests out of the audit log (#379).
+- CI: `hack/claims-trackers.sh`, a step of the repo-checks job, asks GitHub
+  about every issue a claims-ledger row names as its tracker (the `#N` after
+  `not true yet`, `not automated (yet)`, `not audited` or `under repair` in
+  its Proven-by cell) and fails when one is not open, so a fix that closes a
+  tracker cannot leave the ledger citing it. Without a token or without `gh`
+  it skips with a notice (`CLAIMS_TRACKERS_REQUIRE=1` makes the skip a
+  failure); it is not part of the offline `make claims-check`. The
+  repo-checks job now reads issues (`issues: read`), and the release
+  workflow's `ci` job, which calls `ci.yml`, grants it, without which GitHub
+  would refuse to start the next release run (#366).
 - The knowledge base carries 21 hand-written migration notes, each cited to an
   https page (`internal/kb/data/migrations.json`, which `tools/gen-kb` and the
   weekly refresh never write), for the removed or deprecated kinds whose
@@ -729,6 +739,38 @@ a CI gate.
   a baseline is still a result and still opens an alert, and the guide says
   so. CI gains a dispatched check, off the default branch, that the
   suppressed fixture's SARIF leaves no open code-scanning alert (#375).
+- Notifications: an `unknown` pass past the knowledge base's horizon is a
+  notification baseline (see **Fixed**), which changes three things. A
+  knowledge-base update that first decides a cluster's default target
+  announces the blockers the update adds even when the cluster has no
+  decided evaluation of a lower target (a cluster first seen on the newest
+  minor); that first decided evaluation used to be silent. Such an `unknown`
+  pass sends `eol-approaching`. Retention keeps each target's newest
+  baseline, so a decided evaluation under a newer `unknown` baseline ages
+  out after `--retention`. Migration 0011 (SQLite and Postgres) adds
+  `evaluations.baseline` and replaces the partial index
+  `idx_evaluations_decided` with `idx_evaluations_baseline`. On Postgres
+  the first start builds the index inside the migration's transaction,
+  which blocks writes to `evaluations` (the old replicas' pushes included)
+  until it is built: on a large database, upgrade in a quiet window, or add
+  the column and build the index first with `CREATE INDEX CONCURRENTLY`, as
+  `docs/operations/upgrade.md` shows, and the migration finds both. An
+  `unknown` evaluation stored before 0011 is not a baseline (#380).
+- The auditor CSV export (`GET /api/v1/clusters/{id}/export?format=csv`)
+  has a new row type, `suppressed` in the severity column, one per finding
+  an object annotation accepted (see **Fixed**), with the severity, source,
+  reason and objects in its detail, and the summary row's detail ends with
+  `, N suppressed` when N is above 0. A parser that expects only the
+  `summary`, `not-assessed`, `blocker`, `warning` and `info` rows must skip
+  or read it. An export with nothing accepted is unchanged (#381).
+- The `READY` column of `kubectl get ucr` is the first target's verdict,
+  the string `ready`, `blocked` or `unknown`
+  (`.status.targets[0].verdict`). In v0.1.1 it was the boolean
+  `.status.targets[0].ready`, `true` or `false`, so a script that matches
+  the column against `true` must match `ready`, or read
+  `.status.targets[0].ready`, which the status still carries. The **Added**
+  entry for the readiness verdict introduced the column without saying it
+  replaced the boolean (#366).
 - `scan --files` on a directory that holds an unrendered Helm chart (a
   `Chart.yaml` with templates that contain `{{ }}`) no longer reads `READY`
   100/100 behind a warning for every template. It prints one hint per chart
@@ -1741,6 +1783,42 @@ a CI gate.
   first step of the chart's NOTES for every Postgres hub without
   `server.readToken`. Every `tokens` subcommand resolves and opens the
   database the same way now (#382).
+- The server's stored and read-time evaluations apply the objects'
+  `upgradescope.basit.engineer/ignore` annotations (with
+  `ignore-reason`), as `scan`, the agent and `/gate` already did. The stored
+  verdict and score, fleet cells, history, notifications (annotating the
+  last blocker sends `became-ready`; an object that arrives already
+  annotated sends no `new-blocker`), `GET /api/v1/clusters/{id}/report`
+  (`suppressed`, source `annotation`) and the dashboard's suppressed count
+  now agree with the `ClusterReadiness` status and `/gate?cluster=`. The
+  agent's `spec.ignore` still never reaches the server. Auditor exports list
+  the accepted findings: the CSV has one `suppressed` row per accepted
+  finding and a suppressed count in the summary row (under **Changed**), and
+  the HTML export has a suppressed section. Evaluations stored before the
+  upgrade pick this up at their next re-evaluation: the next changed push, a
+  knowledge-base change, or the first pass after UTC midnight (#381).
+- Notifications on a cluster on the newest minor, whose default target is
+  past the knowledge base's horizon and so reads `unknown` when clean: its
+  first blocker (an EOL add-on, say) is now a `new-blocker`, and a blocker
+  that an `unknown` pass saw resolved is announced again when it returns.
+  Both were silent, because an `unknown` pass was never a baseline. A pass
+  whose only required gaps hide no finding (`kb-coverage`, `target`) saw
+  everything a blocker comes from, so it is now compared like a decided one
+  and is the next pass's baseline, and the blockers it resolved keep a
+  `became-ready` pending for the first `ready` pass. A pass that is
+  `unknown` behind a required gap that hides findings (a collector failure,
+  knowledge-base skew) still sends nothing and is not a baseline (#380).
+- Documentation: `go install` from the module proxy builds a binary whose
+  `upgradescope version` prints `commit: unknown` and `built: unknown`, as
+  `docs/operations/install.md` now says (it said the commit was reported).
+  The README's verify block sets `VERSION` and downloads the files it
+  checks, so it runs as pasted. The authorship note says what the public
+  history shows. The README, SECURITY.md, the chart's `rbac.create` docs
+  and the security page say that the agent's `create` on
+  `clusterreadinesses` cannot be limited by name, so it can create a
+  ClusterReadiness under any name, and that it never deletes one. The
+  claims ledger names no closed issue as a tracker, and the rows round 3
+  passed moved into the area tables (#366).
 - A remediation never sends a manifest to a less mature API than the one it
   uses (alpha before beta before GA, from the version name). A
   `flowcontrol.apiserver.k8s.io/v1` manifest checked at target 1.18 was told
