@@ -415,6 +415,18 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: hack/claims-trackers.sh
+      # IR-06 and IR-11 are claims about the rulesets applied on GitHub, which
+      # no file enforces: hack/rulesets-live.sh reads them (GET only) and
+      # fails when one differs from .github/rulesets/main.json or
+      # release-tags.json. It needs only metadata read, which the job's
+      # token has; with it the bypass actors are not visible, and are not
+      # compared. Online, so it skips a release like the step above, for the
+      # same reason (hack/claims-trackers_test.sh evaluates this if).
+      - name: the live rulesets equal .github/rulesets
+        if: ${{ !inputs.release }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: hack/rulesets-live.sh
 
   # The heap-bound tests skip (or shrink) under the race detector, so
   # `make test` above never runs them in full; they are the proofs the

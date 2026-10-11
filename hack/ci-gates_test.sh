@@ -165,6 +165,8 @@ inert=(
   'hack/kb-derived.sh'
   'hack/notices.sh'
   'hack/release-*.sh'
+  # reads the live rulesets (repo-checks, not gated, runs it)
+  'hack/rulesets-live.sh'
   'hack/test-chart.sh'
   'hack/test-release-repro.sh'
   'hack/vuln-latest-release.sh'

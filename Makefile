@@ -362,12 +362,20 @@ claims-check:
 claims-server: build
 	./hack/claims-server.sh bin/upgradescope
 
+# The rulesets applied on GitHub equal .github/rulesets/*.json (IR-06, IR-11).
+# Online and read-only: it needs gh, with a token or a login (CI's repo-checks
+# job passes github.token; bypass_actors is compared only with an admin's).
+.PHONY: rulesets-check
+rulesets-check:
+	./hack/rulesets-live.sh
+
 # Offline self-tests of the hack/ scripts CI is built from (stubs and
 # fixtures only: no network, cluster or Docker).
 .PHONY: hack-test
 hack-test:
 	./hack/claims-check_test.sh
 	./hack/claims-trackers_test.sh
+	./hack/rulesets-live_test.sh
 	./hack/shard_test.sh
 	./hack/test-heap_test.sh
 	./hack/test_test.sh
