@@ -30,10 +30,11 @@ func TestServerCAUsageQualifiesSSLCertFile(t *testing.T) {
 
 // No hand-written page offers $SSL_CERT_FILE or $SSL_CERT_DIR without the
 // platforms: the paragraph (or table row) that mentions either also names
-// Linux, macOS and Windows (#372). CHANGELOG.md is not in docPages; its
-// entry is held to the same rule when it is edited.
+// Linux, macOS and Windows (#372). CHANGELOG.md is read too, though it is
+// not in docPages, and a list item is a unit of its own there, since a
+// release's entries form one paragraph.
 func TestDocsQualifySSLCertFile(t *testing.T) {
-	for _, page := range docPages(t) {
+	for _, page := range append(docPages(t), "CHANGELOG.md") {
 		if !strings.HasSuffix(page, ".md") {
 			continue
 		}
@@ -45,6 +46,8 @@ func TestDocsQualifySSLCertFile(t *testing.T) {
 		for _, para := range strings.Split(strings.ReplaceAll(string(b), "\r\n", "\n"), "\n\n") {
 			if strings.HasPrefix(strings.TrimSpace(para), "|") {
 				units = append(units, strings.Split(para, "\n")...)
+			} else if strings.HasPrefix(para, "- ") {
+				units = append(units, strings.Split(para, "\n- ")...)
 			} else {
 				units = append(units, para)
 			}
