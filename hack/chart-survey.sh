@@ -337,7 +337,7 @@ trim() {
   e=$(sed -n '/^Error/,$p' "$1" | { grep -v '^Use --debug flag' || true; } | tr '\n' ' ' |
     sed -E 's/[[:space:]]+/ /g; s/ $//' | cut -c1-600)
   [ -n "$e" ] || e=$(tail -n1 "$1" | cut -c1-600)
-  if [ -n "${out:-}" ]; then e=${e//$out/<out>}; fi
+  if [ -n "${out:-}" ]; then e=${e//"$out"/<out>}; fi
   printf '%s' "$e"
 }
 cmd_error() { [ $# -eq 1 ] || usage; trim "$1"; echo; }
@@ -379,17 +379,24 @@ survey_chart() {
     [ "$attempt" = 2 ] || sleep 3
   done
   tgz=$(find "$dir/pull" -name '*.tgz' | head -n1)
-  if [ -z "$tgz" ]; then
-    fetch=$(jq -cn --arg e "$(trim "$dir/pull.err")" '{ok: false, error: $e}')
+  # A download helm cannot read is a fetch failure too, with helm's error.
+  local ferr=$dir/pull.err
+  if [ -n "$tgz" ]; then
+    ferr=$dir/show.err
+    if helm show chart "$tgz" >"$dir/Chart.yaml" 2>"$ferr" &&
+      chart=$("$self" yaml2json "$dir/Chart.yaml" 2>>"$ferr" | jq -c '{apiVersion, type: (.type // "application"),
+        appVersion, kubeVersion: (.kubeVersion // ""),
+        dependencies: [(.dependencies // [])[] | {name, version, repository, condition}]}' 2>>"$ferr"); then
+      ferr=
+    fi
+  fi
+  if [ -n "$ferr" ]; then
+    fetch=$(jq -cn --arg e "$(trim "$ferr")" '{ok: false, error: $e}')
     jq -n --argjson c "$c" --argjson f "$fetch" \
       '$c + {chart: null, fetch: $f, render: null, scan: null, scanPrev: null, scanOfPrevRender: null, images: null}' \
       >"$dir/record.json"
     return 0
   fi
-  helm show chart "$tgz" >"$dir/Chart.yaml"
-  chart=$("$self" yaml2json "$dir/Chart.yaml" | jq -c '{apiVersion, type: (.type // "application"),
-    appVersion, kubeVersion: (.kubeVersion // ""),
-    dependencies: [(.dependencies // [])[] | {name, version, repository, condition}]}')
 
   local ok_t=false class_t=null ok_p=false class_p=null
   if render "$tgz" "$target.0" "$dir/rendered-$target" "$dir/render-$target.err"; then ok_t=true; else
@@ -487,6 +494,8 @@ cmd_run() {
   mkdir -p "$out/charts"
   local c
   while IFS= read -r c; do survey_chart "$c"; done < <(jq -c '.selected[]' "$out/selection.json")
+  jq --arg f "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '. + {finishedAt: $f}' "$out/meta.json" >"$out/meta.json.tmp"
+  mv "$out/meta.json.tmp" "$out/meta.json"
 
   # 5. aggregate
   cmd_aggregate "$out"

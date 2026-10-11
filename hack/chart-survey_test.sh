@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Tests for hack/chart-survey.sh: the selection, error classification and
-# aggregation steps against small fixtures, and the run's argument checks.
+# aggregation steps against small fixtures, the run's argument checks, and a
+# run against stub curl and helm commands.
 # Offline; needs bash and jq (and helm for the yaml2json case, which is
 # skipped without it). Never contacts a cluster or the network.
 set -euo pipefail
@@ -185,6 +186,10 @@ rec 05-r-c5 "$(mk 5 c5 null '{"chart":{"type":"application","kubeVersion":">=1.2
   "scanOfPrevRender":{"ok":true,"verdict":"ready","score":100,"findings":[]}}')"
 rec 06-r-c6 "$(mk 6 c6 null '{"render":{"ok":false,"class":"required-value","error":"x is required","prev":null},"scanPrev":null}')"
 rec 07-r-c7 "$(mk 7 c7 null '{"chart":null,"fetch":{"ok":false,"error":"404"},"render":null,"scanPrev":null}')"
+# c9's kubeVersion refuses the minor before too: it does not count as accepting it.
+rec 09-r-c9 "$(mk 9 c9 null '{"chart":{"type":"application","kubeVersion":">=1.20.0-0 <1.36.0-0"},
+  "render":{"ok":false,"class":"kubeVersion","error":"incompatible with Kubernetes v1.37.0",
+  "prev":{"kubeVersion":"1.36.0","ok":false,"class":"kubeVersion"}},"scanPrev":null,"scanOfPrevRender":null}')"
 rec 08-r-c8 "$(mk 8 c8 "$(scan blocked "[$crd,$inc]")")"
 rec 10-r-c10 "$(mk 10 c10 '{"ok":false,"error":"boom","verdict":null,"score":null,"findings":[],"notAssessed":[],"unrecognizedImages":[]}')"
 jq -n '{surveyDate: "2026-10-12", n: 9, target: "1.37", prevTarget: "1.36"}' >"$out/meta.json"
@@ -192,8 +197,8 @@ jq -n '{selected: [], dropped: [{name: "beta", repository: "r2", stars: 90, reas
 
 hack/chart-survey.sh aggregate "$out" >/dev/null
 r=$out/results.json
-check "aggregate counts every chart" '.summary.charts == 9 and (.charts | length) == 9' "$r"
-check "aggregate keeps the charts in rank order" '[.charts[].rank] == [1, 2, 3, 4, 5, 6, 7, 8, 10]' "$r"
+check "aggregate counts every chart" '.summary.charts == 10 and (.charts | length) == 10' "$r"
+check "aggregate keeps the charts in rank order" '[.charts[].rank] == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]' "$r"
 check "aggregate carries meta and the drop log" \
   '.meta.surveyDate == "2026-10-12" and .dropped[0].reason == "deprecated"' "$r"
 check "aggregate: removed API" '.summary.classes.removedApi == 1' "$r"
@@ -203,7 +208,10 @@ check "aggregate: unserved CR version" '.summary.classes.unservedCrVersion == 1'
 check "aggregate: any blocker" '.summary.classes.anyBlocker == 3' "$r"
 check "aggregate: deprecated-only" '.summary.classes.deprecatedOnly == 1' "$r"
 check "aggregate: kubeVersion excludes the target, and how many take the minor before" \
-  '.summary.classes.kubeVersionExcludesTarget == 1 and .summary.classes.kubeVersionAcceptsPrev == 1' "$r"
+  '.summary.classes.kubeVersionExcludesTarget == 2 and .summary.classes.kubeVersionAcceptsPrev == 1' "$r"
+check "aggregate: the refused list says which charts accept the minor before" \
+  '[.summary.refused[] | {chart, acceptsPrev, prevRenderVerdict}] ==
+     [{chart: "c5", acceptsPrev: true, prevRenderVerdict: "ready"}, {chart: "c9", acceptsPrev: false, prevRenderVerdict: null}]' "$r"
 check "aggregate: render failure, by class" \
   '.summary.classes.renderFailed == 1 and .summary.renderFailures == {"required-value": 1}' "$r"
 check "aggregate: fetch failure" '.summary.classes.fetchFailed == 1' "$r"
@@ -229,8 +237,8 @@ check "aggregate: charts that render an image by a latest tag or by no tag" \
 check "aggregate: the minor before, from the same charts" '.summary.prevVerdicts == {"ready": 6}' "$r"
 
 csv=$out/results.csv
-if [ "$(wc -l <"$csv" | tr -d ' ')" = 10 ]; then ok "aggregate: results.csv has a header and a row per chart"; else
-  bad "aggregate: results.csv has $(wc -l <"$csv") lines, want 10"
+if [ "$(wc -l <"$csv" | tr -d ' ')" = 11 ]; then ok "aggregate: results.csv has a header and a row per chart"; else
+  bad "aggregate: results.csv has $(wc -l <"$csv") lines, want 11"
 fi
 if head -1 "$csv" | grep -q '^rank,repository,name,version,'; then ok "aggregate: results.csv header"; else
   bad "aggregate: results.csv header: $(head -1 "$csv")"
@@ -238,7 +246,8 @@ fi
 if grep -q '^5,"r","c5","1.5.0",.*"kubeVersion"' "$csv"; then ok "aggregate: results.csv row carries the render class"; else
   bad "aggregate: results.csv row 5: $(grep '^5,' "$csv")"
 fi
-for want in '| Removed API (blocker) | 1 |' '| `kubeVersion` excludes 1.37 | 1 |' '| None of the above | 1 |' \
+for want in '| Removed API (blocker) | 1 |' '| `kubeVersion` excludes 1.37 | 2 |' '| ... of which accept 1.36 | 1 |' \
+  '| None of the above | 1 |' '| c9 | 1.9.0 | `>=1.20.0-0 <1.36.0-0` | no | not scanned |' \
   '| c1 | 1.1.0 | removed-api | policy/v1beta1 PodSecurityPolicy removed in 1.25 (1 object) | `c1/templates/psp.yaml` |' \
   '| c8 | 1.8.0 | chart-incompat | istio 1.20 does not support Kubernetes 1.37 | - |'; do
   if grep -qF -- "$want" "$out/tables.md"; then ok "aggregate: tables.md has '$want'"; else
@@ -291,6 +300,62 @@ expect_run "needs an output dir" 2 usage
 expect_run "N must be a positive number" 2 "N must be" "$work/o" ten
 expect_run "the target must be a minor" 2 "target must be" "$work/o" 5 1.37.0
 expect_run "a missing upgradescope binary is a harness failure" 1 "not executable" "$work/o" 5 1.37 "$work/nope"
+# --- run, end to end with stubs (no network: curl and helm are fakes) --------
+# c1 downloads but `helm show chart` cannot read it: that is data (fetch.ok
+# false), not a harness failure, and the run goes on to c2, whose download
+# fails.
+stub=$work/stub
+mkdir -p "$stub/bin"
+jq -n '{packages: [
+  {name: "c1", stars: 9, version: "1.0.0", app_version: "1", repository: {name: "r", url: "https://r.example"}},
+  {name: "c2", stars: 8, version: "2.0.0", app_version: "2", repository: {name: "r", url: "https://r.example"}}]}' \
+  >"$stub/page.json"
+jq -n '{version: "1.0.0", app_version: "1", data: {}}' >"$stub/c1.json"
+jq -n '{version: "2.0.0", app_version: "2", data: {}}' >"$stub/c2.json"
+cat >"$stub/bin/curl" <<'STUB'
+#!/usr/bin/env bash
+o='' u=''
+while [ $# -gt 0 ]; do case $1 in -o) o=$2; shift 2 ;; *) u=$1; shift ;; esac; done
+case $u in
+  */packages/search*) cp "$STUB_DIR/page.json" "$o" ;;
+  */packages/helm/r/c1) cp "$STUB_DIR/c1.json" "$o" ;;
+  */packages/helm/r/c2) cp "$STUB_DIR/c2.json" "$o" ;;
+  *) exit 22 ;;
+esac
+STUB
+cat >"$stub/bin/helm" <<'STUB'
+#!/usr/bin/env bash
+case $1 in
+  version) echo 'version.BuildInfo{Version:"v0.0.0-stub"}' ;;
+  pull)
+    d='' name=''
+    shift
+    while [ $# -gt 0 ]; do case $1 in -d) d=$2; shift 2 ;; --repo | --version) shift 2 ;; *) name=$1; shift ;; esac; done
+    [ "$name" = c1 ] || { echo "Error: chart \"$name\" not found" >&2; exit 1; }
+    : >"$d/c1-1.0.0.tgz" ;;
+  show) echo "Error: c1-1.0.0.tgz is not a chart archive" >&2; exit 1 ;;
+  *) echo "Error: the stub does not do $1" >&2; exit 1 ;;
+esac
+STUB
+printf '#!/usr/bin/env bash\necho "upgradescope dev"\n' >"$stub/bin/upgradescope"
+chmod +x "$stub/bin/curl" "$stub/bin/helm" "$stub/bin/upgradescope"
+got=0
+PATH=$stub/bin:$PATH STUB_DIR=$stub SURVEY_ARTIFACTHUB=http://ah.invalid \
+  hack/chart-survey.sh run "$work/run" 2 1.37 "$stub/bin/upgradescope" >"$work/out" 2>&1 || got=$?
+if [ "$got" = 0 ]; then ok "run: a chart helm cannot read is data, not a harness failure"; else
+  bad "run: exit $got with stubs"
+  sed 's/^/     /' "$work/out" >&2
+fi
+r=$work/run/results.json
+[ -f "$r" ] || echo '{}' >"$r"
+check "run: helm show chart failing is a fetch failure with helm's error" \
+  '.charts[0] | .name == "c1" and .fetch.ok == false and (.fetch.error | test("not a chart archive")) and .render == null' "$r"
+check "run: a failed download is a fetch failure, and the run goes on" \
+  '.charts[1] | .name == "c2" and .fetch.ok == false and (.fetch.error | test("not found"))' "$r"
+check "run: meta records when the run started and finished" \
+  '.meta | (.startedAt | test("^[0-9-]{10}T[0-9:]{8}Z$")) and (.finishedAt | test("^[0-9-]{10}T[0-9:]{8}Z$"))
+     and .finishedAt >= .startedAt' "$r"
+
 if hack/chart-survey.sh bogus >"$work/out" 2>&1; then bad "an unknown command fails"; else ok "an unknown command fails"; fi
 
 echo "chart-survey_test: $pass passed, $fail failed"
