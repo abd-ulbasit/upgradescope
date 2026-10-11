@@ -196,6 +196,15 @@ A release line that eol-sync adds later has no row until you add it: the
 registry then says nothing about its compatibility, never something wrong.
 Run `make eol-sync` and `make eol-check` as usual; they do not touch the rows.
 
+When the range endoflife.date copies is a **tested-with** table (KEDA and
+Kyverno: both say other versions "may work" and carry no guarantee), do not
+let it through. Put a comment line of its own at column 0, above
+`schema_version`, saying `# eol-sync: ignore-k8s-range`: eol-sync then writes
+each cycle's end of life and no `k8s_min`/`k8s_max`, and `make eol-check`
+agrees. Explain in the comment below it which page said what. The directive
+is the only way to keep a range off a synced entry, because the next weekly
+refresh would otherwise write it back.
+
 ### Maximum, minimum or tested with
 
 Read each cell of a compatibility table and classify it before encoding it.

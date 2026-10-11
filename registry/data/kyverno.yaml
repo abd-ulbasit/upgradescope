@@ -3,21 +3,27 @@
 # edit them by hand. support is hand-curated: status eol is only for a
 # product upstream retired as a whole.
 #
-# Kubernetes ranges: the k8s_min/k8s_max on each cycle are the ones Kyverno
-# publishes, as endoflife.date carries them (supportedK8sVersions), and they were
-# checked against the project's own sources on 2026-10-12. Its docs have a
-# "Compatibility Matrix" with the columns "Kyverno Version", "Kubernetes Min" and
-# "Kubernetes Max" (since replaced by the single "Kubernetes Versions Supported"
-# line on https://kyverno.io/docs/installation/releases/, which states v1.19 on
-# v1.33 - v1.35 and that other Kubernetes versions "may work, but are not tested
-# and therefore no guarantees are made"). Read from kyverno/website:
-# src/constants/version.ts on main for 1.18 and 1.19 (1.33-1.35 both);
-# the release-1-17-0 branch for 1.15 (1.30-1.33), 1.16 (1.31-1.34) and 1.17
-# (1.32-1.35); release-1-14-0 for 1.12 (1.26-1.29), 1.13 (1.28-1.31) and 1.14
-# (1.29-1.32); release-1-11-0 for 1.8 (1.23-1.25), 1.9 (1.24-1.26), 1.10
-# (1.24-1.26) and 1.11 (1.25-1.28). Every row below equals the project's row.
-# The docs call the older versions untested rather than unsupported, so a
-# target above a line's maximum is a statement about what Kyverno has run on.
+# eol-sync: ignore-k8s-range
+#
+# No Kubernetes range is encoded. endoflife.date carries Kyverno's compatibility
+# matrix as a range per cycle (supportedK8sVersions), read against the
+# project's own docs on 2026-10-12, but the project describes it as what it
+# tests, not as a limit. https://kyverno.io/docs/installation/releases/ gives
+# "Kubernetes Versions Supported: v1.33 - v1.35" for v1.19 and says "Other
+# Kubernetes versions may work, but are not tested and therefore no guarantees
+# are made as to their full compatibility". The older "Compatibility Matrix"
+# (columns "Kyverno Version", "Kubernetes Min", "Kubernetes Max"; for example
+# 1.17.x 1.32-1.35 in src/content/docs/docs/installation/installation.md on
+# kyverno/website branch release-1-17-0, 1.14.x 1.29-1.32 in
+# content/en/docs/installation/_index.md on release-1-14-0, 1.11.x 1.25-1.28 in
+# content/en/docs/Installation/_index.md on release-1-11-0) carries the same
+# caveat: "Although prior versions may work, they are not tested and therefore
+# no guarantees are made as to their full compatibility". A "Max" column under
+# that sentence is the highest version Kyverno tests, not one it says fails, so
+# by the rule in CONTRIBUTING ("Maximum, minimum or tested with") it is a
+# tested-with table and encoding it would block an install that works. The
+# directive above makes tools/eol-sync keep each cycle's end of life and drop
+# the range endoflife.date copies.
 schema_version: 2
 id: kyverno
 display_name: Kyverno
@@ -37,15 +43,15 @@ support:
     - https://endoflife.date/kyverno
     - https://kyverno.io/docs/releases/
 cycles:
-  - {cycle: "1.19", eol: false, k8s_min: "1.33", k8s_max: "1.35", citations: ["https://endoflife.date/kyverno"]}
-  - {cycle: "1.18", eol: false, k8s_min: "1.33", k8s_max: "1.35", citations: ["https://endoflife.date/kyverno"]}
-  - {cycle: "1.17", eol: false, k8s_min: "1.32", k8s_max: "1.35", citations: ["https://endoflife.date/kyverno"]}
-  - {cycle: "1.16", eol: "2026-08-20", k8s_min: "1.31", k8s_max: "1.34", citations: ["https://endoflife.date/kyverno"]}
-  - {cycle: "1.15", eol: "2026-04-29", k8s_min: "1.30", k8s_max: "1.33", citations: ["https://endoflife.date/kyverno"]}
-  - {cycle: "1.14", eol: "2026-02-02", k8s_min: "1.29", k8s_max: "1.32", citations: ["https://endoflife.date/kyverno"]}
-  - {cycle: "1.13", eol: "2025-11-10", k8s_min: "1.28", k8s_max: "1.31", citations: ["https://endoflife.date/kyverno"]}
-  - {cycle: "1.12", eol: "2025-07-31", k8s_min: "1.26", k8s_max: "1.29", citations: ["https://endoflife.date/kyverno"]}
-  - {cycle: "1.11", eol: "2025-04-25", k8s_min: "1.25", k8s_max: "1.28", citations: ["https://endoflife.date/kyverno"]}
-  - {cycle: "1.10", eol: "2024-10-29", k8s_min: "1.24", k8s_max: "1.26", citations: ["https://endoflife.date/kyverno"]}
-  - {cycle: "1.9", eol: "2024-04-26", k8s_min: "1.24", k8s_max: "1.26", citations: ["https://endoflife.date/kyverno"]}
-  - {cycle: "1.8", eol: "2023-11-10", k8s_min: "1.23", k8s_max: "1.25", citations: ["https://endoflife.date/kyverno"]}
+  - {cycle: "1.19", eol: false, citations: ["https://endoflife.date/kyverno"]}
+  - {cycle: "1.18", eol: false, citations: ["https://endoflife.date/kyverno"]}
+  - {cycle: "1.17", eol: false, citations: ["https://endoflife.date/kyverno"]}
+  - {cycle: "1.16", eol: "2026-08-20", citations: ["https://endoflife.date/kyverno"]}
+  - {cycle: "1.15", eol: "2026-04-29", citations: ["https://endoflife.date/kyverno"]}
+  - {cycle: "1.14", eol: "2026-02-02", citations: ["https://endoflife.date/kyverno"]}
+  - {cycle: "1.13", eol: "2025-11-10", citations: ["https://endoflife.date/kyverno"]}
+  - {cycle: "1.12", eol: "2025-07-31", citations: ["https://endoflife.date/kyverno"]}
+  - {cycle: "1.11", eol: "2025-04-25", citations: ["https://endoflife.date/kyverno"]}
+  - {cycle: "1.10", eol: "2024-10-29", citations: ["https://endoflife.date/kyverno"]}
+  - {cycle: "1.9", eol: "2024-04-26", citations: ["https://endoflife.date/kyverno"]}
+  - {cycle: "1.8", eol: "2023-11-10", citations: ["https://endoflife.date/kyverno"]}

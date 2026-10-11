@@ -3,17 +3,18 @@
 # edit them by hand. support is hand-curated: status eol is only for a
 # product upstream retired as a whole.
 #
-# Kubernetes ranges: the k8s_min/k8s_max on each cycle are those of KEDA's
-# "Kubernetes Compatibility" table (https://keda.sh/docs/latest/operate/cluster/,
-# read on 2026-10-12: v2.21 1.34-1.36 down to v2.7 1.17-1.25; every row below
-# from 2.7 up equals the page), carried here by endoflife.date. Older cycles
-# (2.0-2.6, 1.5) are endoflife.date only, the page no longer lists them. The page
-# says the table shows the Kubernetes versions *tested* for each release, that
-# each release is "generally tested against N-2 Kubernetes minor versions at
-# minimum", and that maintainers may test more "but there is no guarantee". By
-# the rule in CONTRIBUTING ("Maximum, minimum or tested with") that is a
-# tested-with table, not a stated maximum, so a target above a line's k8s_max is
-# a statement about what KEDA tests, not a statement by KEDA that it fails.
+# eol-sync: ignore-k8s-range
+#
+# No Kubernetes range is encoded. endoflife.date carries KEDA's "Kubernetes
+# Compatibility" table (https://keda.sh/docs/latest/operate/cluster/, read on
+# 2026-10-12: v2.21 1.34-1.36 down to v2.7 1.17-1.25) as a range per cycle, but
+# the page says the table shows the Kubernetes versions *tested* for each
+# release, that each release is "generally tested against N-2 Kubernetes minor
+# versions at minimum", and that maintainers may test more "but there is no
+# guarantee". By the rule in CONTRIBUTING ("Maximum, minimum or tested with")
+# that is a tested-with table, not a stated maximum or minimum, and encoding it
+# would block an install that works. The directive above makes tools/eol-sync
+# keep each cycle's end of life and drop the range endoflife.date copies.
 schema_version: 2
 id: keda
 display_name: KEDA
@@ -31,26 +32,26 @@ support:
     - https://endoflife.date/keda
     - https://keda.sh/docs/latest/operate/cluster/
 cycles:
-  - {cycle: "2.21", eol: false, k8s_min: "1.34", k8s_max: "1.36", citations: ["https://endoflife.date/keda"]}
-  - {cycle: "2.20", eol: false, k8s_min: "1.33", k8s_max: "1.35", citations: ["https://endoflife.date/keda"]}
-  - {cycle: "2.19", eol: "2026-09-23", k8s_min: "1.32", k8s_max: "1.34", citations: ["https://endoflife.date/keda"]}
-  - {cycle: "2.18", eol: "2026-06-01", k8s_min: "1.31", k8s_max: "1.33", citations: ["https://endoflife.date/keda"]}
-  - {cycle: "2.17", eol: "2026-02-02", k8s_min: "1.30", k8s_max: "1.32", citations: ["https://endoflife.date/keda"]}
-  - {cycle: "2.16", eol: "2025-10-08", k8s_min: "1.29", k8s_max: "1.31", citations: ["https://endoflife.date/keda"]}
-  - {cycle: "2.15", eol: "2025-04-07", k8s_min: "1.28", k8s_max: "1.30", citations: ["https://endoflife.date/keda"]}
-  - {cycle: "2.14", eol: "2024-11-07", k8s_min: "1.27", k8s_max: "1.29", citations: ["https://endoflife.date/keda"]}
-  - {cycle: "2.13", eol: "2024-08-01", k8s_min: "1.27", k8s_max: "1.29", citations: ["https://endoflife.date/keda"]}
-  - {cycle: "2.12", eol: "2024-04-25", k8s_min: "1.26", k8s_max: "1.28", citations: ["https://endoflife.date/keda"]}
-  - {cycle: "2.11", eol: "2024-01-18", k8s_min: "1.25", k8s_max: "1.27", citations: ["https://endoflife.date/keda"]}
-  - {cycle: "2.10", eol: "2023-09-28", k8s_min: "1.24", k8s_max: "1.26", citations: ["https://endoflife.date/keda"]}
-  - {cycle: "2.9", eol: "2023-06-22", k8s_min: "1.23", k8s_max: "1.25", citations: ["https://endoflife.date/keda"]}
-  - {cycle: "2.8", eol: "2023-03-09", k8s_min: "1.17", k8s_max: "1.25", citations: ["https://endoflife.date/keda"]}
-  - {cycle: "2.7", eol: "2022-12-09", k8s_min: "1.17", k8s_max: "1.25", citations: ["https://endoflife.date/keda"]}
-  - {cycle: "2.6", eol: "2022-08-10", k8s_min: "1.17", k8s_max: "1.25", citations: ["https://endoflife.date/keda"]}
-  - {cycle: "2.5", eol: "2022-05-05", k8s_min: "1.17", citations: ["https://endoflife.date/keda"]}
-  - {cycle: "2.4", eol: "2022-01-31", k8s_min: "1.16", citations: ["https://endoflife.date/keda"]}
-  - {cycle: "2.3", eol: "2021-11-25", k8s_min: "1.16", citations: ["https://endoflife.date/keda"]}
-  - {cycle: "2.2", eol: "2021-08-06", k8s_min: "1.16", citations: ["https://endoflife.date/keda"]}
-  - {cycle: "2.1", eol: "2021-05-27", k8s_min: "1.16", citations: ["https://endoflife.date/keda"]}
-  - {cycle: "2.0", eol: "2021-03-18", k8s_min: "1.16", citations: ["https://endoflife.date/keda"]}
-  - {cycle: "1.5", eol: true, k8s_min: "1.13", citations: ["https://endoflife.date/keda"]}
+  - {cycle: "2.21", eol: false, citations: ["https://endoflife.date/keda"]}
+  - {cycle: "2.20", eol: false, citations: ["https://endoflife.date/keda"]}
+  - {cycle: "2.19", eol: "2026-09-23", citations: ["https://endoflife.date/keda"]}
+  - {cycle: "2.18", eol: "2026-06-01", citations: ["https://endoflife.date/keda"]}
+  - {cycle: "2.17", eol: "2026-02-02", citations: ["https://endoflife.date/keda"]}
+  - {cycle: "2.16", eol: "2025-10-08", citations: ["https://endoflife.date/keda"]}
+  - {cycle: "2.15", eol: "2025-04-07", citations: ["https://endoflife.date/keda"]}
+  - {cycle: "2.14", eol: "2024-11-07", citations: ["https://endoflife.date/keda"]}
+  - {cycle: "2.13", eol: "2024-08-01", citations: ["https://endoflife.date/keda"]}
+  - {cycle: "2.12", eol: "2024-04-25", citations: ["https://endoflife.date/keda"]}
+  - {cycle: "2.11", eol: "2024-01-18", citations: ["https://endoflife.date/keda"]}
+  - {cycle: "2.10", eol: "2023-09-28", citations: ["https://endoflife.date/keda"]}
+  - {cycle: "2.9", eol: "2023-06-22", citations: ["https://endoflife.date/keda"]}
+  - {cycle: "2.8", eol: "2023-03-09", citations: ["https://endoflife.date/keda"]}
+  - {cycle: "2.7", eol: "2022-12-09", citations: ["https://endoflife.date/keda"]}
+  - {cycle: "2.6", eol: "2022-08-10", citations: ["https://endoflife.date/keda"]}
+  - {cycle: "2.5", eol: "2022-05-05", citations: ["https://endoflife.date/keda"]}
+  - {cycle: "2.4", eol: "2022-01-31", citations: ["https://endoflife.date/keda"]}
+  - {cycle: "2.3", eol: "2021-11-25", citations: ["https://endoflife.date/keda"]}
+  - {cycle: "2.2", eol: "2021-08-06", citations: ["https://endoflife.date/keda"]}
+  - {cycle: "2.1", eol: "2021-05-27", citations: ["https://endoflife.date/keda"]}
+  - {cycle: "2.0", eol: "2021-03-18", citations: ["https://endoflife.date/keda"]}
+  - {cycle: "1.5", eol: true, citations: ["https://endoflife.date/keda"]}
