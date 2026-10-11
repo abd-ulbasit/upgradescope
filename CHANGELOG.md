@@ -13,22 +13,40 @@ only through a new release.
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-10-11
+
+A patch release so the GitHub Action can be listed on GitHub Marketplace,
+which refused v0.2.1's description as too long. The chart is now on
+Artifact Hub as a Verified Publisher. Nothing in the binary, the image or
+the chart's templates changed.
+
+### Fixed
+
+- The Action's `description` is 118 characters. GitHub Marketplace refuses
+  one of 125 or more, and it reads `action.yml` at the release's tag, so
+  v0.2.1's 247 characters kept it off the Marketplace.
+  `hack/action_test.sh` fails a description at or over the limit (#75).
+
 ### Changed
 
+- The chart's Artifact Hub metadata (`packaging/artifacthub/artifacthub-repo.yml`)
+  carries the repository's ID. Each release pushes it to the chart's
+  `artifacthub.io` tag, and with it Artifact Hub shows upgradescope as a
+  Verified Publisher (#75).
 - The GitHub release notes open with a link to `CHANGELOG.md` at the release
   tag. The CHANGELOG is the reviewed record and lists every breaking change;
   the notes' Breaking changes group lists only commits marked `type!:`
-  (#388).
+  (#390).
 - The `pr-lint` check (`hack/check-breaking.sh`) also refuses a PR title or
   commit subject whose type is uppercase or mixed-case (`Feat:`, `Chore!:`,
   `FIX(scope):`), with or without a `BREAKING CHANGE:` footer, because the
-  release notes group lowercase types only (#388).
+  release notes group lowercase types only (#390).
 - `main` requires the `breaking-change` check as well as `ci-ok`, so a PR
   with a `BREAKING CHANGE:` footer but no `type!:` subject cannot merge, and
   every release tag (`vX.Y.Z[-pre]`) is protected from deletion and moves
   while a floating major tag such as `v1` stays movable. CI checks that the
   rulesets applied on GitHub still equal `.github/rulesets/`
-  (`hack/rulesets-live.sh`) (#388).
+  (`hack/rulesets-live.sh`) (#391).
 
 ## [0.2.1] - 2026-10-11
 
@@ -2574,7 +2592,8 @@ First release.
   deprecated-callers signal is then reported as not assessed.
 - `kind: List` items are not expanded in `--files` mode.
 
-[Unreleased]: https://github.com/abd-ulbasit/upgradescope/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/abd-ulbasit/upgradescope/compare/v0.2.2...HEAD
+[0.2.2]: https://github.com/abd-ulbasit/upgradescope/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/abd-ulbasit/upgradescope/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/abd-ulbasit/upgradescope/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/abd-ulbasit/upgradescope/compare/v0.1.0...v0.1.1
