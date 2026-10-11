@@ -765,7 +765,7 @@ jobs:
       !cancelled() && needs.pg-matrix.result == 'success' &&
       (needs.changes.outputs.go == 'true' || needs.changes.result != 'success')
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15 # the store suite, then the server tests on both stores (hack/pg-test.sh)
     strategy:
       fail-fast: false
       matrix:
