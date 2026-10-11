@@ -397,11 +397,21 @@ jobs:
       # deleted test, e2e gate or job it names fails here.
       - name: every test the claims ledger names exists
         run: make claims-check
+      # The ledger's server claims SV-24 and SE-02, on the binary built here:
+      # serve on loopback with a temporary SQLite database, driven with curl
+      # (hack/claims-server.sh; no cluster, no Docker).
+      - name: the claims suite's server checks
+        run: make claims-server
       # A row of the ledger that names a tracker (not true yet, not automated,
       # not audited) must name an open issue (hack/claims-trackers.sh). Online,
       # so it is a step of its own and not part of the offline claims-check;
-      # it skips with a notice when there is no token.
+      # it skips with a notice when there is no token. Not on a release
+      # (release.yml calls this workflow with release: true): a release
+      # depends on the tagged code, never on live issue state, so closing a
+      # tracker cannot fail a tag's CI. Pull requests and pushes to main run
+      # it (hack/claims-trackers_test.sh evaluates this if).
       - name: every tracker the claims ledger names is open
+        if: ${{ !inputs.release }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: hack/claims-trackers.sh

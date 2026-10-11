@@ -4,7 +4,9 @@
 # after "not true yet:", "not automated:", "not audited:" and the like must be
 # open; a #N anywhere else in a row is history and is not asked about; with no
 # token and no gh login the check skips, or fails when told to require it.
-# Offline; needs bash.
+# Also pins ci.yml's step: it does not run on a release, and does on a pull
+# request and a push (its `if`, evaluated with node).
+# Offline; needs bash and node.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 script="$PWD/hack/claims-trackers.sh"
@@ -118,6 +120,43 @@ if grep -q 'hack/claims-trackers.sh' .github/workflows/ci.yml && grep -q 'claims
   echo "ok   CI runs the check and make hack-test runs this test" | tee -a "$work/results"
 else
   echo "FAIL the check is not wired into ci.yml and the Makefile" | tee -a "$work/results" >&2
+fi
+
+# A release depends on the tagged code, never on live issue state: the step
+# does not run when release.yml calls ci.yml (inputs.release, on the tag),
+# and still runs on a pull request, a push to main and a dispatch on a
+# branch. Its `if`, evaluated with node (it uses only !, && and !=, which
+# JavaScript evaluates the same way; a missing input is null, as in Actions).
+step=$(awk '/^  repo-checks:$/ { j = 1; next } j && /^  [a-z0-9_-]+:[ ]*$/ { j = 0 }
+  j && /^      - / { s = ($0 ~ /- name: every tracker the claims ledger names is open$/) }
+  j && s' .github/workflows/ci.yml)
+cond=$(sed -n 's/^        if: //p' <<<"$step")
+if ! grep -qF 'run: hack/claims-trackers.sh' <<<"$step" || [ -z "$cond" ]; then
+  echo "FAIL repo-checks' claims-trackers step has no if: (it would run on a release)" | tee -a "$work/results" >&2
+elif ! command -v node >/dev/null; then
+  echo "FAIL node is required to evaluate the claims-trackers step's if" | tee -a "$work/results" >&2
+else
+  while read -r want ctx; do
+    got=$(node -e '
+      const [src, ctxJSON] = process.argv.slice(1);
+      const ctx = JSON.parse(ctxJSON);
+      const e = src.trim().replace(/^\$\{\{([\s\S]*)\}\}$/, "$1");
+      const inputs = new Proxy(ctx.inputs, { get: (o, k) => (k in o ? o[k] : null) });
+      process.stdout.write(String(!!new Function("github", "inputs", "return (" + e + ");")(ctx.github, inputs)));
+    ' "$cond" "$ctx" 2>&1) || got="error: $got"
+    if [ "$got" = "$want" ]; then
+      echo "ok   the claims-trackers step runs=$want for $ctx" | tee -a "$work/results"
+    else
+      echo "FAIL the claims-trackers step (if: $cond) runs=$got for $ctx, want $want" | tee -a "$work/results" >&2
+    fi
+  done <<'EOF'
+false {"github":{"event_name":"push","ref_type":"tag"},"inputs":{"release":true}}
+false {"github":{"event_name":"workflow_dispatch","ref_type":"tag"},"inputs":{"release":true}}
+false {"github":{"event_name":"workflow_dispatch","ref_type":"branch"},"inputs":{"release":true}}
+true {"github":{"event_name":"pull_request","ref_type":"branch"},"inputs":{}}
+true {"github":{"event_name":"push","ref_type":"branch"},"inputs":{}}
+true {"github":{"event_name":"workflow_dispatch","ref_type":"branch"},"inputs":{"full-matrix":true}}
+EOF
 fi
 
 pass=$(grep -c '^ok' "$work/results" || true)
