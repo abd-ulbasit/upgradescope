@@ -49,7 +49,7 @@ func pgTestSchema(t *testing.T, prefix string) string {
 // so the empty tables cannot make one cheaper than the index.
 func TestPostgresEvaluationReadsUseIndexes(t *testing.T) {
 	ctx := context.Background()
-	p, err := OpenPostgres(pgTestSchema(t, "plans"))
+	p, err := OpenPostgres(context.Background(), pgTestSchema(t, "plans"))
 	if err != nil {
 		t.Fatalf("OpenPostgres: %v", err)
 	}
@@ -135,7 +135,7 @@ func TestMigration0009BackfillsPostgres(t *testing.T) {
 			t.Fatalf("%s: %v", q, err)
 		}
 	}
-	p, err := OpenPostgres(dsn) // applies 0009
+	p, err := OpenPostgres(context.Background(), dsn) // applies 0009
 	if err != nil {
 		t.Fatalf("OpenPostgres: %v", err)
 	}
@@ -171,7 +171,7 @@ func TestMigration0009BackfillsPostgres(t *testing.T) {
 // plan as they like.
 func TestPostgresPruneEvaluationDrainUsesCreatedAtIndex(t *testing.T) {
 	ctx := context.Background()
-	p, err := OpenPostgres(pgTestSchema(t, "drainplan"))
+	p, err := OpenPostgres(context.Background(), pgTestSchema(t, "drainplan"))
 	if err != nil {
 		t.Fatalf("OpenPostgres: %v", err)
 	}
@@ -241,7 +241,7 @@ func TestPostgresMigration0010AcceptsAnIndexBuiltConcurrently(t *testing.T) {
 	if _, err := db.ExecContext(ctx, `CREATE INDEX CONCURRENTLY idx_evaluations_created_at ON evaluations (created_at, id)`); err != nil {
 		t.Fatalf("CREATE INDEX CONCURRENTLY: %v", err)
 	}
-	p, err := OpenPostgres(dsn) // applies 0010
+	p, err := OpenPostgres(context.Background(), dsn) // applies 0010
 	if err != nil {
 		t.Fatalf("OpenPostgres with the index already built: %v", err)
 	}

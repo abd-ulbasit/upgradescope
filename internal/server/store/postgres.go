@@ -31,31 +31,63 @@ type Postgres struct {
 
 var _ Store = (*Postgres)(nil)
 
+// pgPingTimeout bounds the connection check at open, so a wrong DSN or an
+// unreachable server fails fast. It bounds nothing else: see OpenPostgres.
+const pgPingTimeout = 10 * time.Second
+
 // OpenPostgres connects to dsn (any pgx-accepted form, e.g.
 // postgres://user:pass@host:5432/db), verifies the connection with a ping,
 // and applies the embedded pgmigrations. Fails fast on unreachable or
-// unauthorized servers instead of deferring the error to the first query.
-func OpenPostgres(dsn string) (*Postgres, error) {
+// unauthorized servers instead of deferring the error to the first query:
+// the ping has its own pgPingTimeout.
+//
+// The wait on the migration lock and the migrations themselves run on ctx
+// with no added deadline, as SQLite's do: a long migration, or a replica
+// queued behind another replica's migrations, takes as long as it takes,
+// and the deployment's startupProbe is the bound. Cancelling ctx (serve's
+// SIGTERM) abandons the in-flight statement promptly, with an error that
+// wraps ctx.Err().
+func OpenPostgres(ctx context.Context, dsn string) (*Postgres, error) {
+	sub, err := fs.Sub(pgMigrationsFS, "pgmigrations")
+	if err != nil {
+		return nil, fmt.Errorf("embedded pgmigrations: %w", err)
+	}
+	return openPostgres(ctx, dsn, sub)
+}
+
+// openPostgres is OpenPostgres with the migration set injected (the test
+// seam: the embedded FS cannot hold a deliberately slow migration).
+func openPostgres(ctx context.Context, dsn string, fsys fs.FS) (*Postgres, error) {
 	db, err := sql.Open("pgx", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open postgres: %w", err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	if err := db.PingContext(ctx); err != nil {
-		_ = db.Close()
-		return nil, fmt.Errorf("ping postgres: %w", err)
-	}
-	sub, err := fs.Sub(pgMigrationsFS, "pgmigrations")
+	pingCtx, cancel := context.WithTimeout(ctx, pgPingTimeout)
+	err = db.PingContext(pingCtx)
+	cancel()
 	if err != nil {
 		_ = db.Close()
-		return nil, fmt.Errorf("embedded pgmigrations: %w", err)
+		return nil, fmt.Errorf("ping postgres: %w", withCtxErr(ctx, err))
 	}
-	if _, err := migratePostgres(ctx, db, sub); err != nil {
+	if _, err := migratePostgres(ctx, db, fsys); err != nil {
 		_ = db.Close()
+		if cerr := ctx.Err(); cerr != nil {
+			// Each migration is its own transaction: the interrupted one
+			// rolled back (server-side, see migratePostgres) and is not recorded.
+			return nil, fmt.Errorf("migrate postgres: interrupted (%w); the migrations not yet recorded run on the next start: %w", cerr, err)
+		}
 		return nil, fmt.Errorf("migrate postgres: %w", err)
 	}
 	return &Postgres{db: db}, nil
+}
+
+// withCtxErr makes err match ctx.Err() under errors.Is once ctx is done,
+// whatever shape the driver gave the interrupted statement's error.
+func withCtxErr(ctx context.Context, err error) error {
+	if cerr := ctx.Err(); cerr != nil && !errors.Is(err, cerr) {
+		return fmt.Errorf("%w: %w", cerr, err)
+	}
+	return err
 }
 
 // Close closes the underlying connection pool.
