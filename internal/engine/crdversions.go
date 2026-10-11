@@ -55,6 +55,11 @@ func evalCRDVersions(inv inventory.Inventory, target inventory.Version, b *budge
 		}
 		servedText := "no version"
 		if len(served) > 0 {
+			// Sorted, so a CRD whose spec.versions was rewritten (or a
+			// pusher that orders it differently) gives the same text (#367).
+			// served is this function's own slice: the inventory's
+			// Versions keep spec order.
+			slices.Sort(served)
 			servedText = strings.Join(served, ", ")
 		}
 		used := map[string]inventory.APIUsage{}

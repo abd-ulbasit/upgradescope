@@ -1,6 +1,6 @@
 [
   {
-    "description": "cert-manager.io/v1alpha3 Certificate is not served by its CRD (1 object). 1 object(s) written through this version: shop (1). Written by: flux. CRD certificates.cert-manager.io marks v1alpha3 served: false (it serves v1alpha2, v1), so the apiserver rejects these objects at v1alpha3. CRD versions are set by the add-on that ships the CRD, independent of Kubernetes 1.35. Objects: shop/legacy-tls. Fix: move these objects to cert-manager.io/v1; the apiserver rejects writes at v1alpha3. A named manager that no longer writes them keeps them listed through its managedFields entry until another manager takes over its fields or the entry is removed.",
+    "description": "cert-manager.io/v1alpha3 Certificate is not served by its CRD (1 object). 1 object(s) written through this version: shop (1). Written by: flux. CRD certificates.cert-manager.io marks v1alpha3 served: false (it serves v1, v1alpha2), so the apiserver rejects these objects at v1alpha3. CRD versions are set by the add-on that ships the CRD, independent of Kubernetes 1.35. Objects: shop/legacy-tls. Fix: move these objects to cert-manager.io/v1; the apiserver rejects writes at v1alpha3. A named manager that no longer writes them keeps them listed through its managedFields entry until another manager takes over its fields or the entry is removed.",
     "check_name": "crd-version/unserved/cert-manager.io/v1alpha3/Certificate",
     "fingerprint": "f3906b8b5326c6bc037a1d7b67887110c59e08bc4998316943dec9fecb78df3c",
     "severity": "critical",
