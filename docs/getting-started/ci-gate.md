@@ -277,10 +277,11 @@ the cluster's CRD (or a CRD in the manifests) does not serve, is the
 manifests' finding, also when the cluster already has the same. A volume
 plugin finding stays whole: it lists the cluster's objects beside the pull
 request's, and `clusterVerdict` stays blocked either way, but a pull request
-that adds none passes. One case is not seen: the cluster lists its custom
-resources only at versions its own CRDs deprecate or do not serve, so live custom resources
-at a version that a posted CRD newly deprecates or stops serving are not
-judged.
+that adds nothing on a plugin does not fail on the cluster's use of it (it can
+still fail on something else). One case is not seen: the cluster lists its
+custom resources only at versions its own CRDs deprecate or do not serve, so
+live custom resources at a version that a posted CRD newly deprecates or stops
+serving are not judged.
 
 A `target` below 1.16, the oldest minor the knowledge base covers, is a 400
 that says to quote the version, not a verdict: YAML makes an unquoted
