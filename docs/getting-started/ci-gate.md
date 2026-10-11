@@ -35,13 +35,13 @@ jobs:
         with:
           persist-credentials: false
       - run: helm template my-release ./chart --output-dir rendered
-      - uses: abd-ulbasit/upgradescope@v0.2.0   # or the tag's full commit SHA
+      - uses: abd-ulbasit/upgradescope@v0.2.2   # or the tag's full commit SHA
         id: gate
         with:
           path: rendered
           target: "1.37"
           fail-on: blocker
-          version: v0.2.0                        # pin the binary, and with it the knowledge base
+          version: v0.2.2                        # pin the binary, and with it the knowledge base
       - uses: github/codeql-action/upload-sarif@v4
         # Also when the gate failed. Not on a fork PR: its token is read-only.
         if: >-
@@ -212,12 +212,12 @@ jobs:
         run: |
           rm -f -- .upgradescope.yaml upgradescope-baseline.json
           cp trusted/.upgradescope.yaml trusted/upgradescope-baseline.json .
-      - uses: abd-ulbasit/upgradescope@v0.2.0
+      - uses: abd-ulbasit/upgradescope@v0.2.2
         id: gate
         with:
           path: rendered
           target: "1.37"
-          version: v0.2.0
+          version: v0.2.2
           config: .upgradescope.yaml           # named, so no other config is looked for
           baseline: upgradescope-baseline.json
 ```

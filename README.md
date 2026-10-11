@@ -4,6 +4,7 @@
 [![Release](https://img.shields.io/github/v/release/abd-ulbasit/upgradescope)](https://github.com/abd-ulbasit/upgradescope/releases)
 [![Docs](https://img.shields.io/badge/docs-site-blue)](https://abd-ulbasit.github.io/upgradescope/)
 [![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/abd-ulbasit/upgradescope/badge)](https://scorecard.dev/viewer/?uri=github.com/abd-ulbasit/upgradescope)
+[![Artifact Hub](https://img.shields.io/endpoint?url=https://artifacthub.io/badge/repository/upgradescope)](https://artifacthub.io/packages/search?repo=upgradescope)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 
 upgradescope tells you what blocks a Kubernetes cluster, or a directory of
@@ -36,7 +37,8 @@ every public claim, with the test that proves it: [claims ledger](docs/claims.md
 | Go | `go install github.com/abd-ulbasit/upgradescope/cmd/upgradescope@latest` |
 | Release archives | [Releases](https://github.com/abd-ulbasit/upgradescope/releases): linux, darwin (and windows from v0.2.0) on amd64/arm64, with `checksums.txt`, signed with cosign from v0.2.0 |
 | Container image (from v0.2.0) | `ghcr.io/abd-ulbasit/upgradescope:<version>`, signed |
-| Helm chart (from v0.2.0) | `oci://ghcr.io/abd-ulbasit/charts/upgradescope`, signed |
+| Helm chart (from v0.2.0) | `oci://ghcr.io/abd-ulbasit/charts/upgradescope`, signed; listed on [Artifact Hub](https://artifacthub.io/packages/helm/upgradescope/upgradescope) |
+| GitHub Action | `uses: abd-ulbasit/upgradescope@v0.2.2`, listed on [GitHub Marketplace](https://github.com/marketplace/actions/upgradescope-gate); see [action/README.md](action/README.md) |
 
 Verifying a download:
 
@@ -84,9 +86,9 @@ provenance verifies: the release workflow built it at that tag
 
 ```yaml
       - run: helm template my-release ./chart --output-dir rendered
-      - uses: abd-ulbasit/upgradescope@v0.2.0
+      - uses: abd-ulbasit/upgradescope@v0.2.2
         id: gate
-        with: {path: rendered, target: "1.37", version: v0.2.0}
+        with: {path: rendered, target: "1.37", version: v0.2.2}
       - uses: github/codeql-action/upload-sarif@v4
         # also when the gate failed; not on a fork PR, whose token is read-only
         if: ${{ !cancelled() && steps.gate.outputs.sarif-file != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}

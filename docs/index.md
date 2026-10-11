@@ -10,11 +10,13 @@ declare they do not support the target. The answer is a verdict (`ready`,
 as a table, JSON, SARIF, Markdown, JUnit or GitLab Code Quality, an exit code for CI, and a
 `ClusterReadiness` object in the cluster.
 
-!!! note "These docs describe v0.2.0"
-    v0.2.0 is the first release CI builds, signs and publishes: the GitHub
-    Action `@v0.2.0`, the release downloads, the container image and the OCI
-    chart all pin it. The site follows `main`, so a page can describe a
-    change newer than v0.2.0; to try one, build `main`
+!!! note "These docs describe v0.2.2"
+    v0.2.0 is still the first release CI builds, signs and publishes. v0.2.2
+    changes no code over v0.2.1; it exists so the GitHub Action can be listed
+    on GitHub Marketplace. The docs and the OCI chart now pin v0.2.2: the
+    GitHub Action `@v0.2.2`, the examples' `version:` and the chart's
+    version. The site follows `main`, so a page can describe a change newer
+    than v0.2.2; to try one, build `main`
     (`go install github.com/abd-ulbasit/upgradescope/cmd/upgradescope@main`).
     The chart in a clone defaults to the image of the release it was cut
     for, so to run `main` set an image you build from it.
