@@ -358,6 +358,7 @@ claims-check:
 .PHONY: hack-test
 hack-test:
 	./hack/claims-check_test.sh
+	./hack/claims-trackers_test.sh
 	./hack/shard_test.sh
 	./hack/test-heap_test.sh
 	./hack/test_test.sh

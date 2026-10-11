@@ -78,7 +78,9 @@ In scope:
     the object named `agent.crName` and its `status` (by `resourceNames`).
 
   The agent writes only its own `ClusterReadiness` object and, with
-  `manageCRD`, that CRD. Report anything that makes the agent write anything
+  `manageCRD`, that CRD, except that `create` on `clusterreadinesses` cannot
+  be limited by name, so it can create a ClusterReadiness under any name (it
+  never deletes one). Report anything that makes the agent write anything
   else, any way to obtain or abuse its ServiceAccount token, and any leak of
   Secret contents beyond the Helm release metadata the agent needs. The
   breadth of the grants listed above is known, so a report that only

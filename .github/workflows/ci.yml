@@ -369,6 +369,11 @@ jobs:
     if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    # hack/claims-trackers.sh reads issue states; the top-level block grants
+    # only contents.
+    permissions:
+      contents: read
+      issues: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -392,6 +397,14 @@ jobs:
       # deleted test, e2e gate or job it names fails here.
       - name: every test the claims ledger names exists
         run: make claims-check
+      # A row of the ledger that names a tracker (not true yet, not automated,
+      # not audited) must name an open issue (hack/claims-trackers.sh). Online,
+      # so it is a step of its own and not part of the offline claims-check;
+      # it skips with a notice when there is no token.
+      - name: every tracker the claims ledger names is open
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: hack/claims-trackers.sh
 
   # The heap-bound tests skip (or shrink) under the race detector, so
   # `make test` above never runs them in full; they are the proofs the

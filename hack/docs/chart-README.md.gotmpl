@@ -190,7 +190,7 @@ watches.
 | `get`/`list` Secrets and ConfigMaps (only with `rbac.helmSecrets=true`, the default, and an empty `rbac.helmSecretsNamespaces`, the default) | Helm release detection lists the objects labelled `owner=helm` (Helm's secrets and configmaps storage drivers) metadata-only, then reads one per release. RBAC cannot filter by label or type, so **this lets the agent read every Secret and ConfigMap in the cluster** |
 | `get`/`list` Argo CD Applications, Flux HelmReleases and Flux OCIRepositories (only with `rbac.gitops.argocd` and `rbac.gitops.flux`, both off by default) | The charts GitOps tools deploy: chart, version and repository from each Application source and HelmRelease, for add-on detection. Only those resources: no AppProjects, ApplicationSets or the Secrets that hold repository credentials |
 | `get`/`update`/`patch` on the CRD `clusterreadinesses.upgradescope.basit.engineer` only (only with `agent.manageCRD=true`, the default) | Keeping the CRD schema in step with the agent binary by server-side apply |
-| `get`/`list`/`create` clusterreadinesses; `update`/`patch` and status `get`/`update`/`patch` on the one named `agent.crName` | The agent's own results object |
+| `get`/`list`/`create` clusterreadinesses; `update`/`patch` and status `get`/`update`/`patch` on the one named `agent.crName` | The agent's own results object. `create` cannot be limited by name, so the agent can create a ClusterReadiness under any name (it cannot delete one); only the update and patch are limited to `agent.crName` |
 
 `rbac.helmSecretsNamespaces` narrows that read to the namespaces it lists:
 the ClusterRole then has no Secret or ConfigMap rule, each listed namespace

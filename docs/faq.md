@@ -77,9 +77,11 @@ client skew needs audit logs, and feature gates are not in the knowledge
 base.
 
 **Who wrote it?**
-The design, the decisions in the [architecture guide](architecture.md)
-and the review are the maintainer's; most of the code was written by coding
-agents from specs and plans he wrote and reviewed. The author interned at
+The design and the review are the maintainer's. Most of the code was written
+by coding agents (see the `Co-Authored-By` trailers in the git history),
+working from specs and plans drafted with them and approved by the author;
+the planning notes are not published, and the design decisions are in the
+[architecture guide](architecture.md). The author interned at
 chkk.io, which sells in this category. upgradescope is clean-room: no
 proprietary code, data, schemas or documents were used, every knowledge-base
 entry is generated from upstream source or carries a public citation, and
