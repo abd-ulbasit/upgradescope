@@ -59,13 +59,15 @@ type pruneDialect struct {
 	db *sql.DB
 	// ph is the nth (1-based) bind parameter.
 	ph func(n int) string
-	// decided is the condition for a decided (ready or blocked) evaluation.
+	// decided is the condition for a notification baseline: a decided
+	// (ready or blocked) evaluation, or one marked a baseline
+	// (Evaluation.Baseline).
 	decided string
 }
 
 var (
-	sqliteDialect = pruneDialect{ph: func(int) string { return "?" }, decided: "ready = 1 OR blockers > 0"}
-	pgDialect     = pruneDialect{ph: func(n int) string { return fmt.Sprintf("$%d", n) }, decided: "ready OR blockers > 0"}
+	sqliteDialect = pruneDialect{ph: func(int) string { return "?" }, decided: "ready = 1 OR blockers > 0 OR baseline = 1"}
+	pgDialect     = pruneDialect{ph: func(n int) string { return fmt.Sprintf("$%d", n) }, decided: "ready OR blockers > 0 OR baseline"}
 )
 
 // evaluationDrain is the batched DELETE of old evaluations: $1 the cutoff,

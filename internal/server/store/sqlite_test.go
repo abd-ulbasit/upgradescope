@@ -125,8 +125,8 @@ func TestOpenIdempotentAcrossReopen(t *testing.T) {
 	if err := s2.db.QueryRow(`SELECT COUNT(*) FROM schema_migrations`).Scan(&n); err != nil {
 		t.Fatalf("count schema_migrations: %v", err)
 	}
-	if n != 10 {
-		t.Errorf("schema_migrations rows = %d, want 10 (0001-0010, each applied once)", n)
+	if n != 11 {
+		t.Errorf("schema_migrations rows = %d, want 11 (0001-0011, each applied once)", n)
 	}
 	for _, table := range []string{"clusters", "snapshots", "evaluations", "tokens", "outbox", "read_tokens"} {
 		var name string
