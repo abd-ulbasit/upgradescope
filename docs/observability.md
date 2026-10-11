@@ -46,7 +46,7 @@ wall time a throttled tick spends waiting for its quota.
 
 The agent writes a startup line (version, KB version and horizon, interval,
 tick deadline and tick reserve, server URL or CRD-only, health address, profiler address) and exactly one line
-per tick. `--log-format=json` makes every line a JSON object;
+per tick, plus one per retry of a kept snapshot between ticks (see below). `--log-format=json` makes every line a JSON object;
 `--log-level` is `debug`, `info`, `warn` or `error`. Chart values:
 `agent.logFormat`, `agent.logLevel`. At startup, an agent that manages
 the CRD (`--manage-crd`, the default) and finds the CRD of v0.1.x and the
@@ -67,7 +67,7 @@ level=INFO msg="tick complete" duration=2.41s push=ok consecutiveFailures=0 capa
 | `msg` | `tick complete` (INFO, or WARN when only the push failed) or `tick failed` (ERROR, with `err`); `agent stopping` (INFO) on a graceful stop |
 | `duration` | wall time of the tick |
 | `push` | `off` (CRD-only), `unchanged` (same inventory, hourly force-sync not due), `ok`, `failed` (with `pushError`) |
-| `consecutiveFailures` | failed ticks in a row; 0 after a success |
+| `consecutiveFailures` | the failure the line reports, in a row: failed ticks on a `tick failed` line, failed pushes on a line whose push failed (1 after the first; a retry between ticks that delivers the snapshot ends the streak); 0 otherwise |
 | `capabilities.<name>` | whether that collector could read what it needs; `status.notAssessed` on the CR says why not |
 | `targets.<minor>.verdict/score/blockers` | the evaluation per target |
 | `crdError` | the ClusterReadiness CRD could not be brought up to date (WARN); retried every tick until it succeeds, see below |
@@ -77,7 +77,13 @@ A tick **fails** when the agent could not evaluate and write the
 `spec.targets` and an unknown or unparseable server version; the CR then
 shows `Ready=Unknown` with the reason in `status.notAssessed`). A failed push does not fail the tick: the CR
 status was written, and the agent's local result never depends on the
-server. Push failures are logged at WARN and counted separately.
+server. Push failures are logged at WARN and counted separately. A
+snapshot whose push failed is kept and retried between ticks (after 10s,
+then 20s, 40s and 80s, then every 2m, each ±20%) until it is delivered,
+refused for good, or replaced by the next tick's: each retry logs one line,
+`buffered snapshot pushed` (INFO) or `buffered snapshot push failed` (WARN,
+with `pushError`, and `retrying=false` when the server refused it for
+good).
 
 A tick also fails, and writes no status, when the agent could not read
 the `ClusterReadiness` spec (or decode it), or could not set
@@ -138,7 +144,7 @@ categories, capabilities, route patterns, and on the server cluster names
 |---|---|---|---|
 | `upgradescope_agent_tick_duration_seconds` | histogram | | tick wall time |
 | `upgradescope_agent_tick_errors_total` | counter | | failed ticks (status may be missing or stale) |
-| `upgradescope_agent_push_errors_total` | counter | | snapshot pushes that failed (transient errors are retried first) |
+| `upgradescope_agent_push_errors_total` | counter | | snapshot pushes that failed, a tick's push or a retry of the kept snapshot between ticks (each retries transient errors up to three times first) |
 | `upgradescope_agent_last_success_timestamp_seconds` | gauge | | Unix time of the last successful tick; 0 before the first |
 | `upgradescope_agent_interval_seconds` | gauge | | the configured `--interval` |
 | `upgradescope_readiness_score` | gauge | `target` | score 0-100 |
