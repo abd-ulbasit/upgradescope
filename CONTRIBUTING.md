@@ -3,7 +3,10 @@
 Thanks for helping. This guide gets you from a fresh clone to a green pull
 request. For how the pieces fit together, read
 [`docs/architecture.md`](docs/architecture.md) first. It is short and it names
-the contracts you must not break.
+the contracts you must not break. [GOVERNANCE.md](GOVERNANCE.md) says how
+decisions are made and how a contributor becomes a reviewer or maintainer;
+[MAINTAINERS.md](MAINTAINERS.md) lists who maintains the project today, and
+[ROADMAP.md](ROADMAP.md) where it is going.
 
 Most contributions are one of these three:
 
