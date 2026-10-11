@@ -141,3 +141,31 @@ func TestPostgresMigration0010CreatesItsIndexIfNotExists(t *testing.T) {
 		t.Errorf("statements = %q, want exactly %q", stmts, want)
 	}
 }
+
+// TestPostgresMigration0011IsPrebuildable pins the property the upgrade
+// note relies on without a database: the Postgres migration 0011 adds its
+// column and builds its index IF NOT EXISTS, under a name 0009 did not
+// use, and only then drops idx_evaluations_decided, so a column and index
+// an operator built beforehand (CREATE INDEX CONCURRENTLY) are accepted
+// (the run against a real Postgres is
+// TestPostgresMigration0011AcceptsAPrebuiltBaselineIndex).
+func TestPostgresMigration0011IsPrebuildable(t *testing.T) {
+	src, err := pgMigrationsFS.ReadFile("pgmigrations/0011_evaluation_baseline.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stmts []string
+	for _, line := range strings.Split(string(src), "\n") {
+		if l := strings.TrimSpace(line); l != "" && !strings.HasPrefix(l, "--") {
+			stmts = append(stmts, l)
+		}
+	}
+	want := []string{
+		"ALTER TABLE evaluations ADD COLUMN IF NOT EXISTS baseline BOOLEAN;",
+		"CREATE INDEX IF NOT EXISTS idx_evaluations_baseline ON evaluations (cluster_id, target, id) WHERE ready OR blockers > 0 OR baseline;",
+		"DROP INDEX IF EXISTS idx_evaluations_decided;",
+	}
+	if !slices.Equal(stmts, want) {
+		t.Errorf("statements = %q, want exactly %q", stmts, want)
+	}
+}

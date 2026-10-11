@@ -77,14 +77,15 @@ What one run reads. The evaluation step finds the old rows from an index on
 them oldest first and stopping at the cutoff, so a run with nothing older
 than the window reads the oldest index entries and no report. The
 subqueries that spare rows (each cluster's latest snapshot, and the newest
-decided evaluation of each cluster and target) run only when the index
+notification baseline, decided or `unknown` past the KB horizon, of each
+cluster and target) run only when the index
 range finds a row older than the cutoff, which in steady state is every
-daily run. The snapshot condition reads a covering index. The decided one
-walks `idx_evaluations_decided` and looks up the row of every decided
-evaluation for its leading columns (the index is partial, its predicate is
-re-checked against the table, so the plan says `USING INDEX`, not
-`USING COVERING INDEX`), never reading its report, so its cost
-follows the number of decided evaluations and not their size. A prune that
+daily run. The snapshot condition reads a covering index. The baseline one
+walks `idx_evaluations_baseline` (migration 0011) and looks up the row of
+every baseline evaluation for its leading columns (the index is partial,
+its predicate is re-checked against the table, so the plan says `USING
+INDEX`, not `USING COVERING INDEX`), never reading its report, so its cost
+follows the number of baseline evaluations and not their size. A prune that
 deletes nothing runs neither subquery. Before 0010 the step scanned the
 whole evaluations table, every run, the last short batch of a drain included; `created_at` is stored
 after the report on SQLite, so that read every report's overflow pages, all

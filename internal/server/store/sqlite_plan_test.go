@@ -46,8 +46,8 @@ func TestEvaluationReadsUseIndexes(t *testing.T) {
 		name, query, index string
 		args               []any
 	}{
-		{"LatestKnownEvaluation", sqliteLatestKnownQuery, "idx_evaluations_decided", []any{1, "1.36"}},
-		{"LatestKnownEvaluation id (the commit's baseline check)", sqliteLatestKnownIDQuery, "idx_evaluations_decided", []any{1, "1.36"}},
+		{"LatestKnownEvaluation", sqliteLatestKnownQuery, "idx_evaluations_baseline", []any{1, "1.36"}},
+		{"LatestKnownEvaluation id (the commit's baseline check)", sqliteLatestKnownIDQuery, "idx_evaluations_baseline", []any{1, "1.36"}},
 		{"LatestEvaluation", sqliteLatestEvaluationQuery, "idx_evaluations_cluster_target_id", []any{1, "1.36"}},
 		{"ScoreHistory", sqliteScoreHistoryQuery, "idx_evaluations_cluster_target_id", []any{1, "1.36", 100}},
 		{"CurrentEvaluation", sqliteCurrentEvaluationQuery, "idx_evaluations_snapshot_target_id", []any{1, "1.36"}},
@@ -243,10 +243,10 @@ func TestPruneEvaluationDrainUsesCreatedAtIndex(t *testing.T) {
 		t.Errorf("plan = %q, want a search of idx_evaluations_created_at bounded by created_at<?", plan)
 	}
 	// The outer DELETE looks the ids up by primary key. The subquery of
-	// the newest decided evaluations walks the partial index
-	// idx_evaluations_decided, which is not a covering index: its
-	// "ready = 1 OR blockers > 0" predicate is re-checked against the
-	// table row, so each decided evaluation's row is looked up for its
+	// the newest baselines walks the partial index
+	// idx_evaluations_baseline, which is not a covering index: its
+	// "ready = 1 OR blockers > 0 OR baseline = 1" predicate is re-checked
+	// against the table row, so each baseline evaluation's row is looked up for its
 	// leading columns (never its report overflow). It runs only when the
 	// created_at range finds a row older than the cutoff. A bare
 	// "SCAN evaluations" would be the table itself, reports and all.
@@ -255,8 +255,8 @@ func TestPruneEvaluationDrainUsesCreatedAtIndex(t *testing.T) {
 			t.Errorf("plan step %q scans every evaluation (plan = %q)", step, plan)
 		}
 	}
-	if !strings.Contains(plan, "SCAN evaluations USING INDEX idx_evaluations_decided") {
-		t.Errorf("plan = %q, want the decided-evaluation subquery to walk idx_evaluations_decided", plan)
+	if !strings.Contains(plan, "SCAN evaluations USING INDEX idx_evaluations_baseline") {
+		t.Errorf("plan = %q, want the decided-evaluation subquery to walk idx_evaluations_baseline", plan)
 	}
 	if strings.Contains(plan, "TEMP B-TREE") {
 		t.Errorf("plan = %q, want no sort: the index delivers the order", plan)

@@ -326,6 +326,42 @@ helm get values upgradescope -n upgradescope | diff values-before.yaml -
     false, `DROP INDEX` it and build it again. Replicas of the old
     version keep working with the index present; it adds a little cost to
     each insert.
+- **Migration 0011 adds a column and rebuilds an index on `evaluations`
+  (#380).** It adds `evaluations.baseline` (an `unknown` pass past the
+  knowledge base's horizon can be a notification baseline) and replaces
+  0009's partial index `idx_evaluations_decided` with
+  `idx_evaluations_baseline`, whose predicate also takes the new column.
+  The column is nullable with no default, so adding it rewrites no row; the
+  index is built from the existing table, like 0010's.
+  - *SQLite* builds it at the first start, before the server serves.
+  - *Postgres* builds it with `CREATE INDEX` inside the migration's
+    transaction, which blocks every insert, update and delete on
+    `evaluations` until the build finishes, with the same effect on the
+    old replicas' pushes as 0010 (above). The build time on a large
+    Postgres database was not measured. On a large database, upgrade in a
+    quiet window, or add the column and build the index first, without
+    blocking writes, and let the migration find them:
+
+    ```sql
+    ALTER TABLE evaluations ADD COLUMN IF NOT EXISTS baseline BOOLEAN;
+    CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_evaluations_baseline
+      ON evaluations (cluster_id, target, id)
+      WHERE ready OR blockers > 0 OR baseline;
+    ```
+
+    The migration is `ADD COLUMN IF NOT EXISTS` and `CREATE INDEX IF NOT
+    EXISTS` with those names, so it then only drops
+    `idx_evaluations_decided`
+    (`TestPostgresMigration0011AcceptsAPrebuiltBaselineIndex` runs this
+    against a real Postgres). The `ALTER TABLE` takes a brief exclusive
+    lock and rewrites nothing. Replicas of the old version write `NULL`
+    to the column (a decided row is still a baseline, an `unknown` one is
+    not, as before), and their query for the last decided evaluation,
+    `ready OR blockers > 0`, implies the new index's predicate, so it
+    keeps an index during a rolling upgrade. Check a `CONCURRENTLY` build
+    as for 0010: `SELECT indisvalid FROM pg_index WHERE indexrelid =
+    'idx_evaluations_baseline'::regclass`, and if it is false, `DROP
+    INDEX` it and build it again.
 - **Team-scoped reads (0.2.0).** The migration that adds read tokens also
   records, with every evaluation, the teams it names. Evaluations written
   before it have none, so the first start re-evaluates every stored
@@ -358,8 +394,9 @@ helm get values upgradescope -n upgradescope | diff values-before.yaml -
   `unknown` rather than `ready` until the agent runs the server's data.
   Upgrade the agents with the server, or expect `unknown` in between
   ([what a push is judged as](../operations.md#what-a-push-is-judged-as)).
-  That move sends no notification (a pass whose verdict is unknown is not
-  news and is not a baseline, [Running the server](../operations.md#notifications)),
+  That move sends no notification (an unknown pass behind a required gap
+  that hides findings, a collector failure or this KB skew, is not news
+  and is not a baseline, [Running the server](../operations.md#notifications)),
   so upgrading the server does not notify every cluster whose agent is still
   on older data, and neither does the agent catching up. Findings the server's
   newer data does flag are announced as usual.
