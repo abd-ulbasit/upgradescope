@@ -219,11 +219,12 @@ func validPushSettings(cmd *cobra.Command, opts *agentOptions) error {
 // buildAgentRESTConfig prefers in-cluster config (the agent's normal home)
 // and falls back to kubeconfig loading rules — the same rules as scan. An
 // explicit --kubeconfig or --context skips the in-cluster attempt entirely.
-// requestTimeout becomes rest.Config.Timeout (see scanRESTConfig).
+// requestTimeout becomes rest.Config.Timeout, and the config carries the
+// release-stamped user agent (see scanRESTConfig).
 var buildAgentRESTConfig = func(kubeconfig, kubecontext string, requestTimeout time.Duration) (*rest.Config, error) {
 	if kubeconfig == "" && kubecontext == "" {
 		if cfg, err := rest.InClusterConfig(); err == nil {
-			cfg.Timeout = requestTimeout
+			applyClientDefaults(cfg, requestTimeout)
 			return cfg, nil
 		}
 	}
@@ -236,7 +237,7 @@ var buildAgentRESTConfig = func(kubeconfig, kubecontext string, requestTimeout t
 	if err != nil {
 		return nil, fmt.Errorf("load kubeconfig (not in-cluster, no kubeconfig found): %w", err)
 	}
-	cfg.Timeout = requestTimeout
+	applyClientDefaults(cfg, requestTimeout)
 	return cfg, nil
 }
 

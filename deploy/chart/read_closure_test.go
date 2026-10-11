@@ -93,14 +93,16 @@ func TestServerExtraArgReadFlagsMustNotContradictTheChart(t *testing.T) {
 	trues := []string{"", "=true", "=1", "=t", "=T", "=TRUE", "=True"}
 	falses := []string{"=false", "=0", "=f", "=F", "=FALSE", "=False"}
 	for _, m := range modes {
-		render := func(args ...string) string {
-			sets := append(slices.Clone(base), m.sets...)
-			for i, a := range args {
-				sets = append(sets, "server.extraArgs["+strconv.Itoa(i)+"]="+a)
-			}
-			return renderErr(t, sets...)
-		}
 		t.Run(m.name, func(t *testing.T) {
+			// render binds the subtest's t: helmBin then skips the subtest, not
+			// the parent (a Skip on a parent while a subtest runs fails the package).
+			render := func(args ...string) string {
+				sets := append(slices.Clone(base), m.sets...)
+				for i, a := range args {
+					sets = append(sets, "server.extraArgs["+strconv.Itoa(i)+"]="+a)
+				}
+				return renderErr(t, sets...)
+			}
 			if m.other != "" {
 				for _, v := range trues {
 					msg := render(m.other + v)

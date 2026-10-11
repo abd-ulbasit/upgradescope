@@ -339,6 +339,7 @@ jobs:
     # failing does not hold this one back).
     if: needs.api-lifecycle-verify.result == 'success'
     runs-on: ubuntu-latest
+    timeout-minutes: 15 # a hung push or create-pull-request ends cancelled, which report-failure reports
     permissions:
       contents: write # push the bot branch
       pull-requests: write # open or update its PR
@@ -664,6 +665,7 @@ jobs:
     # failing does not hold this one back).
     if: needs.registry-verify.result == 'success'
     runs-on: ubuntu-latest
+    timeout-minutes: 15 # a hung push or create-pull-request ends cancelled, which report-failure reports
     permissions:
       contents: write # push the bot branch
       pull-requests: write # open or update its PR
@@ -809,13 +811,21 @@ jobs:
   report-failure:
     needs: [stage, api-lifecycle-run, registry-run, api-lifecycle-verify, registry-verify, api-lifecycle-pr, registry-pr, cleanup]
     # A pipeline whose build run failed stops at its -run job (a failure to
-    # GitHub); its verify and PR jobs are then skipped, which is not.
+    # GitHub); its verify and PR jobs are then skipped, which is not. A job
+    # that hits its timeout-minutes ends "cancelled", not "failure", so that
+    # is reported too; !cancelled() keeps a person cancelling the whole run
+    # quiet (this job is then skipped).
     if: >-
       !cancelled() && (needs.stage.result == 'failure' ||
       needs.api-lifecycle-run.result == 'failure' || needs.registry-run.result == 'failure' ||
       needs.api-lifecycle-verify.result == 'failure' || needs.registry-verify.result == 'failure' ||
-      needs.api-lifecycle-pr.result == 'failure' || needs.registry-pr.result == 'failure')
+      needs.api-lifecycle-pr.result == 'failure' || needs.registry-pr.result == 'failure' ||
+      needs.stage.result == 'cancelled' ||
+      needs.api-lifecycle-run.result == 'cancelled' || needs.registry-run.result == 'cancelled' ||
+      needs.api-lifecycle-verify.result == 'cancelled' || needs.registry-verify.result == 'cancelled' ||
+      needs.api-lifecycle-pr.result == 'cancelled' || needs.registry-pr.result == 'cancelled')
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       issues: write
     env:

@@ -37,7 +37,9 @@ web-test:
 	./hack/web-test.sh
 
 # The CI unit gate: gofmt, go vet, go test -race -count=1, for the main
-# module and every tools/ module. Needs only Go. CI runs it as two shards
+# module and every tools/ module. Needs only Go: the tests that render the
+# chart skip without helm (hack/test-nohelm_test.sh proves it; make chart-test
+# runs them). CI runs it as two shards
 # (TEST_SHARD=1/2, 2/2: every package in exactly one, balanced by
 # hack/test-durations.txt); TEST_SCOPE=readers runs only the packages whose
 # tests read the repository outside Go code (hack/test-readers.txt), for a
@@ -358,6 +360,7 @@ hack-test:
 	./hack/shard_test.sh
 	./hack/test-heap_test.sh
 	./hack/test_test.sh
+	./hack/test-nohelm_test.sh
 	./hack/cross-build_test.sh
 	./hack/dashboard-smoke_test.sh
 	./hack/vulncheck_test.sh

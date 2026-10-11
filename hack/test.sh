@@ -6,7 +6,10 @@
 #   - go test -race -count=1. The agent loop, the server's ingest/gate caps
 #     and the notifier are concurrent; -count=1 so a cached pass never stands
 #     in for a run. Integration suites stay env-gated (UPGRADESCOPE_IT,
-#     UPGRADESCOPE_PG_TEST_DSN), so this needs no cluster, database or Docker.
+#     UPGRADESCOPE_PG_TEST_DSN), so this needs no cluster, database or Docker,
+#     and no helm: the tests that render the chart skip without it
+#     (hack/test-nohelm_test.sh runs the packages that do with helm hidden;
+#     make chart-test runs them for real).
 #     The heap-bound tests skip under -race; make test-heap runs them.
 #
 # Two ways to run less of it, both for CI (a laptop runs it all):

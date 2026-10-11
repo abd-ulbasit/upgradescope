@@ -321,7 +321,8 @@ func apiServerURL(cfg *rest.Config) string {
 // explicit path and context override, and returns the name of the context
 // it resolved to. requestTimeout becomes rest.Config.Timeout: client-go
 // gives up on any single request after it, so an API server that accepts
-// a request and never answers fails that request instead of the scan.
+// a request and never answers fails that request instead of the scan. The
+// config also carries the release-stamped user agent (applyClientDefaults).
 func scanRESTConfig(kubeconfig, kubecontext string, requestTimeout time.Duration) (*rest.Config, string, error) {
 	rules := clientcmd.NewDefaultClientConfigLoadingRules()
 	if kubeconfig != "" {
@@ -341,7 +342,7 @@ func scanRESTConfig(kubeconfig, kubecontext string, requestTimeout time.Duration
 		}
 		return nil, "", fmt.Errorf("load kubeconfig: %w", err)
 	}
-	cfg.Timeout = requestTimeout
+	applyClientDefaults(cfg, requestTimeout)
 	ctxName := kubecontext
 	if ctxName == "" {
 		if raw, rerr := loader.RawConfig(); rerr == nil {
