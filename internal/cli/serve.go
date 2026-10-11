@@ -96,7 +96,7 @@ var runServe = func(ctx context.Context, opts serveOptions) error {
 	if limit, ok := applyMemoryLimit(os.Getenv, cgroupRoot); ok {
 		log.Printf("serve: GOMEMLIMIT unset: Go memory limit set to %d bytes, 90%% of the cgroup's memory limit", limit)
 	}
-	st, err := dbFlags{db: opts.db, dbURL: opts.dbURL}.openStore()
+	st, err := dbFlags{db: opts.db, dbURL: opts.dbURL}.openStore(ctx)
 	if err != nil {
 		return err
 	}

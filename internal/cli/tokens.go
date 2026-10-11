@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
@@ -144,11 +145,20 @@ func (f *dbFlags) resolve(cmd *cobra.Command) error {
 	return f.dbURLSecret.resolve(cmd)
 }
 
+// openPostgresStore is store.OpenPostgres, a package var so command tests
+// can check which context the commands open the database under.
+var openPostgresStore = func(ctx context.Context, dsn string) (store.Store, error) {
+	return store.OpenPostgres(ctx, dsn)
+}
+
 // openStore opens the selected backend: Postgres when --db-url is set,
-// otherwise SQLite at --db (creating parent directories).
-func (f dbFlags) openStore() (store.Store, error) {
+// otherwise SQLite at --db (creating parent directories). ctx bounds the
+// Postgres open, its migrations included: the commands pass their own
+// context, and serve's is cancelled by SIGINT/SIGTERM, so a signal during
+// a long migration abandons it instead of waiting for it.
+func (f dbFlags) openStore(ctx context.Context) (store.Store, error) {
 	if f.dbURL != "" {
-		st, err := store.OpenPostgres(f.dbURL)
+		st, err := openPostgresStore(ctx, f.dbURL)
 		if err != nil {
 			return nil, fmt.Errorf("open postgres store: %w", err)
 		}
@@ -257,7 +267,7 @@ dashboard users or CI.`,
 			if err := flags.resolve(cmd); err != nil {
 				return err
 			}
-			st, err := flags.openStore()
+			st, err := flags.openStore(cmd.Context())
 			if err != nil {
 				return err
 			}
@@ -345,7 +355,7 @@ func createReadToken(cmd *cobra.Command, flags dbFlags, raw []string) error {
 	if err := flags.resolve(cmd); err != nil {
 		return err
 	}
-	st, err := flags.openStore()
+	st, err := flags.openStore(cmd.Context())
 	if err != nil {
 		return err
 	}
@@ -387,7 +397,7 @@ func newTokensListCmd() *cobra.Command {
 			if err := flags.resolve(cmd); err != nil {
 				return err
 			}
-			st, err := flags.openStore()
+			st, err := flags.openStore(cmd.Context())
 			if err != nil {
 				return err
 			}
@@ -475,7 +485,7 @@ func newTokensRevokeCmd() *cobra.Command {
 			if err := flags.resolve(cmd); err != nil {
 				return err
 			}
-			st, err := flags.openStore()
+			st, err := flags.openStore(cmd.Context())
 			if err != nil {
 				return err
 			}

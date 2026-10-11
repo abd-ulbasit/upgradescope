@@ -174,7 +174,7 @@ func TestMigration0007BackfillsNotAssessedPostgres(t *testing.T) {
 		}
 	}
 
-	s, err := OpenPostgres(schemaDSN) // applies 0007
+	s, err := OpenPostgres(context.Background(), schemaDSN) // applies 0007
 	if err != nil {
 		t.Fatalf("OpenPostgres: %v", err)
 	}

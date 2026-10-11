@@ -69,6 +69,19 @@ func migratePostgres(ctx context.Context, db *sql.DB, fsys fs.FS) ([]string, err
 		return nil, fmt.Errorf("migration connection: %w", err)
 	}
 	defer conn.Close()
+	// A killed or cancelled migrator closes its socket, but Postgres only
+	// notices a vanished client when it next writes to it, so a long
+	// statement (0010's CREATE INDEX) would run on, holding its locks and
+	// this session's migration lock, and fail the next start too. With
+	// client_connection_check_interval the backend polls the socket while
+	// a statement runs and aborts it (rolling back that migration's
+	// transaction) within seconds. PostgreSQL 14+, on an OS with POLLRDHUP
+	// (Linux); older servers reject the parameter and the error is
+	// ignored: they keep the old behaviour, and rely on the CancelRequest
+	// pgx sends when it abandons a statement, which a process exiting at
+	// once may never send. The setting stays on the session when it returns
+	// to the pool, where it is harmless.
+	_, _ = conn.ExecContext(ctx, `SET client_connection_check_interval = '2s'`)
 	if _, err := conn.ExecContext(ctx, `SELECT pg_advisory_lock($1)`, pgMigrationLockKey); err != nil {
 		return nil, fmt.Errorf("acquire migration lock: %w", err)
 	}

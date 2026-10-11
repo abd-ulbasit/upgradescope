@@ -276,7 +276,18 @@ helm get values upgradescope -n upgradescope | diff values-before.yaml -
   default, before the kubelet restarts the pod; liveness and readiness
   start once it passes. For a large database or slow storage, raise
   `server.startupProbe.failureThreshold` for the upgrade (120 is 10
-  minutes) so a migration is not restarted part-way.
+  minutes) so a migration is not restarted part-way. This holds for SQLite
+  and Postgres alike: on Postgres only the connection check at open has a
+  bound of its own, 10 seconds, so a wrong address fails fast, and a
+  replica that waits for another replica's migrations (on the migration's
+  advisory lock), or runs a long migration itself, is bounded by the
+  startupProbe alone. A pod stopped mid-migration (a SIGTERM, a probe's
+  restart, an eviction) exits and loses only the migration in flight: each
+  migration is its own transaction, which rolls back, and the next start
+  re-runs it. On Postgres 14 and later the interrupted statement is also
+  cancelled or aborted server-side within seconds, so it does not keep its
+  locks, or the migration lock the next start waits on; an older server
+  may run it to its end first.
 - **Migration 0010 builds an index on `evaluations`.** Retention finds old
   evaluations from `idx_evaluations_created_at`
   ([Retention and backup](retention-and-backup.md)), and the first start

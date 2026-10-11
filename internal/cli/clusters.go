@@ -112,7 +112,7 @@ func (c *clusterTarget) open(cmd *cobra.Command) (clusterAdmin, error) {
 		if !cmd.Flags().Changed("db") && c.db.dbURL == "" {
 			return nil, errors.New("name the fleet: --server-url URL for a running server, or its database with --db PATH, --db-url, --db-url-file or $UPGRADESCOPE_DB_URL")
 		}
-		st, err := c.db.openStore()
+		st, err := c.db.openStore(cmd.Context())
 		if err != nil {
 			return nil, err
 		}
