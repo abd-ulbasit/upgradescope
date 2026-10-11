@@ -14,7 +14,6 @@ import (
 	"github.com/abd-ulbasit/upgradescope/internal/codequality/codequalitytest"
 	"github.com/abd-ulbasit/upgradescope/internal/inventory"
 	"github.com/abd-ulbasit/upgradescope/internal/junit/junittest"
-	"github.com/abd-ulbasit/upgradescope/internal/sarif/sariftest"
 )
 
 // annotatedPSP is pspManifest accepted by its own upgradescope.basit.engineer/ignore
@@ -161,8 +160,9 @@ func TestGateConfigRules(t *testing.T) {
 }
 
 // #44: suppressed findings leave the CI formats as they leave scan's:
-// SARIF results with an external suppression, JUnit test cases skipped,
-// Code Quality entries left out. All of them pass the gate.
+// SARIF has no result for them (#375: code scanning ignores a result's
+// suppressions and opens an alert), JUnit test cases are skipped, Code
+// Quality entries left out. All of them pass the gate.
 func TestGateSuppressedCIFormats(t *testing.T) {
 	ts := httptest.NewServer(newTestServer(t, newFakeStore()).Handler())
 	defer ts.Close()
@@ -172,24 +172,11 @@ func TestGateSuppressedCIFormats(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("sarif: %d, want 200 (body %s)", resp.StatusCode, raw)
 	}
-	sariftest.AssertGitHubAcceptable(t, raw)
-	var log struct {
-		Runs []struct {
-			Results []struct {
-				RuleID       string `json:"ruleId"`
-				Suppressions []struct {
-					Kind          string `json:"kind"`
-					Justification string `json:"justification"`
-				} `json:"suppressions"`
-			} `json:"results"`
-		} `json:"runs"`
+	if got := sarifResults(t, raw); len(got) != 0 || strings.Contains(string(raw), `"suppressions"`) {
+		t.Errorf("SARIF results = %v, want none for the suppressed PSP\n%s", got, raw)
 	}
-	if err := json.Unmarshal(raw, &log); err != nil || len(log.Runs) != 1 {
-		t.Fatalf("SARIF = %v %s", err, raw)
-	}
-	if r := log.Runs[0].Results; len(r) != 1 || r[0].RuleID != "removed-api/policy/v1beta1/PodSecurityPolicy" || len(r[0].Suppressions) != 1 ||
-		r[0].Suppressions[0].Kind != "external" || r[0].Suppressions[0].Justification != "PSPs are removed before the upgrade" {
-		t.Errorf("SARIF results = %+v, want the PSP with an external suppression", r)
+	if !strings.Contains(string(raw), "1 finding accepted by ignore rules or annotations is not uploaded; see the JSON report") {
+		t.Errorf("SARIF lacks the run-level note:\n%s", raw)
 	}
 
 	resp, raw = postGate(t, ts, q+"&format=junit", "", pspManifest, "application/x-yaml")
@@ -276,11 +263,11 @@ func TestGateClusterSuppression(t *testing.T) {
 		t.Errorf("SARIF mentions the cluster's suppressed PSP:\n%s", raw)
 	}
 
-	// A manifest PSP with the rule: introduced, suppressed, and in SARIF
-	// as a suppressed result.
+	// A manifest PSP with the rule: introduced and suppressed, so not a
+	// SARIF result either (code scanning would open an alert for it).
 	_, raw = postGate(t, ts, q+"&format=sarif&path=deploy/rendered.yaml", "", pspManifest, "application/x-yaml")
-	if !strings.Contains(string(raw), "PSPs are removed before the upgrade") {
-		t.Errorf("SARIF lacks the manifest PSP's suppression:\n%s", raw)
+	if got := sarifResults(t, raw)[pspKey]; got != 0 {
+		t.Errorf("SARIF has results for the manifest PSP although it is suppressed:\n%s", raw)
 	}
 }
 
@@ -349,5 +336,23 @@ func TestGateConfigBounds(t *testing.T) {
 	}
 	if resp, raw := postGate(t, ts, "?target=1.35"+withConfig(fits), "", pspManifest, "application/x-yaml"); resp.StatusCode != http.StatusOK {
 		t.Errorf("config of exactly maxGateConfigBytes: %d %s, want 200", resp.StatusCode, raw)
+	}
+}
+
+// #375: /gate?format=sarif drops a suppressed located finding from the
+// results and keeps an unsuppressed one, so the Action's uploaded SARIF
+// opens no code-scanning alert for an accepted finding.
+func TestGateSARIFSuppressedOmitted(t *testing.T) {
+	ts := httptest.NewServer(newTestServer(t, newFakeStore()).Handler())
+	defer ts.Close()
+	q := "?target=1.35&path=deploy/rendered.yaml&format=sarif"
+
+	_, raw := postGate(t, ts, q, "", pspManifest, "application/x-yaml")
+	if got := sarifResults(t, raw)[pspKey]; got != 1 {
+		t.Errorf("unsuppressed PSP results = %v, want one\n%s", got, raw)
+	}
+	_, raw = postGate(t, ts, q+withConfig(pspRule), "", pspManifest, "application/x-yaml")
+	if got := sarifResults(t, raw)[pspKey]; got != 0 {
+		t.Errorf("suppressed PSP results = %v, want none\n%s", got, raw)
 	}
 }

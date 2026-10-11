@@ -651,10 +651,12 @@ paths:
         `cluster`, stored) objects, and the ignore rules of a
         `.upgradescope.yaml` sent in `config`. Suppressed findings count
         toward neither the verdict nor `fail-on`; the JSON answer lists
-        them in `suppressed` with `suppressedCount`, SARIF as results with
-        an external suppression, JUnit as skipped test cases, and Code
-        Quality leaves them out. An expired rule no longer applies; it and
-        an annotation without a reason are named in `warnings`. There is
+        them in `suppressed` with `suppressedCount`, SARIF with no result
+        for them (GitHub code scanning ignores a result's `suppressions` and
+        would open an alert; one run-level note counts them instead), JUnit
+        as skipped test cases, and Code Quality leaves them out. An expired rule
+        no longer applies; it and an annotation without a reason are named in
+        `warnings`. There is
         no baseline input: with `cluster`, the cluster's own findings are
         the baseline (`source: cluster`), and manifest-level debt is
         accepted with `scan --baseline` or ignore rules.

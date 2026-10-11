@@ -14,25 +14,25 @@ import (
 
 const pspKey = "removed-api/policy/v1beta1/PodSecurityPolicy"
 
-// sarifResults decodes a SARIF answer's results: rule and whether each is
-// suppressed.
-func sarifResults(t *testing.T, raw []byte) map[string][]bool {
+// sarifResults decodes a SARIF answer's results: how many results each rule
+// has. Suppressed findings are never results (#375), so a key that was
+// accepted is absent.
+func sarifResults(t *testing.T, raw []byte) map[string]int {
 	t.Helper()
 	sariftest.AssertGitHubAcceptable(t, raw)
 	var log struct {
 		Runs []struct {
 			Results []struct {
-				RuleID       string            `json:"ruleId"`
-				Suppressions []json.RawMessage `json:"suppressions"`
+				RuleID string `json:"ruleId"`
 			} `json:"results"`
 		} `json:"runs"`
 	}
 	if err := json.Unmarshal(raw, &log); err != nil || len(log.Runs) != 1 {
 		t.Fatalf("SARIF = %v %s", err, raw)
 	}
-	out := map[string][]bool{}
+	out := map[string]int{}
 	for _, r := range log.Runs[0].Results {
-		out[r.RuleID] = append(out[r.RuleID], len(r.Suppressions) > 0)
+		out[r.RuleID]++
 	}
 	return out
 }
@@ -40,8 +40,8 @@ func sarifResults(t *testing.T, raw []byte) map[string][]bool {
 // assertClusterRemainder checks a gate answer in which the manifests' only
 // object of key is suppressed while the cluster still has objects there:
 // the PR passes, the remaining finding is the cluster's, and the CI
-// formats carry the manifests' suppressed object only, never the
-// cluster's remainder as a PR result.
+// formats carry no result for the manifests' suppressed object and never
+// the cluster's remainder as a PR result.
 func assertClusterRemainder(t *testing.T, ts *httptest.Server, q, manifest, key string) {
 	t.Helper()
 	resp, raw := postGate(t, ts, q, "", manifest, "application/x-yaml")
@@ -59,8 +59,8 @@ func assertClusterRemainder(t *testing.T, ts *httptest.Server, q, manifest, key 
 	}
 
 	resp, raw = postGate(t, ts, q+"&format=sarif", "", manifest, "application/x-yaml")
-	if got := sarifResults(t, raw)[key]; resp.StatusCode != http.StatusOK || len(got) != 1 || !got[0] {
-		t.Errorf("sarif: %d %s results (suppressed?) %v, want 200 and only the manifests' suppressed object\n%s", resp.StatusCode, key, got, raw)
+	if got := sarifResults(t, raw)[key]; resp.StatusCode != http.StatusOK || got != 0 {
+		t.Errorf("sarif: %d %s results %v, want 200 and none: the manifests' object is suppressed, the cluster's remainder is not the PR's\n%s", resp.StatusCode, key, got, raw)
 	}
 	resp, raw = postGate(t, ts, q+"&format=gitlab-codequality", "", manifest, "application/x-yaml")
 	if entries := codequalitytest.AssertGitLabAcceptable(t, raw); resp.StatusCode != http.StatusOK || len(entries) != 0 {
@@ -98,10 +98,10 @@ func TestGateClusterSuppressedManifestObject(t *testing.T) {
 	})
 	t.Run("whole-finding rule", func(t *testing.T) {
 		// A rule without selectors takes the cluster's objects too: nothing
-		// remains, and SARIF carries the manifests' object as suppressed.
+		// remains, and SARIF carries no result for it (suppressed findings are not results).
 		resp, raw := postGate(t, ts, q+withConfig(pspRule)+"&format=sarif", "", pspManifest, "application/x-yaml")
-		if got := sarifResults(t, raw)[pspKey]; resp.StatusCode != http.StatusOK || len(got) != 1 || !got[0] {
-			t.Errorf("sarif: %d %s results (suppressed?) %v, want 200 and the manifests' suppressed object\n%s", resp.StatusCode, pspKey, got, raw)
+		if got := sarifResults(t, raw)[pspKey]; resp.StatusCode != http.StatusOK || got != 0 {
+			t.Errorf("sarif: %d %s results %v, want 200 and none (suppressed)\n%s", resp.StatusCode, pspKey, got, raw)
 		}
 	})
 }

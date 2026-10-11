@@ -106,16 +106,7 @@ type sarifResult struct {
 	PartialFingerprints map[string]string `json:"partialFingerprints"`
 	// BaselineState is "new" or "unchanged" when the report was compared
 	// with a baseline (engine.Finding.BaselineState), else omitted.
-	BaselineState string             `json:"baselineState,omitempty"`
-	Suppressions  []sarifSuppression `json:"suppressions,omitempty"`
-}
-
-// sarifSuppression marks a result accepted by an ignore rule or object
-// annotation; kind is always "external" (the reason lives outside the
-// scanned file, or in an annotation SARIF cannot point at).
-type sarifSuppression struct {
-	Kind          string `json:"kind"`
-	Justification string `json:"justification,omitempty"`
+	BaselineState string `json:"baselineState,omitempty"`
 }
 
 type sarifLocation struct {
@@ -216,10 +207,14 @@ func anchored(f engine.Finding) []inventory.ObjectRef {
 // as a clean pass
 // that the report is not.
 //
-// Suppressed findings (Report.Suppressed) follow: their located objects
-// are results carrying an external suppression whose justification is the
-// reason, the others are notes. A report compared with a baseline sets
-// each result's baselineState.
+// Suppressed findings (Report.Suppressed) are never results: GitHub code
+// scanning ignores a result's "suppressions" property and opens an alert
+// for every located result at its level, so a result for an accepted
+// finding would show as an open alert in the Security tab although the
+// gate passed (#375). One run-level note counts the located ones left
+// out; the unanchored ones stay notes with their reason. The JSON
+// report, the step summary and JUnit list them all. A report compared
+// with a baseline sets each result's baselineState.
 func Write(w io.Writer, r engine.Report, toolVersion string) error {
 	rules := []sarifRule{}
 	ruleIndex := map[string]int{}
@@ -229,7 +224,7 @@ func Write(w io.Writer, r engine.Report, toolVersion string) error {
 	omitted := 0
 
 	// addResults adds one result per located object of f, with f's rule.
-	addResults := func(f engine.Finding, objs []inventory.ObjectRef, suppressions []sarifSuppression) {
+	addResults := func(f engine.Finding, objs []inventory.ObjectRef) {
 		id := f.Key
 		if id == "" {
 			id = string(f.Category)
@@ -258,7 +253,6 @@ func Write(w io.Writer, r engine.Report, toolVersion string) error {
 				}}},
 				PartialFingerprints: map[string]string{fingerprintKey: fp},
 				BaselineState:       string(f.BaselineState),
-				Suppressions:        suppressions,
 			})
 		}
 	}
@@ -273,17 +267,20 @@ func Write(w io.Writer, r engine.Report, toolVersion string) error {
 		if n := f.ObjectsOmitted + len(f.Objects) - len(objs); n > 0 {
 			notes = append(notes, notification(f, "note", unlistedMessage(f, n)))
 		}
-		addResults(f, objs, nil)
+		addResults(f, objs)
 	}
-	// Suppressed findings stay visible: located objects are results with
-	// an external suppression (code scanning shows them as dismissed),
-	// the rest are notes.
+	// Suppressed findings are not results (see Write): located ones are
+	// only counted, unanchored ones are notes with their reason.
+	notUploaded := 0
 	for _, s := range r.Suppressed {
-		if objs := anchored(s.Finding); len(objs) > 0 {
-			addResults(s.Finding, objs, []sarifSuppression{{Kind: "external", Justification: s.Reason}})
+		if len(anchored(s.Finding)) > 0 {
+			notUploaded++
 		} else {
 			notes = append(notes, notification(s.Finding, "note", suppressedMessage(s)))
 		}
+	}
+	if notUploaded > 0 {
+		notes = append(notes, sarifNotification{Level: "note", Message: sarifText{Text: notUploadedMessage(notUploaded)}})
 	}
 
 	// What was not assessed follows (all of it is in run.properties): a
@@ -417,6 +414,15 @@ func unanchoredMessage(f engine.Finding) string {
 		msg += " Fix: " + sentence(f.Remediation)
 	}
 	return msg
+}
+
+// notUploadedMessage is the run-level note that n located findings were
+// accepted and so are not results.
+func notUploadedMessage(n int) string {
+	if n == 1 {
+		return "1 finding accepted by ignore rules or annotations is not uploaded; see the JSON report."
+	}
+	return fmt.Sprintf("%d findings accepted by ignore rules or annotations are not uploaded; see the JSON report.", n)
 }
 
 // suppressedMessage describes a suppressed finding without a file

@@ -18,7 +18,8 @@ Contents:
 5. [The server gate](#the-server-gate)
 6. [The agent: `spec.ignore`](#the-agent-specignore)
 7. [Finding keys](#finding-keys)
-8. [Who can turn the gate off](#who-can-turn-the-gate-off)
+8. [Code scanning and accepted findings](#code-scanning-and-accepted-findings)
+9. [Who can turn the gate off](#who-can-turn-the-gate-off)
 
 ## Ignore rules (`.upgradescope.yaml`)
 
@@ -27,11 +28,10 @@ to live with for now, such as an EOL ingress-nginx that is being migrated,
 or a removed API in manifests that are never deployed. A suppressed finding:
 
 - does not count toward the score, the verdict or the `--fail-on` gate;
-- is still reported, with its reason, in every output format: a `SUPPRESSED`
-  section and an `N suppressed` line in the table, a `suppressed` array in
-  JSON, and SARIF results that carry a `suppressions` entry (`kind:
-  external`, `justification` = the reason), so GitHub code scanning shows
-  them as dismissed instead of dropping them.
+- is still reported, with its reason, in the table (a `SUPPRESSED` section
+  and an `N suppressed` line), in JSON (a `suppressed` array), in the
+  Markdown step summary and in JUnit (skipped test cases). It is **not** a
+  SARIF result: see [Code scanning and accepted findings](#code-scanning-and-accepted-findings).
 
 ```yaml
 # .upgradescope.yaml
@@ -214,10 +214,11 @@ Suppressed findings count toward neither the verdict nor `fail-on`. With
 finding whose posted objects are all suppressed is not the pull request's,
 and objects the cluster already has at that key stay the cluster's. The
 JSON answer lists them in `suppressed` with a `suppressedCount`, and names
-expired rules and annotations without a reason in `warnings`. SARIF carries
-the manifests' suppressed findings as results with an external suppression,
-JUnit as skipped test cases, and GitLab Code Quality leaves them out, as
-`scan` does. With `?cluster=`, a suppressed finding that is the pull
+expired rules and annotations without a reason in `warnings`. SARIF has no result
+for them (only a note that counts them; see [Code scanning and accepted
+findings](#code-scanning-and-accepted-findings)), JUnit lists them as
+skipped test cases, and GitLab Code Quality leaves them out, as `scan`
+does. With `?cluster=`, a suppressed finding that is the pull
 request's only because the gate fails closed (for example a posted CRD
 that drops a stored version) is in the JSON `suppressed` list but not in
 the SARIF or JUnit answer.
@@ -323,6 +324,33 @@ drops those entries (it recognises them by the "is not served until"
 title), so the blocker comes back once as new under its own key; write the
 baseline again (`--write-baseline`) after you have decided to accept it.
 
+## Code scanning and accepted findings
+
+GitHub code scanning does not read the SARIF `suppressions` property: it
+opens an alert for every located result at its level, whatever the gate
+decided. A result for an accepted finding would therefore show as an open
+alert in the Security tab (and on the pull request's diff) although the
+gate passed. So `scan --output sarif`, `/gate?format=sarif` and the
+Action's `sarif-file` **leave suppressed findings out of the results
+altogether**. Instead the run carries one note, "N findings accepted by
+ignore rules or annotations are not uploaded; see the JSON report", and
+`run.properties.suppressed` holds the count. The accepted findings, their
+reasons and expiry stay in the JSON report, the step summary and JUnit.
+
+What does stay a result:
+
+- **Baseline-unchanged findings.** A finding the baseline already had is
+  still a result, marked `baselineState: unchanged`, and code scanning
+  opens an alert for it like any other. `--baseline` changes the gate, not
+  what code scanning shows. To keep it out of the Security tab, accept the
+  finding with an ignore rule or annotation instead.
+- **Unsuppressed findings**, as always.
+
+To dismiss an alert that is already open, use the code-scanning alerts API
+or GitHub's `advanced-security/dismiss-alerts` action, which reads
+non-empty `suppressions[]` from a SARIF file you produce yourself; the
+SARIF written here does not carry any.
+
 ## Who can turn the gate off
 
 Everything on this page that makes a finding stop counting is a file in the
@@ -330,8 +358,8 @@ repository being judged: the ignore rules, the annotations in the manifests
 and the baseline. In CI on a `pull_request` those files come from the pull
 request's own tree, so **a pull request can suppress its own findings and
 the gate then passes.** Nothing is hidden (the suppressed findings, their
-reasons and the rule's file are in the table, the step summary, the JSON and
-the SARIF, and the change is in the diff), but the gate does not stop an
+reasons and the rule's file are in the table, the step summary and the
+JSON, and the change is in the diff), but the gate does not stop an
 author who wants past it unless you pin its inputs:
 
 - **Ignore rules.** `.upgradescope.yaml` is found in the scan root, then at

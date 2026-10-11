@@ -241,8 +241,10 @@ func TestScanWriteBaselineRoundTrip(t *testing.T) {
 	}
 }
 
-// SARIF carries suppressions and baseline states end to end.
-func TestScanFilesSARIFSuppressedAndBaseline(t *testing.T) {
+// SARIF carries baseline states end to end and no result for a suppressed
+// finding (#375: code scanning ignores a result's suppressions and opens
+// an alert for it); the JSON report still lists it.
+func TestScanFilesSARIFSuppressedOmitted(t *testing.T) {
 	cfg := writeConfig(t, "ignore:\n  - key: removed-api/batch/v1beta1/CronJob\n    reason: nightly job retires with 1.36\n")
 	out, _, err := execScanFiles(t, "--files", "testdata/baseline/manifests", "--config", cfg,
 		"--baseline", "testdata/baseline/baseline.json", "--output", "sarif")
@@ -250,10 +252,39 @@ func TestScanFilesSARIFSuppressedAndBaseline(t *testing.T) {
 		t.Fatalf("err = %v, want ErrGateFailed (new Ingress and PDB)", err)
 	}
 	sariftest.AssertGitHubAcceptable(t, []byte(out))
-	for _, want := range []string{`"kind": "external"`, `"justification": "nightly job retires with 1.36"`, `"baselineState": "new"`} {
-		if !strings.Contains(out, want) {
-			t.Errorf("SARIF lacks %s:\n%s", want, out)
+	if !strings.Contains(out, `"baselineState": "new"`) {
+		t.Errorf("SARIF lacks the baseline state:\n%s", out)
+	}
+	var log struct {
+		Runs []struct {
+			Results []struct {
+				RuleID string `json:"ruleId"`
+			} `json:"results"`
+		} `json:"runs"`
+	}
+	if err := json.Unmarshal([]byte(out), &log); err != nil || len(log.Runs) != 1 {
+		t.Fatalf("SARIF = %v\n%s", err, out)
+	}
+	if len(log.Runs[0].Results) == 0 {
+		t.Fatalf("SARIF has no results, want the new Ingress and PDB\n%s", out)
+	}
+	for _, r := range log.Runs[0].Results {
+		if r.RuleID == "removed-api/batch/v1beta1/CronJob" {
+			t.Errorf("the suppressed CronJob is a SARIF result:\n%s", out)
 		}
+	}
+	if strings.Contains(out, `"suppressions"`) || !strings.Contains(out, "1 finding accepted by ignore rules or annotations is not uploaded; see the JSON report") {
+		t.Errorf("SARIF has suppressions or lacks the run-level note:\n%s", out)
+	}
+
+	// JSON still lists it.
+	js, _, err := execScanFiles(t, "--files", "testdata/baseline/manifests", "--config", cfg,
+		"--baseline", "testdata/baseline/baseline.json", "--output", "json")
+	if !errors.Is(err, ErrGateFailed) {
+		t.Fatalf("json: err = %v, want ErrGateFailed", err)
+	}
+	if !strings.Contains(js, `"suppressed"`) || !strings.Contains(js, "nightly job retires with 1.36") {
+		t.Errorf("JSON lacks the suppressed finding:\n%s", js)
 	}
 }
 

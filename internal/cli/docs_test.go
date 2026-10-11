@@ -736,3 +736,23 @@ func TestDocsTokenCommandsParse(t *testing.T) {
 		t.Fatal("found no tokens command in the docs; the pattern is stale")
 	}
 }
+
+// TestDocsNoDismissedClaim: GitHub code scanning ignores a SARIF result's
+// `suppressions` and opens an alert for it, so no page may say accepted
+// findings show up there as dismissed (#375). Accepted findings are not
+// SARIF results at all; the guide says so.
+func TestDocsNoDismissedClaim(t *testing.T) {
+	re := regexp.MustCompile(`(?is)(shows?|marks?|appears?|treats?)\s+(them|it|these|those|accepted\s+findings|suppressed\s+findings)\s+as\s+dismissed|SARIF\s+results\s+that\s+carry\s+a\s+` + "`?suppressions`?" + `|no\s+dismissed\s+state`)
+	for _, page := range []string{"README.md", "action/README.md", "docs/guides/suppressions-and-baselines.md", "docs/getting-started/ci-gate.md",
+		"docs/guides/other-ci.md", "docs/reference/api.md", "docs/reference/config.md", "api/openapi.yaml", "internal/sarif/sarif.go", "internal/sarif/suppress_test.go"} {
+		if m := re.FindString(readDoc(t, page)); m != "" {
+			t.Errorf("%s says %q: code scanning ignores SARIF suppressions and opens an alert, so accepted findings are not SARIF results", page, m)
+		}
+	}
+	guide := readDoc(t, "docs/guides/suppressions-and-baselines.md")
+	for _, want := range []string{"does not read the SARIF `suppressions` property", "leave suppressed findings out of the results"} {
+		if !strings.Contains(guide, want) {
+			t.Errorf("docs/guides/suppressions-and-baselines.md lost %q", want)
+		}
+	}
+}
