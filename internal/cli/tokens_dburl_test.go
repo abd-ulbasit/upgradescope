@@ -135,27 +135,32 @@ func TestTokensReadFlagsMatrix(t *testing.T) {
 // other (#382). Methods with a value receiver only read and are fine.
 func TestNoDBFlagsPassedByValue(t *testing.T) {
 	fset := token.NewFileSet()
-	pkgs, err := parser.ParseDir(fset, ".", func(fi os.FileInfo) bool { return !strings.HasSuffix(fi.Name(), "_test.go") }, 0)
+	names, err := filepath.Glob("*.go")
 	if err != nil {
 		t.Fatal(err)
 	}
 	checked := 0
-	for _, pkg := range pkgs {
-		for _, f := range pkg.Files {
-			ast.Inspect(f, func(n ast.Node) bool {
-				ft, ok := n.(*ast.FuncType)
-				if !ok || ft.Params == nil {
-					return true
-				}
-				for _, p := range ft.Params.List {
-					checked++
-					if id, ok := p.Type.(*ast.Ident); ok && id.Name == "dbFlags" {
-						t.Errorf("%s: dbFlags passed by value; take *dbFlags", fset.Position(p.Pos()))
-					}
-				}
-				return true
-			})
+	for _, name := range names {
+		if strings.HasSuffix(name, "_test.go") {
+			continue
 		}
+		f, err := parser.ParseFile(fset, name, nil, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ast.Inspect(f, func(n ast.Node) bool {
+			ft, ok := n.(*ast.FuncType)
+			if !ok || ft.Params == nil {
+				return true
+			}
+			for _, p := range ft.Params.List {
+				checked++
+				if id, ok := p.Type.(*ast.Ident); ok && id.Name == "dbFlags" {
+					t.Errorf("%s: dbFlags passed by value; take *dbFlags", fset.Position(p.Pos()))
+				}
+			}
+			return true
+		})
 	}
 	if checked == 0 {
 		t.Fatal("scanned no parameters: the check proves nothing")
