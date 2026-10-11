@@ -22,9 +22,10 @@ const DiscoveryMaxAge = time.Hour
 
 // DiscoveryCache keeps what API discovery returned between the agent's
 // ticks (#228), so a steady tick does not ask the apiserver again which
-// groups, versions and resources it serves: 4 requests of every tick,
-// asked by the GitOps detection and by api-usage, whose answer changes only
-// when the cluster's APIs do.
+// groups, versions and resources it serves: 4 requests of every tick, plus
+// one for each GitOps group-version the cluster serves (6 with the Argo CD
+// and Flux CRDs), asked by the GitOps detection and by api-usage, whose
+// answer changes only when the cluster's APIs do.
 //
 // What it keeps is one complete answer of ServerGroupsAndResources, the
 // call api-usage makes; GitOps detection's ServerGroups and
