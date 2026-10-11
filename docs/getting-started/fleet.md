@@ -82,7 +82,12 @@ The agent pushes its inventory when it changes and at least hourly
 each new snapshot against the cluster's next minor and every
 `serve --targets` minor, and stores the result. The first push from a
 cluster registers it and binds its name to the cluster's UID (the
-`kube-system` namespace UID), so two clusters cannot share a name.
+`kube-system` namespace UID), so once bound, a second cluster pushing
+that name gets 409. A name whose first push carried no UID (the agent
+could not read `kube-system`) is bound by the first UID pushed after it,
+from whichever cluster sends it, and two agents that both send none
+share the name: give each agent its own `--cluster-name`
+([Cluster lifecycle](../operations.md#cluster-lifecycle)).
 
 ## Exposing the server to remote agents
 
