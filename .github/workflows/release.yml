@@ -173,6 +173,7 @@ jobs:
     # hack/release-ci-permissions_test.sh keeps it in step with ci.yml.
     permissions:
       contents: read
+      issues: read # ci.yml's repo-checks job declares it: its hack/claims-trackers.sh step reads the claims ledger's tracker issues
       pull-requests: read # ci.yml's changes job declares it (skipped on tags)
       security-events: write # ci.yml's action job declares it; it uploads SARIF only on a dispatched fixture run, never on a tag
 
