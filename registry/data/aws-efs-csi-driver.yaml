@@ -6,14 +6,16 @@
 # (https://github.com/kubernetes-sigs/aws-efs-csi-driver/blob/f84ed49bf55e3b11f135fb5f78a136bd207cce10/docs/compatibility.md,
 # read on 2026-10-12). Its columns are Kubernetes v1.11 to v1.16 and "v1.17+", and
 # each cell is yes or no, so a "no" is a stated unsupported version:
-#   v2.1.x, v2.0.x, v1.2.x-v1.7.x, master: "yes" only at v1.17+      -> k8s_min 1.17, no maximum
+#   v2.1.x, v2.0.x, v1.2.x-v1.7.x: "yes" only at v1.17+            -> k8s_min 1.17, no maximum
 #   v1.1.x, v1.0.x, v0.3.0, v0.2.0:        "yes" at v1.14 and later   -> k8s_min 1.14, no maximum
 #   v0.1.0:                                "yes" at v1.11 to v1.13    -> 1.11 through 1.13
 # The "v1.17+" column is open-ended, so there is no k8s_max for the later lines.
-# The table has no row for 3.x (its last version row is v2.1.x; the current release
-# is v3.5.1); the "master branch" row says v1.17+, but the 3.x line is left out
-# rather than inferred from it. A minimum can only be tripped by a target below
-# it, not by a forward upgrade. Pre-1.0 rows are written for completeness.
+# The table's newest version row is v2.1.x, so v2.2.x, v2.3.x and the 3.x line
+# (the current release is v3.5.1) have no row and get no finding. The "master
+# branch" row says v1.17+, but those lines are left out rather than inferred from
+# it, and v2.0 to v2.1 are not stretched to cover v2.2 and v2.3. A minimum can
+# only be tripped by a target below it, not by a forward upgrade. Pre-1.0 rows
+# are written for completeness.
 #
 # Lifecycle: no support policy or dates are published for release lines, so
 # there are no cycles; an installed version gets the "no lifecycle data" info
@@ -36,7 +38,7 @@ support:
   citations:
     - https://github.com/kubernetes-sigs/aws-efs-csi-driver/blob/f84ed49bf55e3b11f135fb5f78a136bd207cce10/docs/compatibility.md
 compat:
-  - {range: ">=2.0.0 <3.0.0", k8s_min: "1.17", citations: ["https://github.com/kubernetes-sigs/aws-efs-csi-driver/blob/f84ed49bf55e3b11f135fb5f78a136bd207cce10/docs/compatibility.md"]}
+  - {range: ">=2.0.0 <2.2.0", k8s_min: "1.17", citations: ["https://github.com/kubernetes-sigs/aws-efs-csi-driver/blob/f84ed49bf55e3b11f135fb5f78a136bd207cce10/docs/compatibility.md"]}
   - {range: ">=1.2.0 <2.0.0", k8s_min: "1.17", citations: ["https://github.com/kubernetes-sigs/aws-efs-csi-driver/blob/f84ed49bf55e3b11f135fb5f78a136bd207cce10/docs/compatibility.md"]}
   - {range: ">=0.2.0 <1.2.0", k8s_min: "1.14", citations: ["https://github.com/kubernetes-sigs/aws-efs-csi-driver/blob/f84ed49bf55e3b11f135fb5f78a136bd207cce10/docs/compatibility.md"]}
   - {range: ">=0.1.0 <0.2.0", k8s_min: "1.11", k8s_max: "1.13", citations: ["https://github.com/kubernetes-sigs/aws-efs-csi-driver/blob/f84ed49bf55e3b11f135fb5f78a136bd207cce10/docs/compatibility.md"]}

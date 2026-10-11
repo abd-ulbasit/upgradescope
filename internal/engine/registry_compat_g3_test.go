@@ -13,11 +13,11 @@ import (
 // The compatibility rows of the cluster-operations and storage add-ons (AWS
 // EFS CSI driver, Longhorn), and the entries that publish none (kube-state-metrics,
 // Cluster Autoscaler, AWS EBS CSI driver), judged through evalAddOns with the
-// real registry on 2026-10-12. Both new ranges are minimums read from the
-// project's own pages, which a forward-upgrade scan cannot trip, so each
-// affected case targets a Kubernetes below the minimum; the clean cases pin
-// the first target that is fine and a target far above, where no maximum may
-// fire. The titles are what the CLI prints.
+// real registry on 2026-10-12. The ranges are minimums read from the project's
+// own pages (plus EFS 0.1.0's stated maximum), which a forward-upgrade scan
+// cannot trip, so each affected case targets a Kubernetes below the minimum; the
+// clean cases pin the first target that is fine and a target far above, where no
+// maximum may fire. Versions the cited pages have no row for stay silent. The titles are what the CLI prints.
 func TestEmbeddedCompatRangesStorageAndOperations(t *testing.T) {
 	addons, err := registry.Load()
 	if err != nil {
@@ -49,7 +49,11 @@ func TestEmbeddedCompatRangesStorageAndOperations(t *testing.T) {
 		{"aws-efs-csi-driver", "0.1.0", at(14), "AWS EFS CSI Driver 0.1.0 supports Kubernetes up to 1.13 (target 1.14)", efs},
 		{"aws-efs-csi-driver", "0.1.0", at(13), "", ""},
 		{"aws-efs-csi-driver", "0.1.0", at(10), "AWS EFS CSI Driver 0.1.0 requires Kubernetes 1.11 or newer (target 1.10)", efs},
-		// The matrix has no 3.x row: nothing is said about it.
+		// The matrix's newest version row is v2.1.x: v2.2, v2.3 and 3.x have
+		// no row, so nothing is said about them at any target.
+		{"aws-efs-csi-driver", "2.2.0", at(16), "", ""},
+		{"aws-efs-csi-driver", "2.3.0", at(16), "", ""},
+		{"aws-efs-csi-driver", "2.3.0", at(10), "", ""},
 		{"aws-efs-csi-driver", "3.5.1", at(10), "", ""},
 
 		// Longhorn: minimums from the Important Notes and Best Practices.

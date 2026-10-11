@@ -34,7 +34,6 @@ func TestMatchAddOnsStorageAndOperationsImagePaths(t *testing.T) {
 
 		{"docker.io/longhornio/longhorn-manager:v1.13.0", "longhorn", "1.13.0"},
 		{"longhornio/longhorn-ui:v1.10.0", "longhorn", "1.10.0"},
-		{"longhornio/longhorn-engine:v1.5.0", "longhorn", "1.5.0"},
 		{"docker.io/rancher/mirrored-longhornio-longhorn-manager:v1.12.1", "longhorn", "1.12.1"},
 
 		// Components that version on their own stay unmatched: a sidecar's
@@ -43,6 +42,10 @@ func TestMatchAddOnsStorageAndOperationsImagePaths(t *testing.T) {
 		{"public.ecr.aws/eks-distro/kubernetes-csi/external-provisioner:v5.3.0-eks-1-33-4", "", ""},
 		{"docker.io/longhornio/csi-attacher:v4.9.0-20250826", "", ""},
 		{"docker.io/longhornio/longhorn-instance-manager:v1_20230617", "", ""},
+		// Old engine-image DaemonSets outlive an upgrade until volumes are
+		// upgraded; reading them would report a second, older Longhorn.
+		{"longhornio/longhorn-engine:v1.5.0", "", ""},
+		{"docker.io/rancher/mirrored-longhornio-longhorn-engine:v1.5.0", "", ""},
 	}
 	for _, tc := range cases {
 		if ids := imageAddOns(parseImage(tc.image), addons); len(ids) > 1 {

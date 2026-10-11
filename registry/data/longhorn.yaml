@@ -29,9 +29,13 @@
 #   Lines before 1.5 are left out: no page was read that states a minimum for them.
 #
 # Matched are the images that carry Longhorn's own release version
-# (longhorn-manager, longhorn-ui, longhorn-engine), from Docker Hub and Rancher's
-# verbatim mirrors (rancher/mirrored-longhornio-*, used by RKE2 and k3s;
-# checked 2026-10-12). instance-manager, share-manager and backing-image-manager
+# (longhorn-manager, longhorn-ui), from Docker Hub and Rancher's verbatim mirrors
+# (rancher/mirrored-longhornio-*, used by RKE2 and k3s; checked 2026-10-12).
+# longhorn-engine is left out on purpose: Longhorn keeps old engine-image
+# DaemonSets (longhornio/longhorn-engine:<old tag>) running until each volume is
+# upgraded, and automatic engine upgrade is off by default, so a cluster on 1.13
+# with one volume not yet upgraded would also read as a second, older install
+# ("Longhorn 1.8") with an end-of-life blocker. longhorn-manager is always present. instance-manager, share-manager and backing-image-manager
 # are left out: before 1.6 their tags were date-stamped (v1_20230617), which would
 # read as a bogus version. The CSI sidecars (csi-attacher, csi-provisioner, ...)
 # and support-bundle-kit have their own versions (see deploy/longhorn-images.txt).
@@ -43,10 +47,8 @@ matchers:
   images:
     - longhornio/longhorn-manager
     - longhornio/longhorn-ui
-    - longhornio/longhorn-engine
     - rancher/mirrored-longhornio-longhorn-manager
     - rancher/mirrored-longhornio-longhorn-ui
-    - rancher/mirrored-longhornio-longhorn-engine
   charts:
     - longhorn
 support:
