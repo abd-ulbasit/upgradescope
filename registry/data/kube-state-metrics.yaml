@@ -1,9 +1,20 @@
 # registry/data/kube-state-metrics.yaml
-# No compat rows. The README's "Compatibility matrix" (read on 2026-10-10) maps
-# each kube-state-metrics release to the Kubernetes client-go version it is built
-# with (v2.20.0 to v1.36, v2.19.0 to v1.35, ..., v2.16.0 to v1.32) and says "All
-# additional compatibility is only best effort, or happens to still/already be
-# supported": a build dependency, not a minimum or a maximum.
+# No compat rows, on purpose (decided in #343, re-read 2026-10-12). The README's
+# "Versioning" section
+# (https://github.com/kubernetes/kube-state-metrics/blob/ca3c2e3ded4f9845ff9b025cacd1c17331c07496/README.md#versioning)
+# says "The supported Kubernetes cluster version is determined by client-go" and
+# "All additional compatibility is only best effort, or happens to still/already
+# be supported", and its "Compatibility matrix" maps each release to the
+# client-go (Kubernetes) version it is built with: v2.16.0 to v1.32, v2.17.0 to
+# v1.33, v2.18.0 to v1.34, v2.19.0 to v1.35, v2.20.0 to v1.36, main to v1.37 (at
+# most 5 releases are recorded; older ones are dropped). The client-go
+# compatibility matrix it points to marks every non-matching pair "+-"
+# ("everything they have in common (i.e., most APIs) will work"). That is a build
+# dependency and a tested-with table, not a minimum or a maximum
+# (registry/CONTRIBUTING.md, "Maximum, minimum or tested with"), so encoding
+# k8s_max = the client-go minor would block installs that work. The only other
+# support statement is "the maintainers will only support the latest release",
+# a rolling policy with no dates, so there are no cycles.
 schema_version: 2
 id: kube-state-metrics
 display_name: kube-state-metrics
@@ -30,3 +41,4 @@ support:
   status: supported
   citations:
     - https://github.com/kubernetes/kube-state-metrics#compatibility-matrix
+    - https://github.com/kubernetes/client-go#compatibility-matrix

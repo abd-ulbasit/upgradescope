@@ -9,6 +9,8 @@
 # maintained community fork (reweave, rajchaudhuri/weave-kube) is deliberately
 # not. Other paths (ghcr.io/weaveworks/launcher/weave-kube) are not matched
 # until one is seen in a published manifest.
+# Support status re-read 2026-10-12: the repository page still reads "archived by
+# the owner on Jun 20, 2024. It is now read-only." No change.
 schema_version: 2
 id: weave-net
 display_name: Weave Net

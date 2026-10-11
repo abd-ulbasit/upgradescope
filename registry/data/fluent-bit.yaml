@@ -4,6 +4,10 @@
 # series is released. The official Helm chart (fluent/helm-charts) is named
 # fluent-bit, with the Fluent Bit version as its appVersion, and pulls
 # cr.fluentbit.io/fluent/fluent-bit, the Docker Hub image fluent/fluent-bit.
+# Re-read 2026-10-12: the cycles match endoflife.date (make eol-check), and the
+# dates are the policy above (5.0 ends 2026-11-06, three months after 5.1 on
+# 2026-08-06). SECURITY.md lists the supported lines as a table, "Security Updates
+# Until" per line.
 schema_version: 2
 id: fluent-bit
 display_name: Fluent Bit

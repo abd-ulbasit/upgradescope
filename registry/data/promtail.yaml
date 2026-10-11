@@ -4,6 +4,8 @@
 # support has ended." The deprecation does not include lambda-promtail, which
 # is not a pod. The grafana/helm-charts promtail chart is marked
 # `deprecated: true`.
+# Support status re-read 2026-10-12: the Promtail page still reads "end of life (EOL)
+# as of March 2, 2026", and the promtail chart is still `deprecated: true`. No change.
 schema_version: 2
 id: promtail
 display_name: Promtail
