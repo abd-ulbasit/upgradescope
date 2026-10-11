@@ -266,7 +266,7 @@ func TestGateClusterSuppression(t *testing.T) {
 	// A manifest PSP with the rule: introduced and suppressed, so not a
 	// SARIF result either (code scanning would open an alert for it).
 	_, raw = postGate(t, ts, q+"&format=sarif&path=deploy/rendered.yaml", "", pspManifest, "application/x-yaml")
-	if got := sarifResults(t, raw)[pspKey]; len(got) != 0 {
+	if got := sarifResults(t, raw)[pspKey]; got != 0 {
 		t.Errorf("SARIF has results for the manifest PSP although it is suppressed:\n%s", raw)
 	}
 }
@@ -348,11 +348,11 @@ func TestGateSARIFSuppressedOmitted(t *testing.T) {
 	q := "?target=1.35&path=deploy/rendered.yaml&format=sarif"
 
 	_, raw := postGate(t, ts, q, "", pspManifest, "application/x-yaml")
-	if got := sarifResults(t, raw)[pspKey]; len(got) != 1 {
+	if got := sarifResults(t, raw)[pspKey]; got != 1 {
 		t.Errorf("unsuppressed PSP results = %v, want one\n%s", got, raw)
 	}
 	_, raw = postGate(t, ts, q+withConfig(pspRule), "", pspManifest, "application/x-yaml")
-	if got := sarifResults(t, raw)[pspKey]; len(got) != 0 {
+	if got := sarifResults(t, raw)[pspKey]; got != 0 {
 		t.Errorf("suppressed PSP results = %v, want none\n%s", got, raw)
 	}
 }

@@ -107,8 +107,10 @@ blocker → `critical`, warning → `minor`, info → `info`.
 - A required check that was not assessed is a `critical` entry
   (`not-assessed/<capability>`): the verdict is `unknown`. A partial
   check is `info`.
-- Suppressed findings are left out: GitLab has no dismissed state. Every
-  other output lists them.
+- Suppressed findings are left out, as they are from SARIF (see [Code
+  scanning and accepted
+  findings](suppressions-and-baselines.md#code-scanning-and-accepted-findings));
+  the table, JSON, step summary and JUnit list them.
 
 The report validates against the schema GitLab checks each entry with
 (vendored in `internal/codequality/codequalitytest`), and GitLab stops

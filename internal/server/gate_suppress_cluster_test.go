@@ -14,26 +14,25 @@ import (
 
 const pspKey = "removed-api/policy/v1beta1/PodSecurityPolicy"
 
-// sarifResults decodes a SARIF answer's results: the rules, one entry per
-// result. Suppressed findings are never results (#375), so a key that was
+// sarifResults decodes a SARIF answer's results: how many results each rule
+// has. Suppressed findings are never results (#375), so a key that was
 // accepted is absent.
-func sarifResults(t *testing.T, raw []byte) map[string][]bool {
+func sarifResults(t *testing.T, raw []byte) map[string]int {
 	t.Helper()
 	sariftest.AssertGitHubAcceptable(t, raw)
 	var log struct {
 		Runs []struct {
 			Results []struct {
-				RuleID       string            `json:"ruleId"`
-				Suppressions []json.RawMessage `json:"suppressions"`
+				RuleID string `json:"ruleId"`
 			} `json:"results"`
 		} `json:"runs"`
 	}
 	if err := json.Unmarshal(raw, &log); err != nil || len(log.Runs) != 1 {
 		t.Fatalf("SARIF = %v %s", err, raw)
 	}
-	out := map[string][]bool{}
+	out := map[string]int{}
 	for _, r := range log.Runs[0].Results {
-		out[r.RuleID] = append(out[r.RuleID], len(r.Suppressions) > 0)
+		out[r.RuleID]++
 	}
 	return out
 }
@@ -60,7 +59,7 @@ func assertClusterRemainder(t *testing.T, ts *httptest.Server, q, manifest, key 
 	}
 
 	resp, raw = postGate(t, ts, q+"&format=sarif", "", manifest, "application/x-yaml")
-	if got := sarifResults(t, raw)[key]; resp.StatusCode != http.StatusOK || len(got) != 0 {
+	if got := sarifResults(t, raw)[key]; resp.StatusCode != http.StatusOK || got != 0 {
 		t.Errorf("sarif: %d %s results %v, want 200 and none: the manifests' object is suppressed, the cluster's remainder is not the PR's\n%s", resp.StatusCode, key, got, raw)
 	}
 	resp, raw = postGate(t, ts, q+"&format=gitlab-codequality", "", manifest, "application/x-yaml")
@@ -101,7 +100,7 @@ func TestGateClusterSuppressedManifestObject(t *testing.T) {
 		// A rule without selectors takes the cluster's objects too: nothing
 		// remains, and SARIF carries no result for it (suppressed findings are not results).
 		resp, raw := postGate(t, ts, q+withConfig(pspRule)+"&format=sarif", "", pspManifest, "application/x-yaml")
-		if got := sarifResults(t, raw)[pspKey]; resp.StatusCode != http.StatusOK || len(got) != 0 {
+		if got := sarifResults(t, raw)[pspKey]; resp.StatusCode != http.StatusOK || got != 0 {
 			t.Errorf("sarif: %d %s results %v, want 200 and none (suppressed)\n%s", resp.StatusCode, pspKey, got, raw)
 		}
 	})

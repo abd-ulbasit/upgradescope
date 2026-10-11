@@ -28,7 +28,7 @@ on:
         type: boolean
         default: true
       upload-fixture-sarif:
-        description: "Upload the action job's fixture SARIF to code scanning, to check GitHub still accepts it (refused on the default branch, where its two blockers would be open alerts)"
+        description: "Upload the action job's fixture SARIFs to code scanning, to check GitHub still accepts them and opens no alert for the suppressed one (refused on the default branch, where the unsuppressed one's two blockers would be open alerts)"
         type: boolean
         default: false
   # release.yml calls this workflow for every v* tag, so a release is gated on
@@ -865,7 +865,8 @@ jobs:
   #     with an ignore rule per removed API (config: the gate passes, the
   #     summary lists them as suppressed) and against a baseline (only the
   #     new finding fails the gate; write-baseline's file then passes it).
-  # On main, the SARIF goes to code scanning, proving GitHub accepts it.
+  # On a dispatched run off main, the SARIFs go to code scanning, proving
+  # GitHub accepts them and opens no alert for the suppressed run (#375).
   action:
     needs: changes
     if: >-
@@ -1113,6 +1114,46 @@ jobs:
         with:
           sarif_file: ${{ steps.removed.outputs.sarif-file }}
           category: upgradescope-action-fixture
+
+      # The other half of #375: code scanning ignores a SARIF result's
+      # suppressions, so the SARIF of the run with an ignore rule per removed
+      # API has no result for the two accepted findings (only a note that
+      # counts them), and uploading it must leave no open alert. The check
+      # asks GitHub through the alerts API for the branch's open alerts: the
+      # unsuppressed fixture above is the control (its two blockers are open,
+      # so an empty answer cannot pass), and the suppressed one's category
+      # holds none. Same condition as the upload above, pinned by
+      # hack/ci-sarif_test.sh.
+      - name: GitHub code scanning accepts the suppressed fixture
+        if: >-
+          github.event_name == 'workflow_dispatch' && inputs.upload-fixture-sarif == true &&
+          github.ref != format('refs/heads/{0}', github.event.repository.default_branch) &&
+          matrix.os == 'ubuntu-latest'
+        uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
+        with:
+          sarif_file: ${{ steps.suppressed.outputs.sarif-file }}
+          category: upgradescope-action-fixture-suppressed
+      - name: code scanning holds no alert for the suppressed fixture
+        if: >-
+          github.event_name == 'workflow_dispatch' && inputs.upload-fixture-sarif == true &&
+          github.ref != format('refs/heads/{0}', github.event.repository.default_branch) &&
+          matrix.os == 'ubuntu-latest'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          # upload-sarif waits for processing, so the alerts are final.
+          open="$(gh api --paginate "repos/$REPO/code-scanning/alerts?ref=$REF&state=open&per_page=100" \
+            --jq '.[].most_recent_instance.category')"
+          echo "open alerts on $REF, by category:"; sort <<<"$open" | uniq -c
+          control="$(grep -cxF 'upgradescope-action-fixture' <<<"$open" || true)"
+          held="$(grep -cxF 'upgradescope-action-fixture-suppressed' <<<"$open" || true)"
+          [ "$control" -ge 2 ] \
+            || { echo "::error::the unsuppressed fixture has $control open alerts, want its 2 blockers: the alerts API check proves nothing"; exit 1; }
+          [ "$held" -eq 0 ] \
+            || { echo "::error::the suppressed fixture's SARIF opened $held alerts; accepted findings must not be SARIF results"; exit 1; }
 
   # The Kubernetes minors the kube job runs on, from
   # hack/kind-node-images.txt: the `pr` rows (1.31, the oldest with the
