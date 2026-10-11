@@ -94,7 +94,9 @@ register again, for example under a new owner: sign in at
 [artifacthub.io](https://artifacthub.io), add the repository under Control
 Panel → Repositories → Add, and replace the ID in that file. Artifact Hub's
 API returns it without signing in:
-`curl -s 'https://artifacthub.io/api/v1/repositories/search?name=upgradescope' | jq -r '.[].repository_id'`.
+`curl -s 'https://artifacthub.io/api/v1/repositories/search?name=upgradescope' | jq -r '.[] | select(.name == "upgradescope") | .repository_id'`.
+(`name=` is a substring search: `name=scope` also returns graphscope and
+periscope, so the `select` keeps the exact match.)
 
 The chart's `artifacthub.io/*` annotations (`deploy/chart/Chart.yaml`) supply
 the license, links, CRD, images, prerelease flag and per-release changes.
