@@ -151,12 +151,18 @@ func upsertAddOns(cluster, manifests []inventory.AddOnInstance) []inventory.AddO
 // removed or deprecated APIs their objects use (usageKeys), the add-ons
 // they deploy, and their custom resources at a version the proposed CRDs
 // deprecate or do not serve (crd-version findings listing objects; one
-// without, such as an unused deprecated version, is the CRD's).
+// without, such as an unused deprecated version, is the CRD's). An in-tree
+// volume plugin their pod templates, Pods or PersistentVolumes name is the
+// manifests' too (#365): the side evaluates them alone, so its
+// volume-plugin finding is the PR's, kept whole as for a removed API (it
+// lists the cluster's objects beside the PR's).
 func introducedKeys(rep engine.Report) map[string]bool {
 	keys := usageKeys(rep)
 	for _, f := range rep.Findings {
 		switch f.Category {
 		case engine.CatEOLAddon, engine.CatEOLApproaching, engine.CatChartIncompat, engine.CatAddOnNoData:
+			keys[findingKey(f)] = true
+		case engine.CatVolumePlugin:
 			keys[findingKey(f)] = true
 		case engine.CatCRDVersion:
 			if len(f.Objects)+f.ObjectsOmitted > 0 {

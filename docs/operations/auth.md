@@ -326,6 +326,23 @@ their names, namespaces or teams. Concretely:
   status `?fail-on` gives judge only what the PR introduces, and do not
   depend on the caps.
 
+**In-tree volume plugins in the gate.** The agent counts a volume
+plugin's pods per namespace, a bound PersistentVolume under its claim's
+namespace, and an unbound PersistentVolume or a StorageClass under no
+namespace, and names the PersistentVolumes and StorageClasses without a
+namespace. The share keeps the counts in the scope's namespaces only, and
+none of the names: a finding the PR's objects join (`source: manifest`)
+counts, titles and details the scope's pods and the PersistentVolumes
+bound to its claims, and the PR's objects, which are the only ones it
+lists, the scope's counted in `objectsOmitted`. Another team's pods and
+PersistentVolumes, and the cluster's unbound PersistentVolumes and
+StorageClasses, never reach it, nor the cluster verdict or the score: a
+cluster where only another team uses a plugin answers the scope as one
+where nobody does. The share cannot tell the scope's pods from the
+PersistentVolumes bound to its claims, so a finding of the share's own
+that the PR does not join counts them together as PersistentVolumes or
+StorageClasses.
+
 Tests pin this, with payments' two Ingresses unlisted behind web's
 hundred in `a-web` against a cluster of payments' two alone: the finding
 lists only the PR's Ingress there; where payments' Helm release stores
@@ -384,7 +401,7 @@ scoped caller is the cluster's name and data.
 | `GET /api/v1/clusters/{id}/export` (CSV, HTML) | `404` outside the scope; the scope's findings, cut to it, and teams |
 | `GET /api/v1/fleet` | in-scope clusters only |
 | `GET /api/v1/fleet/teams` | in-scope clusters, the scope's teams |
-| `POST /api/v1/gate` | without `?cluster=`: exactly as fleet-wide, it reads no stored data and every finding is the manifests'. With `?cluster=`: `404` outside the scope. Otherwise the gate runs on the scope's share of the cluster, never on the whole cluster: the API usage, custom resources, Helm releases, GitOps charts and add-ons in the namespaces of the scope's teams, and what describes the cluster as a whole (version, nodes, control plane, CRD definitions, capabilities); never another team's evidence, a namespace no team owns, cluster-scoped usage or the apiserver's deprecated-call rows. Everything in the answer is decided from that share and the manifests: the findings (a finding the PR's objects are in counts, titles and details only the PR's objects and the scope's, even when the PR names another team's namespace, where its objects are attributed to no team), the verdict and `X-Upgradescope-Verdict`, the status `?fail-on` gives, the cluster verdict, the score and the scope's team scores. Of the share's own findings, the scope's; the manifests' unrecognized images only; suppression warnings of the share only. The exception is which of the scope's objects the share lists where the collector's 100-objects-per-API cap left some unlisted, and what follows from that (a Helm release's own finding, whether the scope's annotations and rules can accept a finding, and so the findings, score and cluster verdict), never the verdict, its header or the status ([what the caps still decide](#what-a-team-scoped-read-sees)). So a CI status depends on who asks ([the gate with a team-scoped token](#the-gate-with-a-team-scoped-token)) |
+| `POST /api/v1/gate` | without `?cluster=`: exactly as fleet-wide, it reads no stored data and every finding is the manifests'. With `?cluster=`: `404` outside the scope. Otherwise the gate runs on the scope's share of the cluster, never on the whole cluster: the API usage, custom resources, Helm releases, GitOps charts, add-ons and in-tree volume plugin counts in the namespaces of the scope's teams, and what describes the cluster as a whole (version, nodes, control plane, CRD definitions, capabilities); never another team's evidence, a namespace no team owns, cluster-scoped usage (unbound PersistentVolumes and StorageClasses on a volume plugin included), the cluster's PersistentVolume and StorageClass names or the apiserver's deprecated-call rows. Everything in the answer is decided from that share and the manifests: the findings (a finding the PR's objects are in counts, titles and details only the PR's objects and the scope's, even when the PR names another team's namespace, where its objects are attributed to no team), the verdict and `X-Upgradescope-Verdict`, the status `?fail-on` gives, the cluster verdict, the score and the scope's team scores. Of the share's own findings, the scope's; the manifests' unrecognized images only; suppression warnings of the share only. The exception is which of the scope's objects the share lists where the collector's 100-objects-per-API cap left some unlisted, and what follows from that (a Helm release's own finding, whether the scope's annotations and rules can accept a finding, and so the findings, score and cluster verdict), never the verdict, its header or the status ([what the caps still decide](#what-a-team-scoped-read-sees)). So a CI status depends on who asks ([the gate with a team-scoped token](#the-gate-with-a-team-scoped-token)) |
 | `GET /api/v1/registry` | as fleet-wide: the public knowledge base |
 | `GET /metrics` | `403`: its per-cluster series name every cluster, so it takes a fleet-wide credential (Prometheus gets `--read-token` or a `*` token) |
 
