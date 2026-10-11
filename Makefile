@@ -422,6 +422,7 @@ hack-test:
 	./hack/release-artifacthub-workflow_test.sh
 	./hack/docs-live-check_test.sh
 	./hack/docs-live-workflow_test.sh
+	./hack/chart-survey_test.sh
 	./packaging/homebrew-tap/script/render-formula_test.sh
 
 .PHONY: demo-up demo-down
