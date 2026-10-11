@@ -1699,6 +1699,15 @@ a CI gate.
 
 ### Fixed
 
+- The dashboard's Registry page no longer shows a stale stored status. An
+  entry's badge is now derived from its dates and today's UTC date (a date on
+  or before today has passed, as in the scan's own rule): a passed `eol_date`
+  with an extended date still ahead reads "extended support only · until
+  <date>", and a passed `eol_date` otherwise reads "eol · <date>". The split
+  line is in the past tense once a date has passed. RKE2 Ingress NGINX read
+  "supported · 2026-03-31" seven months after that date. Scans and verdicts
+  were never affected, since they use the dates. The retention page now lists
+  `verdict` among the fields `GET /history` returns (#383).
 - Postgres: `serve`, `tokens` and `clusters` no longer fail every start with
   "context deadline exceeded" after 10 s when a migration runs longer, or
   when another replica holds the migration lock, which a starting replica
