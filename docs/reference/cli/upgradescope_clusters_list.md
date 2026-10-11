@@ -27,7 +27,7 @@ upgradescope clusters list [flags]
   -h, --help                     help for list
       --read-token string        with --server-url: the server's read token (or its admin token); omit for an open read API (visible in process listings: prefer $UPGRADESCOPE_READ_TOKEN or --read-token-file)
       --read-token-file string   read --read-token from this file, e.g. a mounted Secret (surrounding whitespace is trimmed)
-      --server-ca-file string    PEM bundle of a private CA that issued the server's certificate, trusted on top of the system roots (for an https server behind a private CA; $SSL_CERT_FILE also adds roots, for the whole process); needs an https server URL. Verification is never skipped
+      --server-ca-file string    PEM bundle of a private CA that issued the server's certificate, trusted on top of the system roots (for an https server behind a private CA; on Linux and other Unix systems $SSL_CERT_FILE and $SSL_CERT_DIR also change the system roots, for the whole process; Go ignores them on macOS and Windows, where this flag is the way); needs an https server URL. Verification is never skipped
       --server-url string        base URL of a running upgradescope server, e.g. https://upgradescope.example.com (instead of --db/--db-url)
 ```
 

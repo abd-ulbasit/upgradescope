@@ -310,7 +310,7 @@ gets 401, and an anonymous request must name a host the server answers for
 		"DANGEROUS unless the proxy strips client-supplied copies: scope a read from a --trusted-proxy-cidr peer to the teams this request header lists, comma separated and each percent-encoded where it must be "+
 			"(an authenticating proxy's group header, e.g. X-Forwarded-Groups; never the whole fleet, '*' included); needs --trusted-proxy-cidr")
 	cmd.Flags().StringSliceVar(&opts.trustedProxies, "trusted-proxy-cidr", nil,
-		"with --trust-team-header: the source CIDRs (the TCP peer, never X-Forwarded-For) of the proxy that sets that header, repeatable or comma separated, e.g. 10.42.0.0/16")
+		"with --trust-team-header: the source CIDRs (the TCP peer, never X-Forwarded-For) of the proxy that sets that header, repeatable or comma separated, e.g. 10.42.0.0/16; a set of ranges that together hold every address of IPv4 or of IPv6 (0.0.0.0/0, or 0.0.0.0/1 with 128.0.0.0/1) is refused, but keeping the ranges to the proxy and nothing else is your job")
 	cmd.MarkFlagsRequiredTogether("trust-team-header", "trusted-proxy-cidr")
 	cmd.Flags().StringSliceVar(&opts.allowedHosts, "allowed-host", nil,
 		"a host name (or IP) requests may name in their Host header, any port, repeatable or comma separated (default $"+allowedHostsEnv+"): "+
@@ -519,8 +519,11 @@ func checkNotifyURL(flag, raw string) error {
 
 // parseTrustedProxies checks --trust-team-header and parses
 // --trusted-proxy-cidr into opts.parsedProxies. A bare IP is its own /32
-// (or /128). A range that holds every address would trust the header from
-// any client, so it is refused.
+// (or /128). A set of ranges that together hold every address of a family
+// (one /0, or 0.0.0.0/1 with 128.0.0.0/1, however they are split across
+// flags) would trust the header from any client, so it is refused. A partial
+// cover is accepted: keeping the ranges to the proxy and nothing else is the
+// operator's job (docs/operations/auth.md).
 func parseTrustedProxies(opts *serveOptions) error {
 	if opts.trustTeamHeader == "" && len(opts.trustedProxies) == 0 {
 		return nil
@@ -551,7 +554,53 @@ func parseTrustedProxies(opts *serveOptions) error {
 		}
 		opts.parsedProxies = append(opts.parsedProxies, p.Masked())
 	}
+	for _, v6 := range []bool{false, true} {
+		if prefixesCoverFamily(opts.parsedProxies, v6) {
+			return fmt.Errorf("--trusted-proxy-cidr %s together trust every address: any client could set %s", strings.Join(opts.trustedProxies, ","), h)
+		}
+	}
 	return nil
+}
+
+// prefixesCoverFamily reports whether prefixes, taken together, hold every
+// address of one family (IPv6 when v6, else IPv4). It merges siblings
+// bottom up: two prefixes of equal length that differ only in their last
+// prefix bit are their parent, and a prefix inside another adds nothing.
+// The family is covered when that reaches the /0. Input need not be masked.
+func prefixesCoverFamily(prefixes []netip.Prefix, v6 bool) bool {
+	maxBits := 32
+	if v6 {
+		maxBits = 128
+	}
+	levels := make([]map[netip.Prefix]struct{}, maxBits+1)
+	for i := range levels {
+		levels[i] = map[netip.Prefix]struct{}{}
+	}
+	for _, p := range prefixes {
+		if !p.IsValid() || p.Addr().Is4() == v6 {
+			continue
+		}
+		levels[p.Bits()][p.Masked()] = struct{}{}
+	}
+	for bits := maxBits; bits > 0; bits-- {
+		for p := range levels[bits] {
+			if _, ok := levels[bits][siblingPrefix(p)]; ok {
+				parent, _ := p.Addr().Prefix(bits - 1)
+				levels[bits-1][parent] = struct{}{}
+			}
+		}
+	}
+	return len(levels[0]) > 0
+}
+
+// siblingPrefix is the prefix of the same length that differs from p (which
+// is masked and not a /0) only in its last prefix bit.
+func siblingPrefix(p netip.Prefix) netip.Prefix {
+	b := p.Addr().AsSlice()
+	i := p.Bits() - 1
+	b[i/8] ^= 0x80 >> (i % 8)
+	a, _ := netip.AddrFromSlice(b)
+	return netip.PrefixFrom(a, p.Bits())
 }
 
 // validHeaderName reports whether h is an RFC 9110 field name (a token).

@@ -14,7 +14,8 @@ import (
 // server's API (clusters, mcp --server-url). The agent's own flag says the
 // same for pushes.
 const serverCAUsage = "PEM bundle of a private CA that issued the server's certificate, trusted on top of the system roots " +
-	"(for an https server behind a private CA; $SSL_CERT_FILE also adds roots, for the whole process); needs an https server URL. " +
+	"(for an https server behind a private CA; on Linux and other Unix systems $SSL_CERT_FILE and $SSL_CERT_DIR also change the system roots, for the whole process; " +
+	"Go ignores them on macOS and Windows, where this flag is the way); needs an https server URL. " +
 	"Verification is never skipped"
 
 // registerServerCAFlag adds --server-ca-file to cmd.

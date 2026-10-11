@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -34,13 +35,24 @@ func TestDeliveryErrorsNeverCarryTheURLsSecrets(t *testing.T) {
 		name     string
 		notifier Notifier
 		host     string
+		hidden   []string // text that must not appear: the host the URL withholds
+		reason   string   // text that must appear: the cause, without the address
 	}{
-		{"slack, refused", NewSlack("http://" + refused + "/services/T000/B000/SECRETSECRET"), refused},
-		{"webhook, refused", NewGenericWebhook("http://" + refused + "/hook/SECRETPATH?token=SECRETQ#SECRETF"), refused},
-		{"webhook with userinfo", NewGenericWebhook("http://user:SECRETPW@" + refused + "/x"), ""},
-		{"slack, timeout", &SlackNotifier{URL: slow.URL + "/services/T000/B000/SECRETSECRET", Client: &http.Client{Timeout: 50 * time.Millisecond}}, slowHost},
-		{"slack, unparseable", NewSlack("https://hooks.slack.com/services/T000/B000/SECRETSECRET\n"), "hooks.slack.com"},
-		{"webhook, no scheme", NewGenericWebhook("hooks.example.com/SECRETPATH"), ""},
+		{name: "slack, refused", notifier: NewSlack("http://" + refused + "/services/T000/B000/SECRETSECRET"), host: refused},
+		{name: "webhook, refused", notifier: NewGenericWebhook("http://" + refused + "/hook/SECRETPATH?token=SECRETQ#SECRETF"), host: refused},
+		{name: "webhook with userinfo", notifier: NewGenericWebhook("http://user:SECRETPW@" + refused + "/x"),
+			hidden: []string{refused, "127.0.0.1"}, reason: "connection refused"},
+		{name: "@ only in the query", notifier: NewGenericWebhook("http://" + refused + "/x?email=a@b.example&t=SECRETQ"),
+			hidden: []string{refused, "127.0.0.1", "b.example"}, reason: "connection refused"},
+		{name: "@, unresolvable name", notifier: NewGenericWebhook("http://user:SECRETPW@secrethostzz.invalid/p/SECRETX"),
+			hidden: []string{"secrethostzz", ".invalid"}},
+		{name: "@, name that resolves (localhost, [::1] or 127.0.0.1)", notifier: NewGenericWebhook("http://user:SECRETPW@localhost:1/x"),
+			hidden: []string{"localhost", "[::1]", "127.0.0.1", "tcp"}, reason: "connection refused"},
+		{name: "@, slack, refused", notifier: NewSlack("http://user:SECRETPW@" + refused + "/services/T000/B000/SECRETSECRET"),
+			hidden: []string{refused, "127.0.0.1"}, reason: "connection refused"},
+		{name: "slack, timeout", notifier: &SlackNotifier{URL: slow.URL + "/services/T000/B000/SECRETSECRET", Client: &http.Client{Timeout: 50 * time.Millisecond}}, host: slowHost},
+		{name: "slack, unparseable", notifier: NewSlack("https://hooks.slack.com/services/T000/B000/SECRETSECRET\n"), host: "hooks.slack.com"},
+		{name: "webhook, no scheme", notifier: NewGenericWebhook("hooks.example.com/SECRETPATH"), host: ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			err := tc.notifier.Notify(context.Background(), testNotification())
@@ -53,6 +65,14 @@ func TestDeliveryErrorsNeverCarryTheURLsSecrets(t *testing.T) {
 			}
 			if tc.host != "" && !strings.Contains(msg, tc.host) {
 				t.Errorf("error %q does not name the host %s", msg, tc.host)
+			}
+			for _, h := range tc.hidden {
+				if strings.Contains(msg, h) {
+					t.Errorf("error %q names %q, which the redacted URL withholds", msg, h)
+				}
+			}
+			if tc.reason != "" && !strings.Contains(msg, tc.reason) {
+				t.Errorf("error %q does not give the reason %q", msg, tc.reason)
 			}
 		})
 	}
@@ -93,7 +113,8 @@ func TestCheckURL(t *testing.T) {
 			t.Errorf("CheckURL(%q) = %v", ok, err)
 		}
 	}
-	for _, bad := range []string{"hooks.slack.com/SECRET", "ftp://h/SECRET", "https:///SECRET", "https://h/SECRET\n", "/SECRET", "https://h:port/SECRET", "mailto:SECRET@h"} {
+	for _, bad := range []string{"hooks.slack.com/SECRET", "ftp://h/SECRET", "https:///SECRET", "https://h/SECRET\n", "/SECRET", "https://h:port/SECRET", "mailto:SECRET@h",
+		"https://user:pa/ss@host/x", "https://h:SECRETPORT/x", "https://host/%zzSECRET", "https://h/\x7fSECRET", "http://[SECRET/x", "https://user:SECRET@h:port/x"} {
 		err := CheckURL(bad)
 		if err == nil {
 			t.Errorf("CheckURL(%q) accepted it", bad)
@@ -101,6 +122,17 @@ func TestCheckURL(t *testing.T) {
 		}
 		if strings.Contains(err.Error(), "SECRET") {
 			t.Errorf("CheckURL(%q) echoes it: %v", bad, err)
+		}
+		// A fixed text per failure class, never net/url's own error, which
+		// quotes part of the value (#371).
+		for _, frag := range []string{":pa", "pa/ss", "%zz", "x7f", `"`, "invalid port", "invalid URL escape", "net/url"} {
+			if strings.Contains(err.Error(), frag) {
+				t.Errorf("CheckURL(%q) = %q, which holds %q, a fragment of the value or of net/url's error", bad, err, frag)
+			}
+		}
+		var ue *url.Error
+		if errors.As(err, &ue) {
+			t.Errorf("CheckURL(%q) wraps net/url's error: %v", bad, err)
 		}
 	}
 }
@@ -120,5 +152,21 @@ func TestDeliveryErrorCauseIsScrubbed(t *testing.T) {
 	err := n.Notify(context.Background(), testNotification())
 	if err == nil || strings.Contains(err.Error(), "SECRET") || !strings.Contains(err.Error(), "hook.example") {
 		t.Errorf("err = %v, want the host and no secret", err)
+	}
+}
+
+// A TLS failure against a URL whose host is withheld gives the TLS reason
+// and not the address, and a timeout stays a timeout (#371).
+func TestWithheldHostKeepsTheTLSReason(t *testing.T) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	defer srv.Close()
+	addr := strings.TrimPrefix(srv.URL, "https://")
+	err := NewGenericWebhook("https://user:SECRETPW@"+addr+"/x").Notify(context.Background(), testNotification())
+	if err == nil {
+		t.Fatal("delivery to an untrusted certificate succeeded")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "x509: certificate signed by unknown authority") || strings.Contains(msg, addr) || strings.Contains(msg, "127.0.0.1") || strings.Contains(msg, "SECRET") {
+		t.Errorf("err = %q, want the TLS reason and neither the address nor a secret", msg)
 	}
 }
