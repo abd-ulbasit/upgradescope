@@ -1982,7 +1982,7 @@ func assessmentGaps(inv inventory.Inventory, k kb.KB, target inventory.Version) 
 		case !st.Available:
 			gaps = append(gaps, CapabilityGap{Capability: c, Reason: st.Reason, Required: required[c]})
 		case st.Partial:
-			g := CapabilityGap{Capability: c, Reason: st.Reason, Partial: true, Skipped: st.Skipped}
+			g := CapabilityGap{Capability: c, Reason: st.Reason, Partial: true, Skipped: sortedCopy(st.Skipped)}
 			switch c {
 			case inventory.CapAPIUsage:
 				// SkippedNewerKB: the agent's knowledge base is not the
@@ -2298,7 +2298,10 @@ func evalHelmManifest(rel inventory.HelmRelease, idx kb.Index, live map[string][
 
 // Evaluate is the pure evaluation entrypoint: no I/O, no clock reads — now is
 // injected for EOL-window math. Output is fully deterministic for a given
-// (inventory, kb, target, now), whatever the order of the inventory's slices.
+// (inventory, kb, target, now), whatever the order of the inventory's slices:
+// that includes a CRD's spec.versions (the versions a detail names are
+// listed sorted) and a capability's Skipped list (reported sorted). The
+// inventory itself is never reordered (#165, #367).
 // EvaluateWithin bounds its size.
 func Evaluate(inv inventory.Inventory, k kb.KB, target inventory.Version, now time.Time) Report {
 	r, _ := evaluate(inv, k, target, now, nil) // no budget: no error
@@ -2387,4 +2390,13 @@ func evaluate(inv inventory.Inventory, k kb.KB, target inventory.Version, now ti
 		UnrecognizedImagesOmitted: omitted,
 		AddOnEvidenceAgeSeconds:   max(0, inv.AddOnEvidenceAgeSeconds),
 	}, nil
+}
+
+// sortedCopy is s sorted, in a new slice (nil stays nil): the caller's
+// inventory is never reordered.
+func sortedCopy(s []string) []string {
+	if s == nil {
+		return nil
+	}
+	return slices.Sorted(slices.Values(s))
 }
