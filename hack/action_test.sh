@@ -3,7 +3,8 @@
 # curl and go are stubs, releases are local files, and the scan cases run a
 # binary built from this tree. Covers:
 #   - both action.yml files: no ${{ }} expression inside a run: script, and
-#     the same action apart from where run.sh lives;
+#     the same action apart from where run.sh lives; a description under
+#     GitHub Marketplace's 125-character limit;
 #   - ci.yml: a change to any file the action job tests triggers that job;
 #   - action/run.sh install: input validation, sha256 verification against
 #     the release's checksums.txt and the provenance check (gh attestation
@@ -92,6 +93,22 @@ if diff <(sed 's#\$GITHUB_ACTION_PATH/action/run\.sh#$GITHUB_ACTION_PATH/run.sh#
   ok "action.yml and action/action.yml are the same action"
 else
   fail "action.yml and action/action.yml differ beyond the run.sh path" "$work/out"
+fi
+# GitHub Marketplace refuses a description of 125 characters or more
+# ("Description must be less than 125 characters"). It reads action.yml at
+# the release's tag, which never moves, so a long description costs a
+# release (v0.2.1 could not be listed).
+desc=$(awk '
+  /^description:/ { v = $0; sub(/^description: */, "", v); if (v !~ /^[>|][-+]?$/) { d = v; exit } on = 1; next }
+  on && /^  / { s = $0; sub(/^ +/, "", s); d = d (d == "" ? "" : " ") s; next }
+  on { exit }
+  END { print d }' action.yml)
+n=$(printf '%s' "$desc" | wc -m | tr -d ' ')
+if [ -n "$desc" ] && [ "$n" -lt 125 ]; then
+  ok "action.yml: the description is $n characters, under Marketplace's 125"
+else
+  printf '%s characters: %s\n' "$n" "$desc" >"$work/out"
+  fail "action.yml: the description must be under 125 characters for GitHub Marketplace" "$work/out"
 fi
 # On PRs and pushes, CI's action job runs only when the changes job's
 # action filter matches; each file the job tests must be in it. The release

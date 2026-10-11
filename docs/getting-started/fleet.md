@@ -66,7 +66,7 @@ that cluster:
 ```sh
 kubectl create namespace upgradescope
 kubectl -n upgradescope create secret generic push-token --from-literal=serverToken=<token>
-helm install upgradescope oci://ghcr.io/abd-ulbasit/charts/upgradescope --version 0.2.1 \
+helm install upgradescope oci://ghcr.io/abd-ulbasit/charts/upgradescope --version 0.2.2 \
   -n upgradescope \
   --set agent.clusterName=prod-eu-1 \
   --set agent.serverUrl=https://upgradescope.example.com \

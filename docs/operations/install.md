@@ -127,7 +127,7 @@ default.
 
 ```sh
 helm install upgradescope oci://ghcr.io/abd-ulbasit/charts/upgradescope \
-  --version 0.2.1 -n upgradescope --create-namespace
+  --version 0.2.2 -n upgradescope --create-namespace
 ```
 
 The published chart pins the image of its release by digest. It is signed
