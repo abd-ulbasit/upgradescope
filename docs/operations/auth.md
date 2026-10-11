@@ -559,7 +559,12 @@ The two flags go together, and the mode is off by default.
        NodePort or Ingress that reaches the server's port, and a
        `--trusted-proxy-cidr` that covers the proxy's addresses and
        nothing else. A pod CIDR is not "the proxy": every pod in it could
-       send the header.
+       send the header. `serve` refuses only the extreme: a set of ranges
+       that together hold every address of IPv4 or of IPv6 (`0.0.0.0/0`,
+       `::/0`, or `0.0.0.0/1` with `128.0.0.0/1`, however they are split
+       across flags) would trust the header from any client. A partial
+       cover such as `0.0.0.0/1` or `10.0.0.0/8` starts, and keeping the
+       ranges to the proxy remains your job.
     2. **The proxy removes every client-supplied copy of the header**
        before it forwards a request, on every route it forwards,
        authenticated or not, and then sets it from the signed-in session

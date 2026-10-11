@@ -658,7 +658,8 @@ around one read from the environment or a file (a Secret's trailing
 newline) is trimmed first. A webhook URL is a secret (a Slack webhook's
 path is its credential), so a failed delivery is logged, and stored in
 the outbox's `last_error`, with the URL's scheme and host only:
-`https://hooks.slack.com/…`. Each pass is compared with the target's last evaluation that had
+`https://hooks.slack.com/…` (a URL holding an `@` has the host withheld
+too, and its error gives only the reason, such as `connection refused`). Each pass is compared with the target's last evaluation that had
 a decided verdict (ready or blocked). A pass whose verdict is unknown sends
 nothing and is not a baseline either: what it could not see is not news.
 
