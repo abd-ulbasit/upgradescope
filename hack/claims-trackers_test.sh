@@ -102,7 +102,8 @@ expect "no gh fails when required" 1 "gh is not installed" "$head
 # (#366: 71, 76, 121, 126, 226, 228, 229, 233, 247, 248), no tracker may be
 # one of those, and the extraction must find trackers in it.
 grep -oE '#[0-9]+' docs/claims.md | tr -d '#' | sort -u |
-  awk 'BEGIN { n = split("71 76 121 126 226 228 229 233 247 248", c, " "); for (i = 1; i <= n; i++) closed[c[i]] = 1 } { print $1, (grep -oE '#[0-9]+' docs/claims.md | tr -d '#' | sort -u | awk '{print $1 " OPEN"}' >"$work/states" in closed) ? "CLOSED" : "OPEN" }' >"$work/states"
+  awk 'BEGIN { n = split("71 76 121 126 226 228 229 233 247 248", c, " "); for (i = 1; i <= n; i++) closed[c[i]] = 1 }
+       { print $1, ($1 in closed) ? "CLOSED" : "OPEN" }' >"$work/states"
 got=0
 PATH="$work/bin:$PATH" GH_TOKEN=tok "$script" >"$work/out" 2>&1 || got=$?
 if [ "$got" = 0 ] && grep -qE '[1-9][0-9]* trackers' "$work/out"; then
