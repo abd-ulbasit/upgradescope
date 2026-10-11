@@ -107,9 +107,11 @@ type Store interface {
 	// of every cluster (cluster list, fleet matrix, metrics) use it, so
 	// their cost never depends on how large a report is.
 	CurrentEvaluationSummary(ctx context.Context, clusterID int64, target string) (Evaluation, error)
-	// LatestKnownEvaluation is the newest evaluation for (cluster, target)
-	// whose verdict was decided — ready, or at least one blocker — skipping
-	// "unknown" ones (no blockers but required checks not assessed).
+	// LatestKnownEvaluation is the newest notification baseline for
+	// (cluster, target): an evaluation whose verdict was decided — ready,
+	// or at least one blocker — or one written with Baseline set, skipping
+	// the other "unknown" ones (no blockers, and a required check not
+	// assessed that may hide one).
 	LatestKnownEvaluation(ctx context.Context, clusterID int64, target string) (Evaluation, error)
 	ScoreHistory(ctx context.Context, clusterID int64, target string, limit int) ([]ScorePoint, error)
 
@@ -251,6 +253,15 @@ type Evaluation struct {
 	// from the report, never by the caller; true for a row written by a
 	// binary that predates the column (NULL), which may carry one.
 	CarriesHold bool `json:"-"`
+	// Baseline marks an evaluation the server takes as a notification
+	// baseline although its verdict is unknown (#380): its required gaps
+	// hide no finding (kb-coverage, target), so the pass saw all a
+	// blocker could come from. LatestKnownEvaluation returns it, the
+	// commit checks it and retention keeps it, as a decided one. A decided
+	// evaluation is a baseline whatever Baseline says. Written by the
+	// caller, on insert and refresh; false on read for a row written
+	// before the column (NULL).
+	Baseline bool `json:"-"`
 }
 
 // holdMarker is in every stored report that carries a held deprecated
@@ -512,7 +523,8 @@ type EvaluationBatch struct {
 	// evaluated snapshot's id.
 	Insert []Evaluation
 	// Refresh updates existing rows by ID with an unchanged result:
-	// Report, KBVersion, TeamMapHash, Blockers, Warnings and EvaluatedAt.
+	// Report, KBVersion, TeamMapHash, Blockers, Warnings, EvaluatedAt and
+	// Baseline.
 	// Score, Ready and CreatedAt (the history point) stay.
 	Refresh []Evaluation
 	Outbox  []OutboxMessage

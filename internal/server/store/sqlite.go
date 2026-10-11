@@ -417,12 +417,12 @@ type sqlExecer interface {
 }
 
 // evaluationColumns is the SELECT list scanEvaluation reads.
-const evaluationColumns = `id, cluster_id, snapshot_id, target, kb_version, score, ready, blockers, warnings, report, created_at, evaluated_at, team_map_hash, not_assessed, teams IS NULL, carries_hold`
+const evaluationColumns = `id, cluster_id, snapshot_id, target, kb_version, score, ready, blockers, warnings, report, created_at, evaluated_at, team_map_hash, not_assessed, teams IS NULL, carries_hold, baseline`
 
 // summaryColumns is evaluationColumns without the report: NULL scans to a
 // nil Report, and the other columns are all a summary needs. Both drivers
 // use it.
-const summaryColumns = `id, cluster_id, snapshot_id, target, kb_version, score, ready, blockers, warnings, NULL, created_at, evaluated_at, team_map_hash, not_assessed, teams IS NULL, carries_hold`
+const summaryColumns = `id, cluster_id, snapshot_id, target, kb_version, score, ready, blockers, warnings, NULL, created_at, evaluated_at, team_map_hash, not_assessed, teams IS NULL, carries_hold, baseline`
 
 // The SQLite read queries whose plans TestEvaluationReadsUseIndexes pins:
 // each walks an index backwards by id and stops at the first row it keeps,
@@ -438,7 +438,7 @@ const (
 		WHERE snapshot_id = (SELECT MAX(id) FROM snapshots WHERE cluster_id = ?) AND target = ?
 		ORDER BY id DESC LIMIT 1`
 	sqliteLatestKnownQuery = `SELECT ` + evaluationColumns + ` FROM evaluations
-		WHERE cluster_id = ? AND target = ? AND (ready = 1 OR blockers > 0)
+		WHERE cluster_id = ? AND target = ? AND (ready = 1 OR blockers > 0 OR baseline = 1)
 		ORDER BY id DESC LIMIT 1`
 	// sqliteScoreHistoryQuery is newest first; ScoreHistory reverses it.
 	sqliteScoreHistoryQuery = `SELECT created_at, score, ready, blockers FROM evaluations
@@ -447,7 +447,7 @@ const (
 	// sqliteLatestKnownIDQuery is the commit's baseline check
 	// (Expectation.Baselines): the id LatestKnownEvaluation returns.
 	sqliteLatestKnownIDQuery = `SELECT id FROM evaluations
-		WHERE cluster_id = ? AND target = ? AND (ready = 1 OR blockers > 0)
+		WHERE cluster_id = ? AND target = ? AND (ready = 1 OR blockers > 0 OR baseline = 1)
 		ORDER BY id DESC LIMIT 1`
 	// sqliteSnapshotEvaluationIDQuery is the commit's Current check: the
 	// id of a snapshot's newest evaluation of a target.
@@ -459,11 +459,12 @@ func scanEvaluation(rs rowScanner) (Evaluation, error) {
 	var e Evaluation
 	var created, evaluated string
 	var gaps sql.NullString
-	var hold sql.NullBool
+	var hold, baseline sql.NullBool
 	if err := rs.Scan(&e.ID, &e.ClusterID, &e.SnapshotID, &e.Target, &e.KBVersion,
-		&e.Score, &e.Ready, &e.Blockers, &e.Warnings, &e.Report, &created, &evaluated, &e.TeamMapHash, &gaps, &e.TeamsUnknown, &hold); err != nil {
+		&e.Score, &e.Ready, &e.Blockers, &e.Warnings, &e.Report, &created, &evaluated, &e.TeamMapHash, &gaps, &e.TeamsUnknown, &hold, &baseline); err != nil {
 		return Evaluation{}, err
 	}
+	e.Baseline = baseline.Valid && baseline.Bool
 	e.NotAssessed = notAssessedBytes(gaps)
 	e.CarriesHold = carriesHoldColumn(hold)
 	var err error
@@ -498,10 +499,10 @@ func insertEvaluationSQLite(ctx context.Context, x sqlExecer, e Evaluation) (int
 		evaluated = created
 	}
 	res, err := x.ExecContext(ctx, `
-		INSERT INTO evaluations (cluster_id, snapshot_id, target, kb_version, score, ready, blockers, warnings, report, created_at, evaluated_at, team_map_hash, not_assessed, teams, carries_hold)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		INSERT INTO evaluations (cluster_id, snapshot_id, target, kb_version, score, ready, blockers, warnings, report, created_at, evaluated_at, team_map_hash, not_assessed, teams, carries_hold, baseline)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		e.ClusterID, e.SnapshotID, e.Target, e.KBVersion, e.Score, e.Ready, e.Blockers, e.Warnings, e.Report,
-		formatTime(created), formatTime(evaluated), e.TeamMapHash, notAssessedOf(e.Report), teamsColumn(e.Teams), CarriesHold(e.Report))
+		formatTime(created), formatTime(evaluated), e.TeamMapHash, notAssessedOf(e.Report), teamsColumn(e.Teams), CarriesHold(e.Report), e.Baseline)
 	if err != nil {
 		return 0, fmt.Errorf("insert evaluation: %w", err)
 	}
@@ -547,7 +548,7 @@ func (s *SQLite) CurrentEvaluationSummary(ctx context.Context, clusterID int64, 
 }
 
 // LatestKnownEvaluation returns the newest evaluation for (cluster, target)
-// that is ready or has a blocker, or ErrNotFound.
+// that is ready, has a blocker, or is marked a baseline, or ErrNotFound.
 func (s *SQLite) LatestKnownEvaluation(ctx context.Context, clusterID int64, target string) (Evaluation, error) {
 	return s.queryEvaluation(ctx, fmt.Sprintf("latest known evaluation for cluster %d target %s", clusterID, target),
 		sqliteLatestKnownQuery, clusterID, target)
@@ -656,9 +657,9 @@ func (s *SQLite) CommitEvaluations(ctx context.Context, b EvaluationBatch) (int6
 			evaluated = time.Now().UTC()
 		}
 		if err := execOne(ctx, tx, fmt.Sprintf("commit evaluations: refresh evaluation %d", e.ID), `
-			UPDATE evaluations SET report = ?, not_assessed = ?, kb_version = ?, team_map_hash = ?, teams = ?, blockers = ?, warnings = ?, evaluated_at = ?, carries_hold = ?
+			UPDATE evaluations SET report = ?, not_assessed = ?, kb_version = ?, team_map_hash = ?, teams = ?, blockers = ?, warnings = ?, evaluated_at = ?, carries_hold = ?, baseline = ?
 			WHERE id = ? AND cluster_id = ?`,
-			e.Report, notAssessedOf(e.Report), e.KBVersion, e.TeamMapHash, teamsColumn(e.Teams), e.Blockers, e.Warnings, formatTime(evaluated), CarriesHold(e.Report), e.ID, b.ClusterID); err != nil {
+			e.Report, notAssessedOf(e.Report), e.KBVersion, e.TeamMapHash, teamsColumn(e.Teams), e.Blockers, e.Warnings, formatTime(evaluated), CarriesHold(e.Report), e.Baseline, e.ID, b.ClusterID); err != nil {
 			return 0, false, err
 		}
 	}

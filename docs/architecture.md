@@ -772,12 +772,16 @@ if it is deleted, and writes status with conflict retry.
 - **Notifications**: after each evaluation, the server diffs the new report
   against the previous one for that cluster and target, using finding keys.
   It emits `new-blocker` (capped at 5, plus an "N more" summary),
-  `became-ready` and `eol-approaching` events. Nothing is sent on a
-  cluster's first evaluation, and nothing is sent for unchanged snapshots.
-  When a cluster upgrades, its new default target has no earlier
-  evaluation; the previous default target's last decided evaluation is the
-  baseline, so blockers the new target adds are announced and ones the
-  cluster already had are not.
+  `became-ready` and `eol-approaching` events. The previous one is the
+  target's last baseline: a decided evaluation, or an `unknown` one whose
+  only required gaps hide no finding (`kb-coverage`, a target past the
+  knowledge base's horizon; `target`), which saw everything a blocker
+  comes from (#380). An `unknown` pass behind a collector failure sends
+  nothing and is no baseline. Nothing is sent on a cluster's first
+  evaluation, and nothing is sent for unchanged snapshots. When a cluster
+  upgrades, its new default target has no earlier evaluation; the previous
+  default target's last baseline is the baseline, so blockers the new
+  target adds are announced and ones the cluster already had are not.
 - **Dashboard**: the SPA under `web/` is built into
   `internal/server/webdist/` and embedded. Static assets are served without
   auth, and the SPA sends the read token on API calls. The build tag

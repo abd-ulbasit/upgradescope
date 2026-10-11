@@ -383,11 +383,12 @@ func (p *Postgres) LatestSnapshotHeads(ctx context.Context) (map[int64]Snapshot,
 func scanEvaluationPg(rs rowScanner) (Evaluation, error) {
 	var e Evaluation
 	var gaps sql.NullString
-	var hold sql.NullBool
+	var hold, baseline sql.NullBool
 	if err := rs.Scan(&e.ID, &e.ClusterID, &e.SnapshotID, &e.Target, &e.KBVersion,
-		&e.Score, &e.Ready, &e.Blockers, &e.Warnings, &e.Report, &e.CreatedAt, &e.EvaluatedAt, &e.TeamMapHash, &gaps, &e.TeamsUnknown, &hold); err != nil {
+		&e.Score, &e.Ready, &e.Blockers, &e.Warnings, &e.Report, &e.CreatedAt, &e.EvaluatedAt, &e.TeamMapHash, &gaps, &e.TeamsUnknown, &hold, &baseline); err != nil {
 		return Evaluation{}, err
 	}
+	e.Baseline = baseline.Valid && baseline.Bool
 	e.NotAssessed = notAssessedBytes(gaps)
 	e.CarriesHold = carriesHoldColumn(hold)
 	e.CreatedAt = e.CreatedAt.UTC()
@@ -412,10 +413,10 @@ func insertEvaluationPg(ctx context.Context, x sqlExecer, e Evaluation) (int64, 
 	}
 	var id int64
 	err := x.QueryRowContext(ctx, `
-		INSERT INTO evaluations (cluster_id, snapshot_id, target, kb_version, score, ready, blockers, warnings, report, created_at, evaluated_at, team_map_hash, not_assessed, teams, carries_hold)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) RETURNING id`,
+		INSERT INTO evaluations (cluster_id, snapshot_id, target, kb_version, score, ready, blockers, warnings, report, created_at, evaluated_at, team_map_hash, not_assessed, teams, carries_hold, baseline)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16) RETURNING id`,
 		e.ClusterID, e.SnapshotID, e.Target, e.KBVersion, e.Score, e.Ready, e.Blockers, e.Warnings, e.Report,
-		created, evaluated, e.TeamMapHash, notAssessedOf(e.Report), teamsColumn(e.Teams), CarriesHold(e.Report)).Scan(&id)
+		created, evaluated, e.TeamMapHash, notAssessedOf(e.Report), teamsColumn(e.Teams), CarriesHold(e.Report), e.Baseline).Scan(&id)
 	if err != nil {
 		return 0, fmt.Errorf("insert evaluation: %w", err)
 	}
@@ -462,7 +463,7 @@ func (p *Postgres) CurrentEvaluationSummary(ctx context.Context, clusterID int64
 }
 
 // LatestKnownEvaluation returns the newest evaluation for (cluster, target)
-// that is ready or has a blocker, or ErrNotFound.
+// that is ready, has a blocker, or is marked a baseline, or ErrNotFound.
 func (p *Postgres) LatestKnownEvaluation(ctx context.Context, clusterID int64, target string) (Evaluation, error) {
 	return p.queryEvaluation(ctx, fmt.Sprintf("latest known evaluation for cluster %d target %s", clusterID, target),
 		pgLatestKnownQuery, clusterID, target)
@@ -472,12 +473,12 @@ func (p *Postgres) LatestKnownEvaluation(ctx context.Context, clusterID int64, t
 // pins: each walks an index of migration 0009 backwards.
 const (
 	pgLatestKnownQuery = `SELECT ` + evaluationColumns + ` FROM evaluations
-		WHERE cluster_id = $1 AND target = $2 AND (ready OR blockers > 0)
+		WHERE cluster_id = $1 AND target = $2 AND (ready OR blockers > 0 OR baseline)
 		ORDER BY id DESC LIMIT 1`
 	// pgLatestKnownIDQuery is the commit's baseline check
 	// (Expectation.Baselines): the id LatestKnownEvaluation returns.
 	pgLatestKnownIDQuery = `SELECT id FROM evaluations
-		WHERE cluster_id = $1 AND target = $2 AND (ready OR blockers > 0)
+		WHERE cluster_id = $1 AND target = $2 AND (ready OR blockers > 0 OR baseline)
 		ORDER BY id DESC LIMIT 1`
 	// pgScoreHistoryQuery is newest first; ScoreHistory reverses it.
 	pgScoreHistoryQuery = `SELECT created_at, score, ready, blockers FROM evaluations
@@ -602,9 +603,9 @@ func (p *Postgres) CommitEvaluations(ctx context.Context, b EvaluationBatch) (in
 			evaluated = time.Now().UTC()
 		}
 		if err := execOne(ctx, tx, fmt.Sprintf("commit evaluations: refresh evaluation %d", e.ID), `
-			UPDATE evaluations SET report = $1, not_assessed = $2, kb_version = $3, team_map_hash = $4, teams = $5, blockers = $6, warnings = $7, evaluated_at = $8, carries_hold = $9
-			WHERE id = $10 AND cluster_id = $11`,
-			e.Report, notAssessedOf(e.Report), e.KBVersion, e.TeamMapHash, teamsColumn(e.Teams), e.Blockers, e.Warnings, evaluated, CarriesHold(e.Report), e.ID, b.ClusterID); err != nil {
+			UPDATE evaluations SET report = $1, not_assessed = $2, kb_version = $3, team_map_hash = $4, teams = $5, blockers = $6, warnings = $7, evaluated_at = $8, carries_hold = $9, baseline = $10
+			WHERE id = $11 AND cluster_id = $12`,
+			e.Report, notAssessedOf(e.Report), e.KBVersion, e.TeamMapHash, teamsColumn(e.Teams), e.Blockers, e.Warnings, evaluated, CarriesHold(e.Report), e.Baseline, e.ID, b.ClusterID); err != nil {
 			return 0, false, err
 		}
 	}

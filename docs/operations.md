@@ -687,12 +687,29 @@ newline) is trimmed first. A webhook URL is a secret (a Slack webhook's
 path is its credential), so a failed delivery is logged, and stored in
 the outbox's `last_error`, with the URL's scheme and host only:
 `https://hooks.slack.com/…` (a URL holding an `@` has the host withheld
-too, and its error gives only the reason, such as `connection refused`). Each pass is compared with the target's last evaluation that had
-a decided verdict (ready or blocked). A pass whose verdict is unknown sends
-nothing and is not a baseline either: what it could not see is not news.
+too, and its error gives only the reason, such as `connection refused`).
+Each pass is compared with the target's last
+**baseline**: an evaluation with a decided verdict (ready or blocked), or
+one that is `unknown` only for gaps that hide no finding: `kb-coverage`
+(the target is past the knowledge base's horizon, as the default target of
+a cluster on the newest minor is) and `target` (it is not an upgrade).
+Such an unknown pass saw every capability a blocker comes from, so it is
+compared like a decided one and is the next pass's baseline (#380). It has
+no blocker (any blocker makes a verdict `blocked`), so it sends at most
+`eol-approaching` itself, but on a cluster first seen on the newest minor
+the first EOL add-on is a `new-blocker`, and a blocker that such a pass
+saw gone is a `new-blocker` again when it returns. The blockers it saw
+resolved keep a `became-ready` pending: the first `ready` pass after it
+(once a knowledge-base update decides the target) sends it. A pass that
+is `unknown` because a required collector capability was not assessed
+(api-usage, versions or addons failed or were partial over what they
+cover, or the agent's knowledge base differs from the server's) sends
+nothing and is not a baseline either: what it could not see may be a
+blocker, so the pass after it is compared with the baseline before it.
+An `unknown` evaluation stored before migration 0011 is not a baseline.
 
-**What a decided pass could not see.** A pass can be decided and still
-miss a check: blocked by one blocker while api-usage was forbidden, or
+**What a decided pass could not see.** A pass can be decided, or be an
+unknown baseline, and still miss a check: blocked by one blocker while api-usage was forbidden, or
 ready while `/metrics` was denied or timed out (deprecated-calls is not
 required for the verdict). Each finding comes from known collector
 capabilities: API usage findings from api-usage, Helm release findings
@@ -841,9 +858,10 @@ not notify every cluster at once.
 
 **After a cluster upgrade.** When a cluster upgrades, its default target
 moves up one minor: a cluster on 1.35 is judged against 1.36; after its
-upgrade to 1.36, against 1.37. The new default target's first decided
-evaluation is compared with the previous default target's last decided one
-(the nearest lower target that has one, up to 3 minors below). So:
+upgrade to 1.36, against 1.37. The new default target's first baseline
+evaluation (decided, or unknown past the horizon) is compared with the
+previous default target's last baseline (the nearest lower target that has
+one, up to 3 minors below). So:
 
 - a blocker that the new target adds is a `new-blocker`. For example, a
   cluster that still calls `networking.k8s.io/v1beta1` ServiceCIDR, removed
@@ -854,16 +872,20 @@ evaluation is compared with the previous default target's last decided one
 - if the old target was blocked and the new one is ready, the cluster gets
   `became-ready`.
 
-The same comparison applies when a newer server or knowledge base first
-decides a default target that it could not judge before (a cluster on the
-newest minor, whose next minor was past the knowledge base's horizon and
-so `unknown`). Every cluster on that minor then gets its first decided
-evaluation in the same pass. Each one that has a stored decided
-evaluation of a lower target (within three minors below) is compared with
-it and notified once of the blockers that are new to it (at most one
-notification per cluster, its changes capped as usual). A cluster without
-one, because it was first seen on the newest minor, has nothing to
-compare with, and its first decided evaluation is a silent baseline.
+A newer server or knowledge base that first decides a default target it
+could not judge before (a cluster on the newest minor, whose next minor
+was past the knowledge base's horizon and so `unknown`) compares the same
+way. Every cluster on that minor then gets its first decided evaluation in
+the same pass, compared with its last baseline of that target: its
+`unknown` passes past the horizon are baselines, whether or not the
+cluster has a decided evaluation of a lower target. So each one is
+notified once of the blockers the update adds (at most one notification
+per cluster, its changes capped as usual), and not of the ones its
+baseline already had. A cluster whose every pass at that target was
+`unknown` behind a collector failure has no baseline there; it is
+compared with its decided evaluation of a lower target (within three
+minors below), and without one its first decided evaluation is a silent
+baseline.
 
 This differs from a target added to `--targets`, which stays silent: adding
 a target asks a new question about a cluster that has not changed, and
@@ -872,13 +894,12 @@ unknown until a knowledge-base update is the cluster's real next upgrade,
 and the update is the first time anyone could say what blocks it, so those
 blockers are genuinely new to each cluster and are announced, once.
 
-Retention keeps the baselines in use: the last decided evaluation of
-each target the server evaluates for the cluster, and of the three minors
-below its default target, stays however old (see [Retention and
-backup](operations/retention-and-backup.md)), so a target that stays
-`unknown` for longer than `--retention` (a collector failing that long,
-or a new default target with no knowledge base for it) is still compared
-with it when it is next decided. The baseline of a target the server no
+Retention keeps the baselines in use: the last baseline of each target
+the server evaluates for the cluster, and of the three minors below its
+default target, stays however old (see [Retention and
+backup](operations/retention-and-backup.md)), so a target whose passes
+stay `unknown` behind a collector failure for longer than `--retention`
+is still compared with it when it is next decided. The baseline of a target the server no
 longer evaluates for the cluster ages out with the rest.
 
 **Concurrent writers.** Several replicas (Postgres), or one replica's
