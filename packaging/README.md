@@ -37,8 +37,13 @@ account action that a workflow cannot do.
    `charts/upgradescope` as private packages. Set both to public under
    Package settings → Danger Zone → Change visibility. Then re-run the
    release's `verify` job, which pulls them anonymously.
-2. **Apply the tag rulesets** in [`.github/rulesets/`](../.github/rulesets/).
-   That README has the commands.
+2. **The rulesets** in [`.github/rulesets/`](../.github/rulesets/) are
+   applied (2026-10-11): `release-tags.json` as ruleset 24349764 and
+   `main.json` as ruleset 24343445, which requires `ci-ok` and
+   `breaking-change`. Nothing to do here; CI's `hack/rulesets-live.sh` checks
+   on every pull request and push that the live rulesets still equal the
+   files. After a change to a file, or an intended change in the UI, that
+   README has the update commands.
 
 ### Homebrew tap
 

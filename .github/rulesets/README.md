@@ -1,18 +1,63 @@
 # Repository rulesets
 
 GitHub does not read these files. They record this repository's rulesets,
-so that the rulesets are reviewed like code and can be re-applied.
-`release-tags.json` is applied; `major-tag.json` is not (see below). Apply
-or update one with the GitHub API. You need admin on the repository.
+so that the rulesets are reviewed like code and can be re-applied, and
+`hack/rulesets-live.sh` checks that the rulesets applied on GitHub equal them.
+
+| File | State | Ruleset id |
+|---|---|---|
+| `release-tags.json` | applied (2026-10-11) | 24349764 |
+| `main.json` | applied (2026-10-11) | 24343445 |
+| `major-tag.json` | not applied (see below) | none |
+
+Updating or checking one needs the GitHub API. Writing needs admin on the
+repository; reading does not.
 
 ```sh
-# create
-gh api -X POST repos/abd-ulbasit/upgradescope/rulesets --input .github/rulesets/release-tags.json
-# update (the id is in: gh api repos/abd-ulbasit/upgradescope/rulesets)
-gh api -X PUT repos/abd-ulbasit/upgradescope/rulesets/<id> --input .github/rulesets/release-tags.json
+# update an applied ruleset from its file (PUT replaces it as a whole)
+gh api -X PUT repos/abd-ulbasit/upgradescope/rulesets/24349764 --input .github/rulesets/release-tags.json
+gh api -X PUT repos/abd-ulbasit/upgradescope/rulesets/24343445 --input .github/rulesets/main.json
 # check that the tag rules are active
 gh api 'repos/abd-ulbasit/upgradescope/rulesets?targets=tag'
+# check what a branch is bound by (the required checks of main)
+gh api repos/abd-ulbasit/upgradescope/rules/branches/main
+# check that every applied ruleset equals its file (read-only)
+make rulesets-check
 ```
+
+A POST (`gh api -X POST repos/abd-ulbasit/upgradescope/rulesets --input
+<file>`) only creates a ruleset, on a repository that has none with that
+name. For the two applied files it fails with 422 "Name must be unique",
+because they exist: that error means use PUT with the id above. (The ids are
+also in `gh api repos/abd-ulbasit/upgradescope/rulesets`.)
+
+## Checking the live rulesets
+
+`hack/rulesets-live.sh` (`make rulesets-check`) reads the live rulesets with
+`gh api` (GET only; it never changes one) and compares each applied file
+(`main.json` and `release-tags.json`, never `major-tag.json`) with the live
+ruleset of the same name: `target`, `enforcement`, `conditions` and `rules`.
+The rules are compared as a set with their parameters in full, so the order
+the API returns them in does not matter, and a required check that lost its
+`integration_id` does. A missing ruleset or any difference fails, with a diff
+naming the file and the field. CI's `repo-checks` job runs it on every pull
+request and push, and not on a release, which depends on the tagged code and
+never on live repository state. If the API cannot be read after two retries,
+it fails rather than skips.
+
+`bypass_actors` is compared only when the live answer includes it, and
+GitHub shows it to repository admins only: the CI token does not get it, so
+CI does not compare it. Run `make rulesets-check` locally, logged in as the
+owner, to compare it too (it was on 2026-10-11).
+
+After an intended change in the UI, copy the new state into the file in the
+same pull request: `gh api repos/abd-ulbasit/upgradescope/rulesets/<id>`,
+without the `id`, `node_id`, `source*`, `created_at`, `updated_at`,
+`current_user_can_bypass` and `_links` fields, formatted like the files here.
+After a change to a file, apply it with the PUT above. Until then the
+check fails on that pull request and on every one after it, which is the
+point; so apply a file change right after it merges, or just before, with
+the pull request's check re-run.
 
 ## `release-tags.json`: release tags are immutable
 
@@ -50,15 +95,27 @@ What this means for maintainers:
   assets of a published release, but it stops a half-failed release from
   being re-run in place. Make that trade-off before enabling it.
 
-## The `main` ruleset: required checks
+## `main.json`: the `main` ruleset
 
-No JSON is kept for the `main` ruleset. It requires `ci-ok`, the one check
-that aggregates the `ci.yml` jobs. `pr-lint.yml` is a separate workflow and
-is not part of `ci-ok`, so a failing `pr-lint / breaking-change` check does
-not block a merge on its own. To make the BREAKING CHANGE rule binding, add
-`pr-lint / breaking-change` to the ruleset's required status checks
-(Settings → Rules → the `main` ruleset → Require status checks to pass).
-That is a setting for the repository admin; no file here applies it.
+It applies to the default branch (`~DEFAULT_BRANCH`) and forbids deleting
+it and force-pushing it. A change goes through a pull request (squash or
+merge; no approving review is required), and two status checks must pass:
+
+- **The required checks.** `ci-ok`, the one check that aggregates the
+  `ci.yml` jobs, and `breaking-change`, the check of `pr-lint.yml`. A PR with
+  a `BREAKING CHANGE:` footer but no `type!:` subject, or an uppercase type,
+  cannot merge (`hack/check-breaking.sh`; IR-06). `pr-lint.yml` is a separate
+  workflow and not part of `ci-ok`, which is why it is required on its own.
+- **The context.** It is the check-run (job) name. The pull request page
+  shows `pr-lint / breaking-change` (workflow / job), but the context a
+  ruleset matches is `breaking-change`, the job id in `pr-lint.yml`. Writing
+  `pr-lint / breaking-change` there would never be satisfied.
+- **The pin.** `breaking-change` is pinned to `integration_id` 15368, the
+  GitHub Actions app, so a commit status or another app's check with that
+  name does not satisfy it. `ci-ok` is not pinned, as applied.
+- **Bypass.** The repository's admin role (`RepositoryRole` 5) can bypass the
+  ruleset, always. That is the owner of this personal repository; nobody else
+  can.
 
 ## `major-tag.json`: not applied
 
@@ -87,9 +144,9 @@ make every move of `v0` appear as a workflow run, but it would not narrow
 who can move `v0`. The bypass belongs to the Actions app, not to one
 workflow, and the `main` ruleset protects only the default branch. Anyone
 with write access could push a branch with a workflow that has
-`contents: write` and moves `v0`. To apply it there, run the create command
-above with `--input .github/rulesets/major-tag.json` and the new owner in
-the path.
+`contents: write` and moves `v0`. To apply it there, create it with the POST
+above, with `--input .github/rulesets/major-tag.json` and the new owner in
+the path (the repository has no ruleset of that name, so POST is right).
 
 A narrower option, not tried: give a deploy key or a dedicated GitHub App
 installed on the repository the bypass, and have the `major-tag` job push

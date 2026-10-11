@@ -127,29 +127,33 @@ fi
 # and still runs on a pull request, a push to main and a dispatch on a
 # branch. Its `if`, evaluated with node (it uses only !, && and !=, which
 # JavaScript evaluates the same way; a missing input is null, as in Actions).
-step=$(awk '/^  repo-checks:$/ { j = 1; next } j && /^  [a-z0-9_-]+:[ ]*$/ { j = 0 }
-  j && /^      - / { s = ($0 ~ /- name: every tracker the claims ledger names is open$/) }
-  j && s' .github/workflows/ci.yml)
-cond=$(sed -n 's/^        if: //p' <<<"$step")
-if ! grep -qF 'run: hack/claims-trackers.sh' <<<"$step" || [ -z "$cond" ]; then
-  echo "FAIL repo-checks' claims-trackers step has no if: (it would run on a release)" | tee -a "$work/results" >&2
-elif ! command -v node >/dev/null; then
-  echo "FAIL node is required to evaluate the claims-trackers step's if" | tee -a "$work/results" >&2
-else
-  while read -r want ctx; do
-    got=$(node -e '
-      const [src, ctxJSON] = process.argv.slice(1);
-      const ctx = JSON.parse(ctxJSON);
-      const e = src.trim().replace(/^\$\{\{([\s\S]*)\}\}$/, "$1");
-      const inputs = new Proxy(ctx.inputs, { get: (o, k) => (k in o ? o[k] : null) });
-      process.stdout.write(String(!!new Function("github", "inputs", "return (" + e + ");")(ctx.github, inputs)));
-    ' "$cond" "$ctx" 2>&1) || got="error: $got"
-    if [ "$got" = "$want" ]; then
-      echo "ok   the claims-trackers step runs=$want for $ctx" | tee -a "$work/results"
-    else
-      echo "FAIL the claims-trackers step (if: $cond) runs=$got for $ctx, want $want" | tee -a "$work/results" >&2
-    fi
-  done <<'EOF'
+# The same holds for the other online step of that job, which reads the live
+# rulesets (hack/rulesets-live.sh, IR-06 and IR-11), so both are evaluated.
+check_if() { # check_if <step name> <run line> <label>
+  local step cond want ctx got
+  step=$(awk -v name="$1" '/^  repo-checks:$/ { j = 1; next } j && /^  [a-z0-9_-]+:[ ]*$/ { j = 0 }
+    j && /^      - / { s = ($0 == "      - name: " name) }
+    j && s' .github/workflows/ci.yml)
+  cond=$(sed -n 's/^        if: //p' <<<"$step")
+  if ! grep -qxF "        run: $2" <<<"$step" || [ -z "$cond" ]; then
+    echo "FAIL repo-checks' $3 step has no if: (it would run on a release)" | tee -a "$work/results" >&2
+  elif ! command -v node >/dev/null; then
+    echo "FAIL node is required to evaluate the $3 step's if" | tee -a "$work/results" >&2
+  else
+    while read -r want ctx; do
+      got=$(node -e '
+        const [src, ctxJSON] = process.argv.slice(1);
+        const ctx = JSON.parse(ctxJSON);
+        const e = src.trim().replace(/^\$\{\{([\s\S]*)\}\}$/, "$1");
+        const inputs = new Proxy(ctx.inputs, { get: (o, k) => (k in o ? o[k] : null) });
+        process.stdout.write(String(!!new Function("github", "inputs", "return (" + e + ");")(ctx.github, inputs)));
+      ' "$cond" "$ctx" 2>&1) || got="error: $got"
+      if [ "$got" = "$want" ]; then
+        echo "ok   the $3 step runs=$want for $ctx" | tee -a "$work/results"
+      else
+        echo "FAIL the $3 step (if: $cond) runs=$got for $ctx, want $want" | tee -a "$work/results" >&2
+      fi
+    done <<'EOF'
 false {"github":{"event_name":"push","ref_type":"tag"},"inputs":{"release":true}}
 false {"github":{"event_name":"workflow_dispatch","ref_type":"tag"},"inputs":{"release":true}}
 false {"github":{"event_name":"workflow_dispatch","ref_type":"branch"},"inputs":{"release":true}}
@@ -157,7 +161,10 @@ true {"github":{"event_name":"pull_request","ref_type":"branch"},"inputs":{}}
 true {"github":{"event_name":"push","ref_type":"branch"},"inputs":{}}
 true {"github":{"event_name":"workflow_dispatch","ref_type":"branch"},"inputs":{"full-matrix":true}}
 EOF
-fi
+  fi
+}
+check_if "every tracker the claims ledger names is open" "hack/claims-trackers.sh" "claims-trackers"
+check_if "the live rulesets equal .github/rulesets" "hack/rulesets-live.sh" "rulesets-live"
 
 pass=$(grep -c '^ok' "$work/results" || true)
 fail=$(grep -c '^FAIL' "$work/results" || true)
