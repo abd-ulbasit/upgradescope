@@ -144,6 +144,18 @@ func (f *dbFlags) resolve(cmd *cobra.Command) error {
 	return f.dbURLSecret.resolve(cmd)
 }
 
+// open is resolve then openStore on the one struct. The pointer receiver is
+// the point: the -file and env sources fill f.dbURL through a pointer into
+// f, so a copy of dbFlags taken between register and resolve would resolve
+// into the original and open its own empty URL, the SQLite default (#382:
+// tokens create --read minted into ./upgradescope.db).
+func (f *dbFlags) open(cmd *cobra.Command) (store.Store, error) {
+	if err := f.resolve(cmd); err != nil {
+		return nil, err
+	}
+	return f.openStore()
+}
+
 // openStore opens the selected backend: Postgres when --db-url is set,
 // otherwise SQLite at --db (creating parent directories).
 func (f dbFlags) openStore() (store.Store, error) {
@@ -239,7 +251,7 @@ dashboard users or CI.`,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if read {
-				return createReadToken(cmd, flags, teams)
+				return createReadToken(cmd, &flags, teams)
 			}
 			if cmd.Flags().Changed("teams") {
 				return errors.New("--teams scopes a read token: pass --read too")
@@ -254,10 +266,7 @@ dashboard users or CI.`,
 			if err != nil {
 				return err
 			}
-			if err := flags.resolve(cmd); err != nil {
-				return err
-			}
-			st, err := flags.openStore()
+			st, err := flags.open(cmd)
 			if err != nil {
 				return err
 			}
@@ -333,7 +342,7 @@ func teamList(teams []string) string {
 const maxTeamName = 253
 
 // createReadToken is `tokens create --read --teams ...`.
-func createReadToken(cmd *cobra.Command, flags dbFlags, raw []string) error {
+func createReadToken(cmd *cobra.Command, flags *dbFlags, raw []string) error {
 	teams, err := readTokenTeams(raw, cmd.ErrOrStderr())
 	if err != nil {
 		return err
@@ -342,10 +351,7 @@ func createReadToken(cmd *cobra.Command, flags dbFlags, raw []string) error {
 	if err != nil {
 		return err
 	}
-	if err := flags.resolve(cmd); err != nil {
-		return err
-	}
-	st, err := flags.openStore()
+	st, err := flags.open(cmd)
 	if err != nil {
 		return err
 	}
@@ -384,10 +390,7 @@ func newTokensListCmd() *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			if err := flags.resolve(cmd); err != nil {
-				return err
-			}
-			st, err := flags.openStore()
+			st, err := flags.open(cmd)
 			if err != nil {
 				return err
 			}
@@ -472,10 +475,7 @@ func newTokensRevokeCmd() *cobra.Command {
 			if read && all {
 				return errors.New("--read revokes one read token: pass --id, not --all")
 			}
-			if err := flags.resolve(cmd); err != nil {
-				return err
-			}
-			st, err := flags.openStore()
+			st, err := flags.open(cmd)
 			if err != nil {
 				return err
 			}
