@@ -65,6 +65,8 @@ func (e *LimitError) Unquoted() string { return e.At + ": " + e.Limit }
 //     capability's reason at most MaxReasonBytes, and an object's
 //     manager at most MaxManagerBytes of printable characters, as the
 //     apiserver requires of a managedFields manager;
+//   - an API usage entry's count, objectsOmitted and every namespace's
+//     count are at least zero, in each of those lists;
 //   - an API usage entry lists at most MaxObjectRefs objects (collectors
 //     count the rest in objectsOmitted), and a list of them (apiUsage,
 //     apiAuthorshipUnknown, a Helm release's manifestApis, a CRD's usage) names each
@@ -229,6 +231,10 @@ func validateUsages(at func() string, us []APIUsage) error {
 				"%s is listed again (first at %s[%d]): a collector counts each group/version/kind once", quoteShort(gvString(u.Group, u.Version)+" "+u.Kind), at(), j)}
 		}
 		seen[gvk] = i
+		if what, p, limit := negativeCount(u); p != "" {
+			field := fmt.Sprintf("%s[%d]%s", at(), i, what)
+			return &LimitError{Field: field, Problem: p, At: field, Limit: limit}
+		}
 		if n := len(u.Objects); n > MaxObjectRefs {
 			field := fmt.Sprintf("%s[%d].objects", at(), i)
 			p := fmt.Sprintf("%d objects, over the %d a collector records (it counts the rest in objectsOmitted)", n, MaxObjectRefs)
@@ -242,6 +248,38 @@ func validateUsages(at func() string, us []APIUsage) error {
 		}
 	}
 	return nil
+}
+
+// negativeCount says where an API usage entry (or, through asUsage, a
+// volume plugin entry) counts something negative, where a collector counts
+// what it saw: its count (what is ".count"), its objectsOmitted
+// (".objectsOmitted") or a namespace's count (".namespaces", the least key
+// named so that the message does not depend on map order). problem is ""
+// when nothing is negative. The engine skips a row whose Count is not
+// positive in some places and not others, so a negative one was never
+// harmless: a Helm release's was dropped without a finding, an API usage
+// entry's read "(-5 objects)".
+func negativeCount(u APIUsage) (what, problem, limit string) {
+	switch {
+	case u.Count < 0:
+		what = ".count"
+	case u.ObjectsOmitted < 0:
+		what = ".objectsOmitted"
+	default:
+		bad, found := "", false
+		for ns, n := range u.Namespaces {
+			if n < 0 && (!found || ns < bad) {
+				bad, found = ns, true
+			}
+		}
+		if !found {
+			return "", "", ""
+		}
+		return ".namespaces", fmt.Sprintf("namespace %s counted negative, where a collector counts what it saw", quoteShort(bad)),
+			"a namespace counted negative, where a collector counts what it saw"
+	}
+	p := "a negative count, where a collector counts what it saw"
+	return what, p, p
 }
 
 func gvString(group, version string) string {

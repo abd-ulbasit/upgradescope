@@ -95,24 +95,18 @@ func (inv Inventory) validateVolumeLimits() error {
 		case seen[v.Plugin]:
 			p := fmt.Sprintf("plugin %s listed twice, where a collector counts each once", quoteShort(v.Plugin))
 			return &LimitError{Field: at + ".plugin", Problem: p, At: at + ".plugin", Limit: "a plugin listed twice, where a collector counts each once"}
-		case v.Count < 0 || v.ObjectsOmitted < 0:
-			p := "a negative count, where a collector counts what it saw"
-			return &LimitError{Field: at, Problem: p, At: at, Limit: p}
 		case len(v.Objects) > MaxObjectRefs:
 			p := fmt.Sprintf("%d objects, over the %d a collector lists (it counts the rest in objectsOmitted)", len(v.Objects), MaxObjectRefs)
 			return &LimitError{Field: at + ".objects", Problem: p, At: at + ".objects", Limit: p}
 		}
-		// Of several negative namespace counts the least key is named, so
-		// the message does not depend on map order.
-		bad, found := "", false
-		for ns, n := range v.Namespaces {
-			if n < 0 && (!found || ns < bad) {
-				bad, found = ns, true
+		// A negative count is the entry's (volumePlugins[0]), a namespace's
+		// the entry's namespaces (volumePlugins[0].namespaces).
+		if what, p, limit := negativeCount(v.asUsage()); p != "" {
+			field := at
+			if what == ".namespaces" {
+				field += what
 			}
-		}
-		if found {
-			p := fmt.Sprintf("namespace %s counted negative, where a collector counts what it saw", quoteShort(bad))
-			return &LimitError{Field: at + ".namespaces", Problem: p, At: at + ".namespaces", Limit: "a namespace counted negative, where a collector counts what it saw"}
+			return &LimitError{Field: field, Problem: p, At: field, Limit: limit}
 		}
 		for k, o := range v.Objects {
 			if p, limit := managerProblem(o.Manager); p != "" {
