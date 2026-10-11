@@ -54,6 +54,18 @@ check "a pre-release does not mention the tap at all" 0.2.0-rc.2 rc.2 lacks 'hom
 check "a stable release's list is intact (krew follows Homebrew)" 0.2.0 "" has $'hours)\n- krew:'
 check "a pre-release's list starts at krew" 0.2.0-rc.2 rc.2 has $'## Install\n\n- krew:'
 check "the image line carries the version (pre-release)" 0.2.0-rc.2 rc.2 has 'ghcr.io/abd-ulbasit/upgradescope:0.2.0-rc.2'
+# The Verify block (#377): the signatures are cosign 3 bundles, so the image
+# and chart commands fail with "no signatures found" on cosign 2.6.2 and older.
+for v in "0.2.0 ''" "0.2.0-rc.2 rc.2"; do
+  set -- $v
+  pre=${2:-}; pre=${pre//\'/}
+  check "the footer ($1) names the cosign minimum" "$1" "$pre" has 'cosign 3.x, or 2.6.3 or later'
+  check "the footer ($1) says older cosign finds no signatures" "$1" "$pre" has 'no signatures found'
+  check "the footer ($1) keeps the image cosign verify command" "$1" "$pre" has "cosign verify ghcr.io/abd-ulbasit/upgradescope:$1 \\"
+  check "the footer ($1) shows the chart cosign verify command" "$1" "$pre" has "cosign verify ghcr.io/abd-ulbasit/charts/upgradescope:$1"
+  check "the footer ($1) keeps verify-blob for checksums.txt" "$1" "$pre" has 'cosign verify-blob checksums.txt --bundle checksums.txt.sigstore.json'
+  check "the footer ($1) says verify-blob works on older cosign" "$1" "$pre" has 'verify-blob` of `checksums.txt` works from cosign 2.4.3'
+done
 check "no template action is left unrendered" 0.2.0 "" lacks '{{'
 
 pass=$(grep -c '^ok' "$work/results" || true)
