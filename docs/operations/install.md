@@ -110,10 +110,11 @@ Each platform image is signed too and verifies on its own, by digest.
 The signatures are in cosign 3's bundle format, stored as OCI referrers. On
 cosign 2.6.2 or older the command above fails with `Error: no signatures
 found` (exit 10), though the image is signed: nothing is wrongly accepted, it
-fails closed. Upgrade cosign (the default of `sigstore/cosign-installer` v3
+fails closed. Upgrade cosign (the default of `sigstore/cosign-installer` v3.10.1
 is 2.6.1, too old: set `cosign-release` to `v2.6.3` or later, or use
-installer v4). Release CI runs this command with cosign v2.6.3 and with the
-current default against every published image and chart.
+installer v4). From v0.2.0 on, each release run verifies every published image and
+chart with this command, once with cosign v2.6.3 and once with the current
+default.
 
 ## Helm chart
 
