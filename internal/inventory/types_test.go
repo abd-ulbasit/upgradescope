@@ -325,3 +325,26 @@ func TestCanonicalDropsOnlyTheCollectionsOwnFields(t *testing.T) {
 		t.Error("Canonical modified its receiver")
 	}
 }
+
+// Canonical gives a CRD's Versions and a capability's Skipped list a fixed
+// order, on copies: a pusher that orders them differently hashes the same
+// (#367), and the caller's inventory keeps its own order.
+func TestCanonicalOrdersCRDVersionsAndSkipped(t *testing.T) {
+	mk := func(vs []CRDVersion, skipped []string) Inventory {
+		return Inventory{
+			CRDs:         []CRD{{Group: "g.io", Kind: "K", Plural: "ks", Versions: vs}},
+			Capabilities: map[Capability]CapabilityStatus{CapHelm: {Available: true, Partial: true, Skipped: skipped}},
+		}
+	}
+	a := mk([]CRDVersion{{Name: "v1alpha2", Served: true}, {Name: "v1", Storage: true}}, []string{"v1 secrets", "apps/v1 deployments"})
+	b := mk([]CRDVersion{{Name: "v1", Storage: true}, {Name: "v1alpha2", Served: true}}, []string{"apps/v1 deployments", "v1 secrets"})
+	if !reflect.DeepEqual(a.Canonical(), b.Canonical()) {
+		t.Errorf("Canonical differs by order:\n%+v\n%+v", a.Canonical(), b.Canonical())
+	}
+	if got := a.CRDs[0].Versions[0].Name; got != "v1alpha2" {
+		t.Errorf("Canonical reordered the receiver's CRD versions: first is %s", got)
+	}
+	if got := a.Capabilities[CapHelm].Skipped[0]; got != "v1 secrets" {
+		t.Errorf("Canonical reordered the receiver's Skipped list: first is %s", got)
+	}
+}
