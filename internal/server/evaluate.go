@@ -172,8 +172,38 @@ func (s *Server) evaluation(cluster store.Cluster, inv inventory.Inventory, targ
 		EvaluatedAt: now,
 		TeamMapHash: s.teamMapHash,
 		Teams:       clusterTeams(inv, rep),
+		Baseline:    notificationBaseline(rep),
 	}, rep, nil
 }
+
+// hidesNoFinding are the required gaps no finding comes from (no
+// category's engine.Sources names them, so engine.HiddenBy never lists
+// them): kb-coverage, a target past the knowledge base's horizon, and
+// target, a target that is not an upgrade. A pass unknown for them alone
+// saw everything its findings come from.
+var hidesNoFinding = map[inventory.Capability]bool{engine.GapKBCoverage: true, engine.GapTarget: true}
+
+// notificationBaseline reports whether rep, a new evaluation, is a
+// notification baseline (store.Evaluation.Baseline): a decided verdict,
+// or an unknown one whose required gaps all hide no finding
+// (hidesNoFinding). An unknown verdict behind a required gap that may
+// hide a blocker (a collector failure) is none (deltaFor).
+func notificationBaseline(rep engine.Report) bool {
+	if rep.Verdict != engine.VerdictUnknown {
+		return true
+	}
+	for _, g := range rep.NotAssessed {
+		if g.Required && !hidesNoFinding[g.Capability] {
+			return false
+		}
+	}
+	return true
+}
+
+// isBaseline reports whether a stored evaluation is a notification
+// baseline: decided, or marked one (notificationBaseline), as the store's
+// LatestKnownEvaluation selects them.
+func isBaseline(e store.Evaluation) bool { return verdictOf(e) != engine.VerdictUnknown || e.Baseline }
 
 // futureTolerance is how far ahead of this server's clock a stored
 // evaluation may be dated before it counts as future-dated: replicas'
@@ -221,19 +251,43 @@ type baseline struct {
 	ok       bool
 }
 
-// deltaFor computes the notification delta of one new evaluation. The
-// baseline is the last evaluation with a decided verdict, so an "unknown"
-// pass (a collector failure) is neither a transition nor a reset; a pass
-// whose own verdict is unknown notifies nothing — what it could not see is
-// not news. A decided pass that did not assess a capability carries the
-// baseline's findings from it forward, when the baseline saw them with it
-// (computeDelta, unassessed). known is that baseline when the caller
-// holds it; otherwise deltaFor loads it, and decodes only its findings'
-// heads and its gaps, recording what it read (targetDelta.baselines) for
-// the commit to check. Failures are logged and never fail the pass.
+// deltaFor computes the notification delta of one new evaluation e. The
+// baseline is the target's last baseline evaluation: decided, or unknown
+// for gaps that hide no finding (notificationBaseline). A pass that did not
+// assess a capability carries the baseline's findings from it forward,
+// when the baseline saw them with it (computeDelta, unassessed). known is
+// that baseline when the caller holds it; otherwise deltaFor loads it, and
+// decodes only its findings' heads and its gaps, recording what it read
+// (targetDelta.baselines) for the commit to check. Failures are logged and
+// never fail the pass.
+//
+// Design (#380): an unknown pass contributes what it assessed. One whose
+// only required gaps hide no finding (kb-coverage: the target is past the
+// knowledge base's horizon; target) saw every capability a blocker comes
+// from, so it is a pass like a decided one: its delta is computed, with
+// the unassessed rule for its optional gaps, and it is the next pass's
+// baseline. A blocker it saw absent is resolved there, so its return is a
+// new-blocker; the first blocker after clean unknown passes is new, as on
+// a decided target. It has no blocker (verdictFor), so it never sends
+// new-blocker or became-ready itself; its eol-approaching changes are sent,
+// and blockers it resolved keep a became-ready pending for the first ready
+// pass (computeDelta). An unknown pass behind a required gap that may hide
+// a blocker (a collector failure) is neither a transition nor a reset: it
+// notifies nothing and is no baseline, so the pass after it compares with
+// the baseline before it.
+//
+// Standing blockers are not announced again: the baseline holds every
+// blocker a past pass saw. The first baseline of a target is silent, as
+// before (#34), whatever its verdict: a target newly added to --targets
+// asks a new question, and announcing what it finds would page the fleet
+// on the restart. A default target with no baseline after an upgrade is
+// compared with the previous default target's (upgradeBaseline). A
+// knowledge-base update re-judges against the stored baseline, decided or
+// unknown, so only what the update adds is news (NT-01c), whether or not
+// the cluster has a lower evaluation.
 func (s *Server) deltaFor(ctx context.Context, cluster store.Cluster, e store.Evaluation, cur engine.Report, known baseline, unassessed func(findingHead) bool) targetDelta {
 	d := targetDelta{target: notify.Target{Target: cur.Target.String(), Verdict: string(cur.Verdict), Score: cur.Score, Blockers: e.Blockers}}
-	if len(s.sinks) == 0 || cur.Verdict == engine.VerdictUnknown || cluster.ID == 0 {
+	if len(s.sinks) == 0 || !e.Baseline || cluster.ID == 0 {
 		return d // a cluster's first push has no baseline either
 	}
 	if known.ok {
@@ -247,13 +301,13 @@ func (s *Server) deltaFor(ctx context.Context, cluster store.Cluster, e store.Ev
 		d.baselines[target] = prev.ID
 	}
 	if errors.Is(err, store.ErrNotFound) {
-		// First decided evaluation of this target: after an upgrade, the
-		// previous default target's is the baseline (upgradeBaseline).
+		// First baseline of this target: after an upgrade, the previous
+		// default target's is the baseline (upgradeBaseline).
 		d.baselines[target] = 0
 		prev, err = s.upgradeBaseline(ctx, cluster.ID, cur, d.baselines)
 	}
 	if errors.Is(err, store.ErrNotFound) {
-		return d // first decided evaluation of this target: no delta
+		return d // first baseline of this target: no delta
 	}
 	if err != nil {
 		log.Printf("server: loading notification baseline (cluster %d, target %s): %v", cluster.ID, target, err)
@@ -707,13 +761,13 @@ func (s *Server) reevaluate(ctx context.Context, cluster store.Cluster, snapID i
 		if err != nil {
 			return false, &evaluationError{err}
 		}
-		// A decided current evaluation is the target's latest decided
-		// one, the baseline deltaFor would load again: evaluations are
-		// only added to the latest snapshot, so none is newer. An
-		// unchanged result (below) has no changes, but may carry less.
-		// Without sinks nothing is carried, and what the row carried is
-		// not compared: no notification reads that baseline.
-		known := baseline{findings: stored.baseline(), ok: decoded && verdictOf(cur) != engine.VerdictUnknown}
+		// A current evaluation that is a baseline (isBaseline) is the
+		// target's latest one, the baseline deltaFor would load again:
+		// evaluations are only added to the latest snapshot, so none is
+		// newer. An unchanged result (below) has no changes, but may
+		// carry less. Without sinks nothing is carried, and what the row
+		// carried is not compared: no notification reads that baseline.
+		known := baseline{findings: stored.baseline(), ok: decoded && isBaseline(cur)}
 		d := s.deltaFor(ctx, cluster, e, rep, known, unassessedIn(rep, hold))
 		d.carried = s.keepCarried(&e, hold.stamp(d.carried))
 		batch.Current[target.String()] = cur.ID // 0 when not found
@@ -725,7 +779,11 @@ func (s *Server) reevaluate(ctx context.Context, cluster store.Cluster, snapID i
 			}
 			expectBaselines(batch.Expect, d)
 		}
-		if decoded && sameResult(cur, stored.Findings, rep) && (len(s.sinks) == 0 || sameHeads(stored.CarriedForward, d.carried)) {
+		// A result that stops or starts being a baseline is a new row: a
+		// refresh would move the baseline under a delta computed against
+		// another, and drop that delta's changes.
+		if decoded && sameResult(cur, stored.Findings, rep) && isBaseline(cur) == e.Baseline &&
+			(len(s.sinks) == 0 || sameHeads(stored.CarriedForward, d.carried)) {
 			e.ID = cur.ID
 			batch.Refresh = append(batch.Refresh, e)
 			continue
