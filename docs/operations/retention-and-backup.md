@@ -21,7 +21,8 @@ a day; `0` keeps everything) prunes once at startup and then daily:
 - except each cluster's latest snapshot and its evaluations, however old:
   a cluster that has been silent longer than the window keeps its current
   state (and shows as stale);
-- and except each cluster's last decided (ready or blocked) evaluation of
+- and except each cluster's last notification baseline (a decided, ready
+  or blocked, evaluation, or an `unknown` one past the KB horizon, #380) of
   each target the server still compares it with, with its snapshot, however
   old: the baseline notifications are compared with
   ([Notifications](../operations.md#notifications)). Those targets are
@@ -30,7 +31,8 @@ a day; `0` keeps everything) prunes once at startup and then daily:
   default target, which an upgrade looks back to for the previous
   default's baseline. A target that stays `unknown` for longer than the
   window, or the previous default target after an upgrade, still has one
-  when it is next decided. The baseline of any other target (dropped from
+  when it is next decided; a decided evaluation under a newer `unknown`
+  baseline is no longer the baseline and ages out. The baseline of any other target (dropped from
   `--targets`, or more than three minors below a cluster's default after it
   upgraded) ages out like any evaluation, so these do not pile up. Usually
   the baseline is of the latest snapshot anyway; otherwise a cluster keeps
