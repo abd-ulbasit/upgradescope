@@ -13,6 +13,41 @@ only through a new release.
 
 ## [Unreleased]
 
+### Added
+
+- `make claims-server` (`hack/claims-server.sh`), run by CI's repo-checks
+  job, checks two server claims over HTTP on the built binary, with no
+  cluster. A name first registered without a `clusterId` is bound by the
+  next `clusterId` pushed (202, 202, history 75 then 100, then 409, one
+  adoption log line, no token in the log) (#368). A push still uploading
+  when its cluster is renamed or deleted answers 409 and stores nothing with
+  a per-cluster token, and registers the name again (202) with the shared
+  token. The order is forced with `Expect: 100-continue` and a held body,
+  never left to timing (#369).
+
+### Changed
+
+- CI's claims-trackers step no longer runs when `release.yml` calls
+  `ci.yml`: a release depends on the tagged code, never on the live state of
+  an issue. Pull requests and pushes to main still run it. The v0.2.0 release
+  run first failed on it, when #384 closed two trackers whose last
+  acceptance item was not yet done (#368, #369).
+
+### Fixed
+
+- The Homebrew tap's test job installs the formula as the tap's default
+  branch holds it. Before, it tested the run's own commit, which on the
+  first run predates the formula the update job pushes (#75).
+
+### Security
+
+- The GitHub Action fails when `latest` resolves to v0.1.0 or v0.1.1, the
+  releases from before provenance, from every ref: a branch or a commit SHA
+  as well as a release tag. The error names the tag and the step never falls
+  back to `go install`. Before, only an action at a release tag from
+  v0.2.0-rc.2 on refused it. `verify-provenance: false` and an explicit
+  `version: v0.1.1` are unchanged (#127).
+
 ## [0.2.0] - 2026-10-11
 
 The first release built, signed and published by CI. It changes a lot
