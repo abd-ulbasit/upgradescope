@@ -1,0 +1,4479 @@
+{
+  "meta": {
+    "surveyDate": "2026-10-11",
+    "startedAt": "2026-10-11T23:09:24Z",
+    "n": 50,
+    "selected": 50,
+    "target": "1.37",
+    "prevTarget": "1.36",
+    "upgradescope": {
+      "versionOutput": "upgradescope dev\n  commit:        2e524c9365b280802f6055276ff1662a771fda21\n  built:         unknown\n  go:            go1.26.9 darwin/arm64\n  kb:            k8s.io/api v0.37.1; lifecycle 91e89ab0; registry fe1fdf07\n  kb horizon:    Kubernetes 1.37\n  registry date: unknown",
+      "version": "dev",
+      "commit": "2e524c9365b280802f6055276ff1662a771fda21",
+      "kb": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry fe1fdf07"
+    },
+    "helm": "version.BuildInfo{Version:\"v4.1.4\", GitCommit:\"05fa37973dc9e42b76e1d2883494c87174b6074f\", GitTreeState:\"clean\", GoVersion:\"go1.26.2\", KubeClientVersion:\"v1.35\"}",
+    "jq": "jq-1.8.1",
+    "artifactHub": {
+      "search": "https://artifacthub.io/api/v1/packages/search?kind=0&sort=stars&limit=60&offset=<60*page>",
+      "details": "https://artifacthub.io/api/v1/packages/helm/<repository>/<name>",
+      "pagesRead": 1
+    },
+    "commands": [
+      "helm pull --repo <repoUrl> <name> --version <version> (http) | helm pull <repoUrl> --version <version> (oci)",
+      "helm show chart <tgz>",
+      "helm template survey <tgz> --namespace survey --include-crds --kube-version 1.37.0 --output-dir rendered-1.37",
+      "helm template survey <tgz> --namespace survey --include-crds --kube-version 1.36.0 --output-dir rendered-1.36",
+      "upgradescope scan --files rendered-1.37 --target 1.37 --output json --fail-on never",
+      "upgradescope scan --files rendered-1.36 --target 1.36 --output json --fail-on never",
+      "upgradescope scan --files rendered-1.36 --target 1.37 --output json --fail-on never (only when kubeVersion refuses 1.37)"
+    ]
+  },
+  "dropped": [],
+  "summary": {
+    "charts": 50,
+    "classes": {
+      "removedApi": 0,
+      "incompatibleAddon": 3,
+      "eolAddon": 1,
+      "unservedCrVersion": 0,
+      "otherBlocker": 0,
+      "anyBlocker": 4,
+      "deprecatedOnly": 0,
+      "eolApproaching": 1,
+      "kubeVersionExcludesTarget": 1,
+      "kubeVersionAcceptsPrev": 1,
+      "renderFailed": 5,
+      "fetchFailed": 2,
+      "scanFailed": 0,
+      "none": 38
+    },
+    "renderFailures": {
+      "required-value": 5
+    },
+    "verdicts": {
+      "blocked": 4,
+      "ready": 38
+    },
+    "prevVerdicts": {
+      "blocked": 2,
+      "ready": 41
+    },
+    "topFindings": [
+      {
+        "key": "addon-no-data/kube-state-metrics",
+        "category": "addon-no-data",
+        "severity": "info",
+        "title": "no lifecycle data for kube-state-metrics 2.20.0",
+        "charts": 2
+      },
+      {
+        "key": "addon-no-data/external-dns",
+        "category": "addon-no-data",
+        "severity": "info",
+        "title": "no lifecycle data for ExternalDNS 0.18.0",
+        "charts": 1
+      },
+      {
+        "key": "addon-no-data/metrics-server",
+        "category": "addon-no-data",
+        "severity": "info",
+        "title": "no lifecycle data for Kubernetes Metrics Server 0.9.0",
+        "charts": 1
+      },
+      {
+        "key": "addon-no-data/prometheus-operator",
+        "category": "addon-no-data",
+        "severity": "info",
+        "title": "no lifecycle data for Prometheus Operator 0.94.1",
+        "charts": 1
+      },
+      {
+        "key": "addon-no-data/velero",
+        "category": "addon-no-data",
+        "severity": "info",
+        "title": "no lifecycle data for Velero 1.18.2",
+        "charts": 1
+      },
+      {
+        "key": "chart-incompat/cert-manager/1.21",
+        "category": "chart-incompat",
+        "severity": "blocker",
+        "title": "cert-manager 1.21.2 supports Kubernetes up to 1.36 (target 1.37)",
+        "charts": 1
+      },
+      {
+        "key": "chart-incompat/istio/1.30",
+        "category": "chart-incompat",
+        "severity": "blocker",
+        "title": "Istio 1.30.5 supports Kubernetes up to 1.36 (target 1.37)",
+        "charts": 1
+      },
+      {
+        "key": "chart-incompat/kyverno/1.19",
+        "category": "chart-incompat",
+        "severity": "blocker",
+        "title": "Kyverno 1.19.1 supports Kubernetes up to 1.35 (target 1.37)",
+        "charts": 1
+      },
+      {
+        "key": "crd-version/deprecated/kyverno.io/v1/ClusterPolicy",
+        "category": "crd-version",
+        "severity": "info",
+        "title": "kyverno.io/v1 ClusterPolicy is a deprecated CRD version",
+        "charts": 1
+      },
+      {
+        "key": "crd-version/deprecated/kyverno.io/v1/Policy",
+        "category": "crd-version",
+        "severity": "info",
+        "title": "kyverno.io/v1 Policy is a deprecated CRD version",
+        "charts": 1
+      },
+      {
+        "key": "crd-version/deprecated/kyverno.io/v2/CleanupPolicy",
+        "category": "crd-version",
+        "severity": "info",
+        "title": "kyverno.io/v2 CleanupPolicy is a deprecated CRD version",
+        "charts": 1
+      },
+      {
+        "key": "crd-version/deprecated/kyverno.io/v2/ClusterCleanupPolicy",
+        "category": "crd-version",
+        "severity": "info",
+        "title": "kyverno.io/v2 ClusterCleanupPolicy is a deprecated CRD version",
+        "charts": 1
+      },
+      {
+        "key": "crd-version/deprecated/kyverno.io/v2/PolicyException",
+        "category": "crd-version",
+        "severity": "info",
+        "title": "kyverno.io/v2 PolicyException is a deprecated CRD version",
+        "charts": 1
+      },
+      {
+        "key": "crd-version/deprecated/kyverno.io/v2alpha1/GlobalContextEntry",
+        "category": "crd-version",
+        "severity": "info",
+        "title": "kyverno.io/v2alpha1 GlobalContextEntry is a deprecated CRD version",
+        "charts": 1
+      },
+      {
+        "key": "crd-version/deprecated/kyverno.io/v2beta1/CleanupPolicy",
+        "category": "crd-version",
+        "severity": "info",
+        "title": "kyverno.io/v2beta1 CleanupPolicy is a deprecated CRD version",
+        "charts": 1
+      },
+      {
+        "key": "crd-version/deprecated/kyverno.io/v2beta1/ClusterCleanupPolicy",
+        "category": "crd-version",
+        "severity": "info",
+        "title": "kyverno.io/v2beta1 ClusterCleanupPolicy is a deprecated CRD version",
+        "charts": 1
+      },
+      {
+        "key": "crd-version/deprecated/kyverno.io/v2beta1/ClusterPolicy",
+        "category": "crd-version",
+        "severity": "info",
+        "title": "kyverno.io/v2beta1 ClusterPolicy is a deprecated CRD version",
+        "charts": 1
+      },
+      {
+        "key": "crd-version/deprecated/kyverno.io/v2beta1/Policy",
+        "category": "crd-version",
+        "severity": "info",
+        "title": "kyverno.io/v2beta1 Policy is a deprecated CRD version",
+        "charts": 1
+      },
+      {
+        "key": "crd-version/deprecated/kyverno.io/v2beta1/PolicyException",
+        "category": "crd-version",
+        "severity": "info",
+        "title": "kyverno.io/v2beta1 PolicyException is a deprecated CRD version",
+        "charts": 1
+      },
+      {
+        "key": "crd-version/deprecated/metallb.io/v1beta1/BGPPeer",
+        "category": "crd-version",
+        "severity": "info",
+        "title": "metallb.io/v1beta1 BGPPeer is a deprecated CRD version",
+        "charts": 1
+      }
+    ],
+    "addons": [
+      {
+        "id": "kube-state-metrics",
+        "category": "addon-no-data",
+        "charts": 2
+      },
+      {
+        "id": "cert-manager",
+        "category": "chart-incompat",
+        "charts": 1
+      },
+      {
+        "id": "external-dns",
+        "category": "addon-no-data",
+        "charts": 1
+      },
+      {
+        "id": "ingress-nginx",
+        "category": "eol-addon",
+        "charts": 1
+      },
+      {
+        "id": "istio",
+        "category": "chart-incompat",
+        "charts": 1
+      },
+      {
+        "id": "istio",
+        "category": "eol-approaching",
+        "charts": 1
+      },
+      {
+        "id": "kyverno",
+        "category": "chart-incompat",
+        "charts": 1
+      },
+      {
+        "id": "metrics-server",
+        "category": "addon-no-data",
+        "charts": 1
+      },
+      {
+        "id": "prometheus-operator",
+        "category": "addon-no-data",
+        "charts": 1
+      },
+      {
+        "id": "velero",
+        "category": "addon-no-data",
+        "charts": 1
+      }
+    ],
+    "blockerList": [
+      {
+        "rank": 2,
+        "chart": "cert-manager",
+        "repository": "cert-manager",
+        "version": "1.21.2",
+        "category": "chart-incompat",
+        "key": "chart-incompat/cert-manager/1.21",
+        "title": "cert-manager 1.21.2 supports Kubernetes up to 1.36 (target 1.37)",
+        "file": null,
+        "line": null
+      },
+      {
+        "rank": 4,
+        "chart": "ingress-nginx",
+        "repository": "ingress-nginx",
+        "version": "4.15.1",
+        "category": "eol-addon",
+        "key": "eol-addon/ingress-nginx",
+        "title": "Ingress NGINX Controller is end-of-life since 2026-03-24",
+        "file": null,
+        "line": null
+      },
+      {
+        "rank": 35,
+        "chart": "istiod",
+        "repository": "istio-official",
+        "version": "1.30.5",
+        "category": "chart-incompat",
+        "key": "chart-incompat/istio/1.30",
+        "title": "Istio 1.30.5 supports Kubernetes up to 1.36 (target 1.37)",
+        "file": null,
+        "line": null
+      },
+      {
+        "rank": 37,
+        "chart": "kyverno",
+        "repository": "kyverno",
+        "version": "3.9.1",
+        "category": "chart-incompat",
+        "key": "chart-incompat/kyverno/1.19",
+        "title": "Kyverno 1.19.1 supports Kubernetes up to 1.35 (target 1.37)",
+        "file": null,
+        "line": null
+      }
+    ],
+    "unrecognizedImages": {
+      "charts": 37,
+      "distinct": 71,
+      "top": [
+        {
+          "image": "docker.io/library/busybox",
+          "charts": 3
+        },
+        {
+          "image": "docker.io/bats/bats",
+          "charts": 2
+        },
+        {
+          "image": "docker.io/bitnami/postgresql",
+          "charts": 2
+        },
+        {
+          "image": "quay.io/prometheus/node-exporter",
+          "charts": 2
+        },
+        {
+          "image": "docker.elastic.co/elasticsearch/elasticsearch",
+          "charts": 1
+        },
+        {
+          "image": "docker.gitea.com/gitea",
+          "charts": 1
+        },
+        {
+          "image": "docker.io/apache/airflow",
+          "charts": 1
+        },
+        {
+          "image": "docker.io/bitnami/kafka",
+          "charts": 1
+        },
+        {
+          "image": "docker.io/bitnami/keycloak",
+          "charts": 1
+        },
+        {
+          "image": "docker.io/bitnami/mariadb",
+          "charts": 1
+        },
+        {
+          "image": "docker.io/bitnami/minio",
+          "charts": 1
+        },
+        {
+          "image": "docker.io/bitnami/minio-object-browser",
+          "charts": 1
+        },
+        {
+          "image": "docker.io/bitnami/mongodb",
+          "charts": 1
+        },
+        {
+          "image": "docker.io/bitnami/mysql",
+          "charts": 1
+        },
+        {
+          "image": "docker.io/bitnami/nginx",
+          "charts": 1
+        },
+        {
+          "image": "docker.io/bitnami/rabbitmq",
+          "charts": 1
+        },
+        {
+          "image": "docker.io/bitnami/redis",
+          "charts": 1
+        },
+        {
+          "image": "docker.io/bitnami/thanos",
+          "charts": 1
+        },
+        {
+          "image": "docker.io/bitnami/wordpress",
+          "charts": 1
+        },
+        {
+          "image": "docker.io/bitnamilegacy/pgpool",
+          "charts": 1
+        },
+        {
+          "image": "docker.io/bitnamilegacy/postgresql",
+          "charts": 1
+        },
+        {
+          "image": "docker.io/bitnamilegacy/postgresql-repmgr",
+          "charts": 1
+        },
+        {
+          "image": "docker.io/bitnamilegacy/valkey-cluster",
+          "charts": 1
+        },
+        {
+          "image": "docker.io/dpage/pgadmin4",
+          "charts": 1
+        },
+        {
+          "image": "docker.io/goharbor/harbor-core",
+          "charts": 1
+        }
+      ]
+    },
+    "latestOrUntaggedImages": [
+      {
+        "chart": "redis",
+        "repository": "bitnami",
+        "version": "28.3.1",
+        "images": [
+          "registry-1.docker.io/bitnami/redis:latest"
+        ]
+      },
+      {
+        "chart": "postgresql",
+        "repository": "bitnami",
+        "version": "18.12.4",
+        "images": [
+          "registry-1.docker.io/bitnami/postgresql:latest"
+        ]
+      },
+      {
+        "chart": "mongodb",
+        "repository": "bitnami",
+        "version": "20.0.0",
+        "images": [
+          "registry-1.docker.io/bitnami/mongodb:latest"
+        ]
+      },
+      {
+        "chart": "kyverno",
+        "repository": "kyverno",
+        "version": "3.9.1",
+        "images": [
+          "ghcr.io/kyverno/readiness-checker:latest"
+        ]
+      },
+      {
+        "chart": "gitea",
+        "repository": "gitea",
+        "version": "12.7.0",
+        "images": [
+          "busybox:latest"
+        ]
+      },
+      {
+        "chart": "fluent-bit",
+        "repository": "fluent",
+        "version": "0.58.3",
+        "images": [
+          "busybox:latest"
+        ]
+      },
+      {
+        "chart": "nginx",
+        "repository": "bitnami",
+        "version": "25.2.1",
+        "images": [
+          "registry-1.docker.io/bitnami/nginx:latest"
+        ]
+      },
+      {
+        "chart": "wordpress",
+        "repository": "bitnami",
+        "version": "34.1.3",
+        "images": [
+          "registry-1.docker.io/bitnami/mariadb:latest",
+          "registry-1.docker.io/bitnami/wordpress:latest"
+        ]
+      }
+    ],
+    "refused": [
+      {
+        "rank": 36,
+        "chart": "rancher",
+        "repository": "rancher-stable",
+        "version": "2.15.2",
+        "kubeVersion": "< 1.37.0-0",
+        "acceptsPrev": true,
+        "prevRenderVerdict": "ready",
+        "prevRenderBlockers": []
+      }
+    ]
+  },
+  "charts": [
+    {
+      "rank": 1,
+      "name": "kube-prometheus-stack",
+      "repository": "prometheus-community",
+      "repoUrl": "https://prometheus-community.github.io/helm-charts",
+      "repoKind": "http",
+      "stars": 1235,
+      "official": true,
+      "verifiedPublisher": true,
+      "cncf": true,
+      "packageId": "7918f2cb-0742-4993-b58a-673129604cf6",
+      "version": "92.3.0",
+      "latestVersion": "92.3.0",
+      "appVersion": "v0.94.1",
+      "chart": {
+        "apiVersion": "v2",
+        "type": "application",
+        "appVersion": "v0.94.1",
+        "kubeVersion": ">=1.25.0-0",
+        "dependencies": [
+          {
+            "name": "crds",
+            "version": "0.0.0",
+            "repository": "",
+            "condition": "crds.enabled"
+          },
+          {
+            "name": "kube-state-metrics",
+            "version": "8.6.0",
+            "repository": "oci://ghcr.io/prometheus-community/charts",
+            "condition": "kubeStateMetrics.enabled"
+          },
+          {
+            "name": "prometheus-node-exporter",
+            "version": "4.59.0",
+            "repository": "oci://ghcr.io/prometheus-community/charts",
+            "condition": "nodeExporter.enabled"
+          },
+          {
+            "name": "grafana",
+            "version": "13.5.0",
+            "repository": "oci://ghcr.io/grafana-community/helm-charts",
+            "condition": "grafana.enabled"
+          },
+          {
+            "name": "prometheus-windows-exporter",
+            "version": "0.12.*",
+            "repository": "oci://ghcr.io/prometheus-community/charts",
+            "condition": "windowsMonitoring.enabled"
+          }
+        ]
+      },
+      "fetch": {
+        "ok": true,
+        "error": null
+      },
+      "render": {
+        "ok": true,
+        "class": null,
+        "error": null,
+        "prev": {
+          "kubeVersion": "1.36.0",
+          "ok": true,
+          "class": null,
+          "error": null
+        }
+      },
+      "scan": {
+        "ok": true,
+        "error": null,
+        "verdict": "ready",
+        "score": 100,
+        "toolVersion": "dev",
+        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry fe1fdf07",
+        "findings": [
+          {
+            "category": "addon-no-data",
+            "severity": "info",
+            "key": "addon-no-data/prometheus-operator",
+            "title": "no lifecycle data for Prometheus Operator 0.94.1",
+            "detail": "Detected Prometheus Operator version 0.94.1 via image in namespace(s): survey. The registry has no release-line data for this version, so its end of life was not assessed.",
+            "objects": [],
+            "objectsTotal": 0
+          },
+          {
+            "category": "addon-no-data",
+            "severity": "info",
+            "key": "addon-no-data/kube-state-metrics",
+            "title": "no lifecycle data for kube-state-metrics 2.20.0",
+            "detail": "Detected kube-state-metrics version 2.20.0 via image in namespace(s): survey. The registry has no release-line data for this version, so its end of life was not assessed.",
+            "objects": [],
+            "objectsTotal": 0
+          }
+        ],
+        "notAssessed": [
+          "deprecated-calls",
+          "helm",
+          "versions"
+        ],
+        "unrecognizedImages": [
+          "docker.io/bats/bats",
+          "docker.io/grafana/grafana",
+          "ghcr.io/jkroepke/kube-webhook-certgen",
+          "quay.io/kiwigrid/k8s-sidecar",
+          "quay.io/prometheus/node-exporter"
+        ]
+      },
+      "scanPrev": {
+        "target": "1.36",
+        "ok": true,
+        "error": null,
+        "verdict": "ready",
+        "score": 100,
+        "blockers": 0,
+        "warnings": 0,
+        "blockerKeys": []
+      },
+      "scanOfPrevRender": null,
+      "images": [
+        "docker.io/bats/bats:1.14.0",
+        "docker.io/grafana/grafana:13.2.3-distroless",
+        "ghcr.io/jkroepke/kube-webhook-certgen:1.8.9",
+        "quay.io/kiwigrid/k8s-sidecar:2.14.1",
+        "quay.io/prometheus-operator/prometheus-operator:v0.94.1",
+        "quay.io/prometheus/alertmanager:v0.34.1",
+        "quay.io/prometheus/node-exporter:v1.12.1-distroless",
+        "quay.io/prometheus/prometheus:v3.15.0-distroless",
+        "registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.20.0"
+      ]
+    },
+    {
+      "rank": 2,
+      "name": "cert-manager",
+      "repository": "cert-manager",
+      "repoUrl": "https://charts.jetstack.io",
+      "repoKind": "http",
+      "stars": 997,
+      "official": true,
+      "verifiedPublisher": true,
+      "cncf": false,
+      "packageId": "f475c82a-27a5-4f71-8413-fe70d31268a2",
+      "version": "1.21.2",
+      "latestVersion": "1.21.2",
+      "appVersion": "v1.21.2",
+      "chart": {
+        "apiVersion": "v2",
+        "type": "application",
+        "appVersion": "v1.21.2",
+        "kubeVersion": ">= 1.22.0-0",
+        "dependencies": []
+      },
+      "fetch": {
+        "ok": true,
+        "error": null
+      },
+      "render": {
+        "ok": true,
+        "class": null,
+        "error": null,
+        "prev": {
+          "kubeVersion": "1.36.0",
+          "ok": true,
+          "class": null,
+          "error": null
+        }
+      },
+      "scan": {
+        "ok": true,
+        "error": null,
+        "verdict": "blocked",
+        "score": 75,
+        "toolVersion": "dev",
+        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry fe1fdf07",
+        "findings": [
+          {
+            "category": "chart-incompat",
+            "severity": "blocker",
+            "key": "chart-incompat/cert-manager/1.21",
+            "title": "cert-manager 1.21.2 supports Kubernetes up to 1.36 (target 1.37)",
+            "detail": "Installed version 1.21.2 matches compatibility range \">=1.21.0 <1.22.0\", which supports Kubernetes 1.33 through 1.36.",
+            "objects": [],
+            "objectsTotal": 0
+          }
+        ],
+        "notAssessed": [
+          "deprecated-calls",
+          "helm",
+          "versions"
+        ],
+        "unrecognizedImages": [
+          "quay.io/jetstack/cert-manager-startupapicheck"
+        ]
+      },
+      "scanPrev": {
+        "target": "1.36",
+        "ok": true,
+        "error": null,
+        "verdict": "ready",
+        "score": 100,
+        "blockers": 0,
+        "warnings": 0,
+        "blockerKeys": []
+      },
+      "scanOfPrevRender": null,
+      "images": [
+        "quay.io/jetstack/cert-manager-cainjector:v1.21.2",
+        "quay.io/jetstack/cert-manager-controller:v1.21.2",
+        "quay.io/jetstack/cert-manager-startupapicheck:v1.21.2",
+        "quay.io/jetstack/cert-manager-webhook:v1.21.2"
+      ]
+    },
+    {
+      "rank": 3,
+      "name": "argo-cd",
+      "repository": "argo",
+      "repoUrl": "https://argoproj.github.io/argo-helm",
+      "repoKind": "http",
+      "stars": 846,
+      "official": true,
+      "verifiedPublisher": true,
+      "cncf": false,
+      "packageId": "e6f213e9-2add-4cc6-92ba-05a025d1f222",
+      "version": "10.10.2",
+      "latestVersion": "10.10.2",
+      "appVersion": "v3.5.4",
+      "chart": {
+        "apiVersion": "v2",
+        "type": "application",
+        "appVersion": "v3.5.4",
+        "kubeVersion": ">=1.25.0-0",
+        "dependencies": [
+          {
+            "name": "redis-ha",
+            "version": "4.38.0",
+            "repository": "https://dandydeveloper.github.io/charts/",
+            "condition": "redis-ha.enabled"
+          }
+        ]
+      },
+      "fetch": {
+        "ok": true,
+        "error": null
+      },
+      "render": {
+        "ok": true,
+        "class": null,
+        "error": null,
+        "prev": {
+          "kubeVersion": "1.36.0",
+          "ok": true,
+          "class": null,
+          "error": null
+        }
+      },
+      "scan": {
+        "ok": true,
+        "error": null,
+        "verdict": "ready",
+        "score": 100,
+        "toolVersion": "dev",
+        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry fe1fdf07",
+        "findings": [],
+        "notAssessed": [
+          "deprecated-calls",
+          "helm",
+          "versions"
+        ],
+        "unrecognizedImages": [
+          "ecr-public.aws.com/docker/library/redis",
+          "ghcr.io/dexidp/dex"
+        ]
+      },
+      "scanPrev": {
+        "target": "1.36",
+        "ok": true,
+        "error": null,
+        "verdict": "ready",
+        "score": 100,
+        "blockers": 0,
+        "warnings": 0,
+        "blockerKeys": []
+      },
+      "scanOfPrevRender": null,
+      "images": [
+        "ecr-public.aws.com/docker/library/redis:8.6.4-alpine",
+        "ghcr.io/dexidp/dex:v2.46.0",
+        "quay.io/argoproj/argocd:v3.5.4"
+      ]
+    },
+    {
+      "rank": 4,
+      "name": "ingress-nginx",
+      "repository": "ingress-nginx",
+      "repoUrl": "https://kubernetes.github.io/ingress-nginx",
+      "repoKind": "http",
+      "stars": 822,
+      "official": false,
+      "verifiedPublisher": false,
+      "cncf": false,
+      "packageId": "625a0f57-5ab0-44ea-91ac-5e8cd8234ad0",
+      "version": "4.15.1",
+      "latestVersion": "4.15.1",
+      "appVersion": "1.15.1",
+      "chart": {
+        "apiVersion": "v2",
+        "type": "application",
+        "appVersion": "1.15.1",
+        "kubeVersion": ">=1.21.0-0",
+        "dependencies": []
+      },
+      "fetch": {
+        "ok": true,
+        "error": null
+      },
+      "render": {
+        "ok": true,
+        "class": null,
+        "error": null,
+        "prev": {
+          "kubeVersion": "1.36.0",
+          "ok": true,
+          "class": null,
+          "error": null
+        }
+      },
+      "scan": {
+        "ok": true,
+        "error": null,
+        "verdict": "blocked",
+        "score": 75,
+        "toolVersion": "dev",
+        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry fe1fdf07",
+        "findings": [
+          {
+            "category": "eol-addon",
+            "severity": "blocker",
+            "key": "eol-addon/ingress-nginx",
+            "title": "Ingress NGINX Controller is end-of-life since 2026-03-24",
+            "detail": "Detected Ingress NGINX Controller version 1.15.1 via image in namespace(s): survey. Upstream support has ended.",
+            "objects": [],
+            "objectsTotal": 0
+          }
+        ],
+        "notAssessed": [
+          "deprecated-calls",
+          "helm",
+          "versions"
+        ],
+        "unrecognizedImages": [
+          "registry.k8s.io/ingress-nginx/kube-webhook-certgen"
+        ]
+      },
+      "scanPrev": {
+        "target": "1.36",
+        "ok": true,
+        "error": null,
+        "verdict": "blocked",
+        "score": 75,
+        "blockers": 1,
+        "warnings": 0,
+        "blockerKeys": [
+          "eol-addon/ingress-nginx"
+        ]
+      },
+      "scanOfPrevRender": null,
+      "images": [
+        "registry.k8s.io/ingress-nginx/controller:v1.15.1@sha256:594ceea76b01c592858f803f9ff4d2cb40542cae2060410b2c95f75907d659e1",
+        "registry.k8s.io/ingress-nginx/kube-webhook-certgen:v1.6.9@sha256:01038e7de14b78d702d2849c3aad72fd25903c4765af63cf16aa3398f5d5f2dd"
+      ]
+    },
+    {
+      "rank": 5,
+      "name": "prometheus",
+      "repository": "prometheus-community",
+      "repoUrl": "https://prometheus-community.github.io/helm-charts",
+      "repoKind": "http",
+      "stars": 555,
+      "official": true,
+      "verifiedPublisher": true,
+      "cncf": true,
+      "packageId": "d5dad873-8e69-411b-8391-933d4391988a",
+      "version": "29.36.1",
+      "latestVersion": "29.36.1",
+      "appVersion": "v3.15.0",
+      "chart": {
+        "apiVersion": "v2",
+        "type": "application",
+        "appVersion": "v3.15.0",
+        "kubeVersion": ">=1.19.0-0",
+        "dependencies": [
+          {
+            "name": "alertmanager",
+            "version": "2.1.0",
+            "repository": "oci://ghcr.io/prometheus-community/charts",
+            "condition": "alertmanager.enabled"
+          },
+          {
+            "name": "kube-state-metrics",
+            "version": "8.6.0",
+            "repository": "oci://ghcr.io/prometheus-community/charts",
+            "condition": "kube-state-metrics.enabled"
+          },
+          {
+            "name": "prometheus-node-exporter",
+            "version": "4.59.0",
+            "repository": "oci://ghcr.io/prometheus-community/charts",
+            "condition": "prometheus-node-exporter.enabled"
+          },
+          {
+            "name": "prometheus-pushgateway",
+            "version": "3.9.1",
+            "repository": "oci://ghcr.io/prometheus-community/charts",
+            "condition": "prometheus-pushgateway.enabled"
+          }
+        ]
+      },
+      "fetch": {
+        "ok": true,
+        "error": null
+      },
+      "render": {
+        "ok": true,
+        "class": null,
+        "error": null,
+        "prev": {
+          "kubeVersion": "1.36.0",
+          "ok": true,
+          "class": null,
+          "error": null
+        }
+      },
+      "scan": {
+        "ok": true,
+        "error": null,
+        "verdict": "ready",
+        "score": 100,
+        "toolVersion": "dev",
+        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry fe1fdf07",
+        "findings": [
+          {
+            "category": "addon-no-data",
+            "severity": "info",
+            "key": "addon-no-data/kube-state-metrics",
+            "title": "no lifecycle data for kube-state-metrics 2.20.0",
+            "detail": "Detected kube-state-metrics version 2.20.0 via image in namespace(s): survey. The registry has no release-line data for this version, so its end of life was not assessed.",
+            "objects": [],
+            "objectsTotal": 0
+          }
+        ],
+        "notAssessed": [
+          "deprecated-calls",
+          "helm",
+          "versions"
+        ],
+        "unrecognizedImages": [
+          "quay.io/prometheus-operator/prometheus-config-reloader",
+          "quay.io/prometheus/alertmanager",
+          "quay.io/prometheus/node-exporter",
+          "quay.io/prometheus/prometheus",
+          "quay.io/prometheus/pushgateway"
+        ]
+      },
+      "scanPrev": {
+        "target": "1.36",
+        "ok": true,
+        "error": null,
+        "verdict": "ready",
+        "score": 100,
+        "blockers": 0,
+        "warnings": 0,
+        "blockerKeys": []
+      },
+      "scanOfPrevRender": null,
+      "images": [
+        "quay.io/prometheus-operator/prometheus-config-reloader:v0.94.1",
+        "quay.io/prometheus/alertmanager:v0.34.1",
+        "quay.io/prometheus/node-exporter:v1.12.1",
+        "quay.io/prometheus/prometheus:v3.15.0",
+        "quay.io/prometheus/pushgateway:v1.11.4",
+        "registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.20.0"
+      ]
+    },
+    {
+      "rank": 6,
+      "name": "redis",
+      "repository": "bitnami",
+      "repoUrl": "https://charts.bitnami.com/bitnami",
+      "repoKind": "http",
+      "stars": 507,
+      "official": false,
+      "verifiedPublisher": true,
+      "cncf": false,
+      "packageId": "0602c8d2-b17d-432f-89f0-95000f3057a2",
+      "version": "28.3.1",
+      "latestVersion": "28.3.1",
+      "appVersion": "8.10.2",
+      "chart": {
+        "apiVersion": "v2",
+        "type": "application",
+        "appVersion": "8.10.2",
+        "kubeVersion": "",
+        "dependencies": [
+          {
+            "name": "common",
+            "version": "2.41.0",
+            "repository": "oci://registry-1.docker.io/bitnamicharts",
+            "condition": null
+          }
+        ]
+      },
+      "fetch": {
+        "ok": true,
+        "error": null
+      },
+      "render": {
+        "ok": true,
+        "class": null,
+        "error": null,
+        "prev": {
+          "kubeVersion": "1.36.0",
+          "ok": true,
+          "class": null,
+          "error": null
+        }
+      },
+      "scan": {
+        "ok": true,
+        "error": null,
+        "verdict": "ready",
+        "score": 100,
+        "toolVersion": "dev",
+        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry fe1fdf07",
+        "findings": [],
+        "notAssessed": [
+          "deprecated-calls",
+          "helm",
+          "versions"
+        ],
+        "unrecognizedImages": [
+          "docker.io/bitnami/redis"
+        ]
+      },
+      "scanPrev": {
+        "target": "1.36",
+        "ok": true,
+        "error": null,
+        "verdict": "ready",
+        "score": 100,
+        "blockers": 0,
+        "warnings": 0,
+        "blockerKeys": []
+      },
+      "scanOfPrevRender": null,
+      "images": [
+        "registry-1.docker.io/bitnami/redis:latest"
+      ]
+    },
+    {
+      "rank": 7,
+      "name": "traefik",
+      "repository": "traefik",
+      "repoUrl": "https://traefik.github.io/charts",
+      "repoKind": "http",
+      "stars": 431,
+      "official": true,
+      "verifiedPublisher": true,
+      "cncf": false,
+      "packageId": "8ba0f6dc-591e-4ff4-a2d6-acdbd271677e",
+      "version": "41.7.1",
+      "latestVersion": "41.7.1",
+      "appVersion": "v3.7.14",
+      "chart": {
+        "apiVersion": "v2",
+        "type": "application",
+        "appVersion": "v3.7.14",
+        "kubeVersion": ">=1.25.0-0",
+        "dependencies": []
+      },
+      "fetch": {
+        "ok": true,
+        "error": null
+      },
+      "render": {
+        "ok": true,
+        "class": null,
+        "error": null,
+        "prev": {
+          "kubeVersion": "1.36.0",
+          "ok": true,
+          "class": null,
+          "error": null
+        }
+      },
+      "scan": {
+        "ok": true,
+        "error": null,
+        "verdict": "ready",
+        "score": 100,
+        "toolVersion": "dev",
+        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry fe1fdf07",
+        "findings": [],
+        "notAssessed": [
+          "deprecated-calls",
+          "helm",
+          "versions"
+        ],
+        "unrecognizedImages": []
+      },
+      "scanPrev": {
+        "target": "1.36",
+        "ok": true,
+        "error": null,
+        "verdict": "ready",
+        "score": 100,
+        "blockers": 0,
+        "warnings": 0,
+        "blockerKeys": []
+      },
+      "scanOfPrevRender": null,
+      "images": [
+        "docker.io/traefik:v3.7.14"
+      ]
+    },
+    {
+      "rank": 8,
+      "name": "postgresql",
+      "repository": "bitnami",
+      "repoUrl": "https://charts.bitnami.com/bitnami",
+      "repoKind": "http",
+      "stars": 430,
+      "official": false,
+      "verifiedPublisher": true,
+      "cncf": false,
+      "packageId": "c617753b-3376-40a1-81a1-3ab00e2868ac",
+      "version": "18.12.4",
+      "latestVersion": "18.12.4",
+      "appVersion": "18.6.0",
+      "chart": {
+        "apiVersion": "v2",
+        "type": "application",
+        "appVersion": "18.6.0",
+        "kubeVersion": "",
+        "dependencies": [
+          {
+            "name": "common",
+            "version": "2.41.0",
+            "repository": "oci://registry-1.docker.io/bitnamicharts",
+            "condition": null
+          }
+        ]
+      },
+      "fetch": {
+        "ok": true,
+        "error": null
+      },
+      "render": {
+        "ok": true,
+        "class": null,
+        "error": null,
+        "prev": {
+          "kubeVersion": "1.36.0",
+          "ok": true,
+          "class": null,
+          "error": null
+        }
+      },
+      "scan": {
+        "ok": true,
+        "error": null,
+        "verdict": "ready",
+        "score": 100,
+        "toolVersion": "dev",
+        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry fe1fdf07",
+        "findings": [],
+        "notAssessed": [
+          "deprecated-calls",
+          "helm",
+          "versions"
+        ],
+        "unrecognizedImages": [
+          "docker.io/bitnami/postgresql"
+        ]
+      },
+      "scanPrev": {
+        "target": "1.36",
+        "ok": true,
+        "error": null,
+        "verdict": "ready",
+        "score": 100,
+        "blockers": 0,
+        "warnings": 0,
+        "blockerKeys": []
+      },
+      "scanOfPrevRender": null,
+      "images": [
+        "registry-1.docker.io/bitnami/postgresql:latest"
+      ]
+    },
+    {
+      "rank": 9,
+      "name": "kubernetes-dashboard",
+      "repository": "k8s-dashboard",
+      "repoUrl": "https://kubernetes.github.io/dashboard",
+      "repoKind": "http",
+      "stars": 365,
+      "official": false,
+      "verifiedPublisher": false,
+      "cncf": false,
+      "packageId": "2d84645c-242f-4a0f-92fe-abb0f7984538",
+      "version": "7.14.0",
+      "latestVersion": "7.14.0",
+      "appVersion": "",
+      "chart": null,
+      "fetch": {
+        "ok": false,
+        "error": "Error: looks like \"https://kubernetes.github.io/dashboard\" is not a valid chart repository or cannot be reached: failed to fetch https://kubernetes.github.io/dashboard/index.yaml : 404 Not Found"
+      },
+      "render": null,
+      "scan": null,
+      "scanPrev": null,
+      "scanOfPrevRender": null,
+      "images": null
+    },
+    {
+      "rank": 10,
+      "name": "loki",
+      "repository": "grafana",
+      "repoUrl": "https://grafana.github.io/helm-charts",
+      "repoKind": "http",
+      "stars": 333,
+      "official": false,
+      "verifiedPublisher": false,
+      "cncf": false,
+      "packageId": "a779e8e7-a6ce-433b-bda6-fd330d31a280",
+      "version": "7.3.0",
+      "latestVersion": "7.3.0",
+      "appVersion": "3.6.12",
+      "chart": {
+        "apiVersion": "v2",
+        "type": "application",
+        "appVersion": "3.6.12",
+        "kubeVersion": "",
+        "dependencies": [
+          {
+            "name": "minio",
+            "version": "5.4.0",
+            "repository": "https://charts.min.io/",
+            "condition": "minio.enabled"
+          },
+          {
+            "name": "grafana-agent-operator",
+            "version": "0.5.2",
+            "repository": "https://grafana.github.io/helm-charts",
+            "condition": "monitoring.selfMonitoring.grafanaAgent.installOperator"
+          },
+          {
+            "name": "rollout-operator",
+            "version": "0.50.0",
+            "repository": "https://grafana.github.io/helm-charts",
+            "condition": "rollout_operator.enabled"
+          }
+        ]
+      },
+      "fetch": {
+        "ok": true,
+        "error": null
+      },
+      "render": {
+        "ok": false,
+        "class": "required-value",
+        "error": "Error: execution error at (loki/templates/write/statefulset-write.yaml:50:28): Please define loki.storage.bucketNames.chunks",
+        "prev": {
+          "kubeVersion": "1.36.0",
+          "ok": false,
+          "class": "required-value",
+          "error": "Error: execution error at (loki/templates/write/statefulset-write.yaml:50:28): Please define loki.storage.bucketNames.chunks"
+        }
+      },
+      "scan": null,
+      "scanPrev": null,
+      "scanOfPrevRender": null,
+      "images": null
+    },
+    {
+      "rank": 11,
+      "name": "metrics-server",
+      "repository": "metrics-server",
+      "repoUrl": "https://kubernetes-sigs.github.io/metrics-server/",
+      "repoKind": "http",
+      "stars": 320,
+      "official": false,
+      "verifiedPublisher": true,
+      "cncf": false,
+      "packageId": "d2f4f54a-725c-4d84-9288-c2b4b7dbc272",
+      "version": "3.14.0",
+      "latestVersion": "3.14.0",
+      "appVersion": "0.9.0",
+      "chart": {
+        "apiVersion": "v2",
+        "type": "application",
+        "appVersion": "0.9.0",
+        "kubeVersion": "",
+        "dependencies": []
+      },
+      "fetch": {
+        "ok": true,
+        "error": null
+      },
+      "render": {
+        "ok": true,
+        "class": null,
+        "error": null,
+        "prev": {
+          "kubeVersion": "1.36.0",
+          "ok": true,
+          "class": null,
+          "error": null
+        }
+      },
+      "scan": {
+        "ok": true,
+        "error": null,
+        "verdict": "ready",
+        "score": 100,
+        "toolVersion": "dev",
+        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry fe1fdf07",
+        "findings": [
+          {
+            "category": "addon-no-data",
+            "severity": "info",
+            "key": "addon-no-data/metrics-server",
+            "title": "no lifecycle data for Kubernetes Metrics Server 0.9.0",
+            "detail": "Detected Kubernetes Metrics Server version 0.9.0 via image in namespace(s): survey. The registry has no release-line data for this version, so its end of life was not assessed.",
+            "objects": [],
+            "objectsTotal": 0
+          }
+        ],
+        "notAssessed": [
+          "deprecated-calls",
+          "helm",
+          "versions"
+        ],
+        "unrecognizedImages": []
+      },
+      "scanPrev": {
+        "target": "1.36",
+        "ok": true,
+        "error": null,
+        "verdict": "ready",
+        "score": 100,
+        "blockers": 0,
+        "warnings": 0,
+        "blockerKeys": []
+      },
+      "scanOfPrevRender": null,
+      "images": [
+        "registry.k8s.io/metrics-server/metrics-server:v0.9.0"
+      ]
+    },
+    {
+      "rank": 12,
+      "name": "vault",
+      "repository": "hashicorp",
+      "repoUrl": "https://helm.releases.hashicorp.com",
+      "repoKind": "http",
+      "stars": 298,
+      "official": true,
+      "verifiedPublisher": true,
+      "cncf": false,
+      "packageId": "8bc3a2af-dfe7-4ccd-b419-be64f6156115",
+      "version": "0.34.1",
+      "latestVersion": "0.34.1",
+      "appVersion": "2.0.4",
+      "chart": {
+        "apiVersion": "v2",
+        "type": "application",
+        "appVersion": "2.0.4",
+        "kubeVersion": ">= 1.20.0-0",
+        "dependencies": []
+      },
+      "fetch": {
+        "ok": true,
+        "error": null
+      },
+      "render": {
+        "ok": true,
+        "class": null,
+        "error": null,
+        "prev": {
+          "kubeVersion": "1.36.0",
+          "ok": true,
+          "class": null,
+          "error": null
+        }
+      },
+      "scan": {
+        "ok": true,
+        "error": null,
+        "verdict": "ready",
+        "score": 100,
+        "toolVersion": "dev",
+        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry fe1fdf07",
+        "findings": [],
+        "notAssessed": [
+          "deprecated-calls",
+          "helm",
+          "versions"
+        ],
+        "unrecognizedImages": [
+          "docker.io/hashicorp/vault",
+          "docker.io/hashicorp/vault-k8s"
+        ]
+      },
+      "scanPrev": {
+        "target": "1.36",
+        "ok": true,
+        "error": null,
+        "verdict": "ready",
+        "score": 100,
+        "blockers": 0,
+        "warnings": 0,
+        "blockerKeys": []
+      },
+      "scanOfPrevRender": null,
+      "images": [
+        "hashicorp/vault-k8s:1.7.6",
+        "hashicorp/vault:2.0.4"
+      ]
+    },
+    {
+      "rank": 13,
+      "name": "gitlab",
+      "repository": "gitlab",
+      "repoUrl": "http://charts.gitlab.io/",
+      "repoKind": "http",
+      "stars": 282,
+      "official": false,
+      "verifiedPublisher": true,
+      "cncf": false,
+      "packageId": "1c1909b0-0d7f-4b2b-9ba1-396d7837078b",
+      "version": "10.4.1",
+      "latestVersion": "10.4.1",
+      "appVersion": "v19.4.1",
+      "chart": {
+        "apiVersion": "v2",
+        "type": "application",
+        "appVersion": "v19.4.1",
+        "kubeVersion": "",
+        "dependencies": [
+          {
+            "name": "gitlab",
+            "version": "*.*.*",
+            "repository": "",
+            "condition": null
+          },
+          {
+            "name": "certmanager-issuer",
+            "version": "*.*.*",
+            "repository": "",
+            "condition": null
+          },
+          {
+            "name": "registry",
+            "version": "*.*.*",
+            "repository": "",
+            "condition": null
+          },
+          {
+            "name": "cert-manager",
+            "version": "v1.21.2",
+            "repository": "oci://quay.io/jetstack/charts",
+            "condition": "installCertmanager"
+          },
+          {
+            "name": "prometheus",
+            "version": "29.29.0",
+            "repository": "oci://ghcr.io/prometheus-community/charts",
+            "condition": "prometheus.install"
+          },
+          {
+            "name": "gitlab-runner",
+            "version": "0.93.0",
+            "repository": "https://charts.gitlab.io/",
+            "condition": "gitlab-runner.install"
+          },
+          {
+            "name": "nginx-ingress",
+            "version": "*.*.*",
+            "repository": "",
+            "condition": "nginx-ingress.enabled"
+          },
+          {
+            "name": "nginx-ingress",
+            "version": "*.*.*",
+            "repository": "",
+            "condition": "nginx-ingress-geo.enabled"
+          },
+          {
+            "name": "gitlab-zoekt",
+            "version": "4.1.0",
+            "repository": "https://charts.gitlab.io/",
+            "condition": "gitlab-zoekt.install"
+          },
+          {
+            "name": "openbao",
+            "version": "0.18.1",
+            "repository": "https://charts.gitlab.io/",
+            "condition": "openbao.install"
+          },
+          {
+            "name": "traefik",
+            "version": "10.19.4",
+            "repository": "https://helm.traefik.io/traefik",
+            "condition": "traefik.install"
+          },
+          {
+            "name": "kubernetes-ingress",
+            "version": "1.39.4",
+            "repository": "https://haproxytech.github.io/helm-charts",
+            "condition": "haproxy.install"
+          },
+          {
+            "name": "gateway-helm",
+            "version": "1.9.1",
+            "repository": "oci://registry-1.docker.io/envoyproxy",
+            "condition": "global.gatewayApi.installEnvoy"
+          },
+          {
+            "name": "ai-gateway",
+            "version": "0.15.1",
+            "repository": "https://gitlab.com/api/v4/projects/gitlab-org%2fcharts%2fai-gateway-helm-chart/packages/helm/devel",
+            "condition": "ai-gateway.install"
+          }
+        ]
+      },
+      "fetch": {
+        "ok": true,
+        "error": null
+      },
+      "render": {
+        "ok": false,
+        "class": "required-value",
+        "error": "Error: execution error at (gitlab/charts/certmanager-issuer/templates/configmap.yaml:21:8): You must provide an email to associate with your TLS certificates. Please set certmanager-issuer.email",
+        "prev": {
+          "kubeVersion": "1.36.0",
+          "ok": false,
+          "class": "required-value",
+          "error": "Error: execution error at (gitlab/charts/certmanager-issuer/templates/configmap.yaml:21:8): You must provide an email to associate with your TLS certificates. Please set certmanager-issuer.email"
+        }
+      },
+      "scan": null,
+      "scanPrev": null,
+      "scanOfPrevRender": null,
+      "images": null
+    },
+    {
+      "rank": 14,
+      "name": "harbor",
+      "repository": "harbor",
+      "repoUrl": "https://helm.goharbor.io",
+      "repoKind": "http",
+      "stars": 275,
+      "official": true,
+      "verifiedPublisher": true,
+      "cncf": false,
+      "packageId": "466e5558-6e9a-4f23-93e4-2339ed25649a",
+      "version": "1.19.2",
+      "latestVersion": "1.19.2",
+      "appVersion": "2.15.2",
+      "chart": {
+        "apiVersion": "v1",
+        "type": "application",
+        "appVersion": "2.15.2",
+        "kubeVersion": "",
+        "dependencies": []
+      },
+      "fetch": {
+        "ok": true,
+        "error": null
+      },
+      "render": {
+        "ok": true,
+        "class": null,
+        "error": null,
+        "prev": {
+          "kubeVersion": "1.36.0",
+          "ok": true,
+          "class": null,
+          "error": null
+        }
+      },
+      "scan": {
+        "ok": true,
+        "error": null,
+        "verdict": "ready",
+        "score": 100,
+        "toolVersion": "dev",
+        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry fe1fdf07",
+        "findings": [],
+        "notAssessed": [
+          "deprecated-calls",
+          "helm",
+          "versions"
+        ],
+        "unrecognizedImages": [
+          "docker.io/goharbor/harbor-core",
+          "docker.io/goharbor/harbor-db",
+          "docker.io/goharbor/harbor-jobservice",
+          "docker.io/goharbor/harbor-portal",
+          "docker.io/goharbor/harbor-registryctl",
+          "docker.io/goharbor/registry-photon",
+          "docker.io/goharbor/trivy-adapter-photon",
+          "docker.io/goharbor/valkey-photon"
+        ]
+      },
+      "scanPrev": {
+        "target": "1.36",
+        "ok": true,
+        "error": null,
+        "verdict": "ready",
+        "score": 100,
+        "blockers": 0,
+        "warnings": 0,
+        "blockerKeys": []
+      },
+      "scanOfPrevRender": null,
+      "images": [
+        "docker.io/goharbor/harbor-core:v2.15.2",
+        "docker.io/goharbor/harbor-db:v2.15.2",
+        "docker.io/goharbor/harbor-jobservice:v2.15.2",
+        "docker.io/goharbor/harbor-portal:v2.15.2",
+        "docker.io/goharbor/harbor-registryctl:v2.15.2",
+        "docker.io/goharbor/registry-photon:v2.15.2",
+        "docker.io/goharbor/trivy-adapter-photon:v2.15.2",
+        "docker.io/goharbor/valkey-photon:v2.15.2"
+      ]
+    },
+    {
+      "rank": 15,
+      "name": "keycloak",
+      "repository": "bitnami",
+      "repoUrl": "https://charts.bitnami.com/bitnami",
+      "repoKind": "http",
+      "stars": 275,
+      "official": false,
+      "verifiedPublisher": true,
+      "cncf": false,
+      "packageId": "dd4ec18f-a820-42eb-84d3-ddcfbd4bf13a",
+      "version": "25.2.0",
+      "latestVersion": "25.2.0",
+      "appVersion": "26.3.3",
+      "chart": {
+        "apiVersion": "v2",
+        "type": "application",
+        "appVersion": "26.3.3",
+        "kubeVersion": "",
+        "dependencies": [
+          {
+            "name": "postgresql",
+            "version": "16.x.x",
+            "repository": "oci://registry-1.docker.io/bitnamicharts",
+            "condition": "postgresql.enabled"
+          },
+          {
+            "name": "common",
+            "version": "2.x.x",
+            "repository": "oci://registry-1.docker.io/bitnamicharts",
+            "condition": null
+          }
+        ]
+      },
+      "fetch": {
+        "ok": true,
+        "error": null
+      },
+      "render": {
+        "ok": true,
+        "class": null,
+        "error": null,
+        "prev": {
+          "kubeVersion": "1.36.0",
+          "ok": true,
+          "class": null,
+          "error": null
+        }
+      },
+      "scan": {
+        "ok": true,
+        "error": null,
+        "verdict": "ready",
+        "score": 100,
+        "toolVersion": "dev",
+        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry fe1fdf07",
+        "findings": [],
+        "notAssessed": [
+          "deprecated-calls",
+          "helm",
+          "versions"
+        ],
+        "unrecognizedImages": [
+          "docker.io/bitnami/keycloak",
+          "docker.io/bitnami/postgresql"
+        ]
+      },
+      "scanPrev": {
+        "target": "1.36",
+        "ok": true,
+        "error": null,
+        "verdict": "ready",
+        "score": 100,
+        "blockers": 0,
+        "warnings": 0,
+        "blockerKeys": []
+      },
+      "scanOfPrevRender": null,
+      "images": [
+        "docker.io/bitnami/keycloak:26.3.3-debian-12-r0",
+        "docker.io/bitnami/postgresql:17.6.0-debian-12-r0"
+      ]
+    },
+    {
+      "rank": 16,
+      "name": "jenkins",
+      "repository": "jenkinsci",
+      "repoUrl": "https://charts.jenkins.io/",
+      "repoKind": "http",
+      "stars": 255,
+      "official": true,
+      "verifiedPublisher": true,
+      "cncf": false,
+      "packageId": "8047293b-3250-41d6-bd79-9679b6586468",
+      "version": "5.9.67",
+      "latestVersion": "5.9.67",
+      "appVersion": "2.580.1",
+      "chart": {
+        "apiVersion": "v2",
+        "type": "application",
+        "appVersion": "2.580.1",
+        "kubeVersion": "",
+        "dependencies": []
+      },
+      "fetch": {
+        "ok": true,
+        "error": null
+      },
+      "render": {
+        "ok": true,
+        "class": null,
+        "error": null,
+        "prev": {
+          "kubeVersion": "1.36.0",
+          "ok": true,
+          "class": null,
+          "error": null
+        }
+      },
+      "scan": {
+        "ok": true,
+        "error": null,
+        "verdict": "ready",
+        "score": 100,
+        "toolVersion": "dev",
+        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry fe1fdf07",
+        "findings": [],
+        "notAssessed": [
+          "deprecated-calls",
+          "helm",
+          "versions"
+        ],
+        "unrecognizedImages": [
+          "docker.io/bats/bats",
+          "docker.io/jenkins/jenkins",
+          "docker.io/kiwigrid/k8s-sidecar"
+        ]
+      },
+      "scanPrev": {
+        "target": "1.36",
+        "ok": true,
+        "error": null,
+        "verdict": "ready",
+        "score": 100,
+        "blockers": 0,
+        "warnings": 0,
+        "blockerKeys": []
+      },
+      "scanOfPrevRender": null,
+      "images": [
+        "docker.io/bats/bats:1.14.0",
+        "docker.io/jenkins/jenkins:2.580.1-jdk21",
+        "docker.io/kiwigrid/k8s-sidecar:2.11.2",
+        "jenkins/inbound-agent:3385.vf1123fb_515da_-1"
+      ]
+    },
+    {
+      "rank": 17,
+      "name": "external-secrets",
+      "repository": "external-secrets-operator",
+      "repoUrl": "https://charts.external-secrets.io/",
+      "repoKind": "http",
+      "stars": 249,
+      "official": false,
+      "verifiedPublisher": true,
+      "cncf": false,
+      "packageId": "67a49f70-cf98-416d-b5a9-3c2f2cbe81a1",
+      "version": "2.12.0",
+      "latestVersion": "2.12.0",
+      "appVersion": "v2.12.0",
+      "chart": {
+        "apiVersion": "v2",
+        "type": "application",
+        "appVersion": "v2.12.0",
+        "kubeVersion": ">= 1.19.0-0",
+        "dependencies": [
+          {
+            "name": "bitwarden-sdk-server",
+            "version": "v0.6.0",
+            "repository": "oci://ghcr.io/external-secrets/charts",
+            "condition": "bitwarden-sdk-server.enabled"
+          }
+        ]
+      },
+      "fetch": {
+        "ok": true,
+        "error": null
+      },
+      "render": {
+        "ok": true,
+        "class": null,
+        "error": null,
+        "prev": {
+          "kubeVersion": "1.36.0",
+          "ok": true,
+          "class": null,
+          "error": null
+        }
+      },
+      "scan": {
+        "ok": true,
+        "error": null,
+        "verdict": "ready",
+        "score": 100,
+        "toolVersion": "dev",
+        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry fe1fdf07",
+        "findings": [],
+        "notAssessed": [
+          "deprecated-calls",
+          "helm",
+          "versions"
+        ],
+        "unrecognizedImages": [
+          "ghcr.io/external-secrets/external-secrets"
+        ]
+      },
+      "scanPrev": {
+        "target": "1.36",
+        "ok": true,
+        "error": null,
+        "verdict": "ready",
+        "score": 100,
+        "blockers": 0,
+        "warnings": 0,
+        "blockerKeys": []
+      },
+      "scanOfPrevRender": null,
+      "images": [
+        "ghcr.io/external-secrets/external-secrets:v2.12.0"
+      ]
+    },
+    {
+      "rank": 18,
+      "name": "external-dns",
+      "repository": "external-dns",
+      "repoUrl": "https://kubernetes-sigs.github.io/external-dns/",
+      "repoKind": "http",
+      "stars": 240,
+      "official": false,
+      "verifiedPublisher": true,
+      "cncf": false,
+      "packageId": "71e71874-9bda-43c0-899b-46365e61f4e1",
+      "version": "1.23.0",
+      "latestVersion": "1.23.0",
+      "appVersion": "0.23.0",
+      "chart": {
+        "apiVersion": "v2",
+        "type": "application",
+        "appVersion": "0.23.0",
+        "kubeVersion": "",
+        "dependencies": []
+      },
+      "fetch": {
+        "ok": true,
+        "error": null
+      },
+      "render": {
+        "ok": false,
+        "class": "required-value",
+        "error": "Error: values don't meet the specifications of the schema(s) in the following chart(s): external-dns: - at '/policy': got null, want string",
+        "prev": {
+          "kubeVersion": "1.36.0",
+          "ok": false,
+          "class": "required-value",
+          "error": "Error: values don't meet the specifications of the schema(s) in the following chart(s): external-dns: - at '/policy': got null, want string"
+        }
+      },
+      "scan": null,
+      "scanPrev": null,
+      "scanOfPrevRender": null,
+      "images": null
+    },
+    {
+      "rank": 19,
+      "name": "longhorn",
+      "repository": "longhorn",
+      "repoUrl": "https://charts.longhorn.io",
+      "repoKind": "http",
+      "stars": 225,
+      "official": false,
+      "verifiedPublisher": false,
+      "cncf": false,
+      "packageId": "4791b1c3-5454-49b1-9b4c-4871cd30769f",
+      "version": "1.13.0",
+      "latestVersion": "1.13.0",
+      "appVersion": "v1.13.0",
+      "chart": {
+        "apiVersion": "v1",
+        "type": "application",
+        "appVersion": "v1.13.0",
+        "kubeVersion": ">=1.34.0-0",
+        "dependencies": []
+      },
+      "fetch": {
+        "ok": true,
+        "error": null
+      },
+      "render": {
+        "ok": true,
+        "class": null,
+        "error": null,
+        "prev": {
+          "kubeVersion": "1.36.0",
+          "ok": true,
+          "class": null,
+          "error": null
+        }
+      },
+      "scan": {
+        "ok": true,
+        "error": null,
+        "verdict": "ready",
+        "score": 100,
+        "toolVersion": "dev",
+        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry fe1fdf07",
+        "findings": [],
+        "notAssessed": [
+          "deprecated-calls",
+          "helm",
+          "versions"
+        ],
+        "unrecognizedImages": [
+          "docker.io/longhornio/longhorn-manager",
+          "docker.io/longhornio/longhorn-share-manager",
+          "docker.io/longhornio/longhorn-ui"
+        ]
+      },
+      "scanPrev": {
+        "target": "1.36",
+        "ok": true,
+        "error": null,
+        "verdict": "ready",
+        "score": 100,
+        "blockers": 0,
+        "warnings": 0,
+        "blockerKeys": []
+      },
+      "scanOfPrevRender": null,
+      "images": [
+        "docker.io/longhornio/longhorn-manager:v1.13.0",
+        "docker.io/longhornio/longhorn-share-manager:v1.13.0",
+        "docker.io/longhornio/longhorn-ui:v1.13.0"
+      ]
+    },
+    {
+      "rank": 20,
+      "name": "rabbitmq",
+      "repository": "bitnami",
+      "repoUrl": "https://charts.bitnami.com/bitnami",
+      "repoKind": "http",
+      "stars": 215,
+      "official": false,
+      "verifiedPublisher": true,
+      "cncf": false,
+      "packageId": "a5a1e501-bfca-4c1b-98c3-90dcfdf6f33b",
+      "version": "16.0.14",
+      "latestVersion": "16.0.14",
+      "appVersion": "4.1.3",
+      "chart": {
+        "apiVersion": "v2",
+        "type": "application",
+        "appVersion": "4.1.3",
+        "kubeVersion": "",
+        "dependencies": [
+          {
+            "name": "common",
+            "version": "2.x.x",
+            "repository": "oci://registry-1.docker.io/bitnamicharts",
+            "condition": null
+          }
+        ]
+      },
+      "fetch": {
+        "ok": true,
+        "error": null
+      },
+      "render": {
+        "ok": true,
+        "class": null,
+        "error": null,
+        "prev": {
+          "kubeVersion": "1.36.0",
+          "ok": true,
+          "class": null,
+          "error": null
+        }
+      },
+      "scan": {
+        "ok": true,
+        "error": null,
+        "verdict": "ready",
+        "score": 100,
+        "toolVersion": "dev",
+        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry fe1fdf07",
+        "findings": [],
+        "notAssessed": [
+          "deprecated-calls",
+          "helm",
+          "versions"
+        ],
+        "unrecognizedImages": [
+          "docker.io/bitnami/rabbitmq"
+        ]
+      },
+      "scanPrev": {
+        "target": "1.36",
+        "ok": true,
+        "error": null,
+        "verdict": "ready",
+        "score": 100,
+        "blockers": 0,
+        "warnings": 0,
+        "blockerKeys": []
+      },
+      "scanOfPrevRender": null,
+      "images": [
+        "docker.io/bitnami/rabbitmq:4.1.3-debian-12-r1"
+      ]
+    },
+    {
+      "rank": 21,
+      "name": "gitlab-runner",
+      "repository": "gitlab",
+      "repoUrl": "http://charts.gitlab.io/",
+      "repoKind": "http",
+      "stars": 213,
+      "official": false,
+      "verifiedPublisher": true,
+      "cncf": false,
+      "packageId": "c80986fd-0b3c-4e90-8692-d2f1d88fb43a",
+      "version": "0.93.0",
+      "latestVersion": "0.93.0",
+      "appVersion": "19.4.0",
+      "chart": {
+        "apiVersion": "v1",
+        "type": "application",
+        "appVersion": "19.4.0",
+        "kubeVersion": "",
+        "dependencies": []
+      },
+      "fetch": {
+        "ok": true,
+        "error": null
+      },
+      "render": {
+        "ok": true,
+        "class": null,
+        "error": null,
+        "prev": {
+          "kubeVersion": "1.36.0",
+          "ok": true,
+          "class": null,
+          "error": null
+        }
+      },
+      "scan": {
+        "ok": true,
+        "error": null,
+        "verdict": "ready",
+        "score": 100,
+        "toolVersion": "dev",
+        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry fe1fdf07",
+        "findings": [],
+        "notAssessed": [
+          "deprecated-calls",
+          "helm",
+          "versions"
+        ],
+        "unrecognizedImages": [
+          "registry.gitlab.com/gitlab-org/gitlab-runner"
+        ]
+      },
+      "scanPrev": {
+        "target": "1.36",
+        "ok": true,
+        "error": null,
+        "verdict": "ready",
+        "score": 100,
+        "blockers": 0,
+        "warnings": 0,
+        "blockerKeys": []
+      },
+      "scanOfPrevRender": null,
+      "images": [
+        "registry.gitlab.com/gitlab-org/gitlab-runner:alpine-v19.4.0"
+      ]
+    },
+    {
+      "rank": 22,
+      "name": "aws-load-balancer-controller",
+      "repository": "aws",
+      "repoUrl": "https://aws.github.io/eks-charts",
+      "repoKind": "http",
+      "stars": 210,
+      "official": false,
+      "verifiedPublisher": false,
+      "cncf": false,
+      "packageId": "23c8140b-abc5-4875-bf3b-ac3c20f2bae8",
+      "version": "3.6.0",
+      "latestVersion": "3.6.0",
+      "appVersion": "v3.6.0",
+      "chart": {
+        "apiVersion": "v2",
+        "type": "application",
+        "appVersion": "v3.6.0",
+        "kubeVersion": "",
+        "dependencies": []
+      },
+      "fetch": {
+        "ok": true,
+        "error": null
+      },
+      "render": {
+        "ok": false,
+        "class": "required-value",
+        "error": "Error: execution error at (aws-load-balancer-controller/templates/deployment.yaml:67:28): Chart cannot be installed without a valid clusterName!",
+        "prev": {
+          "kubeVersion": "1.36.0",
+          "ok": false,
+          "class": "required-value",
+          "error": "Error: execution error at (aws-load-balancer-controller/templates/deployment.yaml:67:28): Chart cannot be installed without a valid clusterName!"
+        }
+      },
+      "scan": null,
+      "scanPrev": null,
+      "scanOfPrevRender": null,
+      "images": null
+    },
+    {
+      "rank": 23,
+      "name": "kafka",
+      "repository": "bitnami",
+      "repoUrl": "https://charts.bitnami.com/bitnami",
+      "repoKind": "http",
+      "stars": 204,
+      "official": false,
+      "verifiedPublisher": true,
+      "cncf": false,
+      "packageId": "4db236a8-e2b9-4672-8746-fc60c0edc89c",
+      "version": "32.4.3",
+      "latestVersion": "32.4.3",
+      "appVersion": "4.0.0",
+      "chart": {
+        "apiVersion": "v2",
+        "type": "application",
+        "appVersion": "4.0.0",
+        "kubeVersion": "",
+        "dependencies": [
+          {
+            "name": "common",
+            "version": "2.x.x",
+            "repository": "oci://registry-1.docker.io/bitnamicharts",
+            "condition": null
+          }
+        ]
+      },
+      "fetch": {
+        "ok": true,
+        "error": null
+      },
+      "render": {
+        "ok": true,
+        "class": null,
+        "error": null,
+        "prev": {
+          "kubeVersion": "1.36.0",
+          "ok": true,
+          "class": null,
+          "error": null
+        }
+      },
+      "scan": {
+        "ok": true,
+        "error": null,
+        "verdict": "ready",
+        "score": 100,
+        "toolVersion": "dev",
+        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry fe1fdf07",
+        "findings": [],
+        "notAssessed": [
+          "deprecated-calls",
+          "helm",
+          "versions"
+        ],
+        "unrecognizedImages": [
+          "docker.io/bitnami/kafka"
+        ]
+      },
+      "scanPrev": {
+        "target": "1.36",
+        "ok": true,
+        "error": null,
+        "verdict": "ready",
+        "score": 100,
+        "blockers": 0,
+        "warnings": 0,
+        "blockerKeys": []
+      },
+      "scanOfPrevRender": null,
+      "images": [
+        "docker.io/bitnami/kafka:4.0.0-debian-12-r10"
+      ]
+    },
+    {
+      "rank": 24,
+      "name": "cilium",
+      "repository": "cilium",
+      "repoUrl": "https://helm.cilium.io/",
+      "repoKind": "http",
+      "stars": 201,
+      "official": true,
+      "verifiedPublisher": true,
+      "cncf": false,
+      "packageId": "9ea94cbd-0496-45f2-a7de-5cca1a614f31",
+      "version": "1.20.2",
+      "latestVersion": "1.21.0-pre.3",
+      "appVersion": "1.20.2",
+      "chart": {
+        "apiVersion": "v2",
+        "type": "application",
+        "appVersion": "1.20.2",
+        "kubeVersion": ">= 1.21.0-0",
+        "dependencies": []
+      },
+      "fetch": {
+        "ok": true,
+        "error": null
+      },
+      "render": {
+        "ok": true,
+        "class": null,
+        "error": null,
+        "prev": {
+          "kubeVersion": "1.36.0",
+          "ok": true,
+          "class": null,
+          "error": null
+        }
+      },
+      "scan": {
+        "ok": true,
+        "error": null,
+        "verdict": "ready",
+        "score": 100,
+        "toolVersion": "dev",
+        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry fe1fdf07",
+        "findings": [],
+        "notAssessed": [
+          "deprecated-calls",
+          "helm",
+          "versions"
+        ],
+        "unrecognizedImages": [
+          "quay.io/cilium/cilium-envoy"
+        ]
+      },
+      "scanPrev": {
+        "target": "1.36",
+        "ok": true,
+        "error": null,
+        "verdict": "ready",
+        "score": 100,
+        "blockers": 0,
+        "warnings": 0,
+        "blockerKeys": []
+      },
+      "scanOfPrevRender": null,
+      "images": [
+        "quay.io/cilium/cilium-envoy:v1.37.6-1789133542-cbec91f666af0bf742da986d43832932dbb26b82@sha256:af7382699576b9e65e9184efa52eeca0b58aea70ad6e511bf260c91d9f740463",
+        "quay.io/cilium/cilium:v1.20.2@sha256:2939231d0d3e3ebddcd80fffa168b7ddcc78fdf0dc864d1c8c126ff523c54f01",
+        "quay.io/cilium/operator-generic:v1.20.2@sha256:64d8798350e8569b8e7622563fed6e44dce2625f311e4651b774816516c744fc"
+      ]
+    },
+    {
+      "rank": 25,
+      "name": "external-dns",
+      "repository": "bitnami",
+      "repoUrl": "https://charts.bitnami.com/bitnami",
+      "repoKind": "http",
+      "stars": 200,
+      "official": false,
+      "verifiedPublisher": true,
+      "cncf": false,
+      "packageId": "6e331fd8-4119-4d3f-b368-ae48c8d2c82f",
+      "version": "9.0.3",
+      "latestVersion": "9.0.3",
+      "appVersion": "0.18.0",
+      "chart": {
+        "apiVersion": "v2",
+        "type": "application",
+        "appVersion": "0.18.0",
+        "kubeVersion": "",
+        "dependencies": [
+          {
+            "name": "common",
+            "version": "2.x.x",
+            "repository": "oci://registry-1.docker.io/bitnamicharts",
+            "condition": null
+          }
+        ]
+      },
+      "fetch": {
+        "ok": true,
+        "error": null
+      },
+      "render": {
+        "ok": true,
+        "class": null,
+        "error": null,
+        "prev": {
+          "kubeVersion": "1.36.0",
+          "ok": true,
+          "class": null,
+          "error": null
+        }
+      },
+      "scan": {
+        "ok": true,
+        "error": null,
+        "verdict": "ready",
+        "score": 100,
+        "toolVersion": "dev",
+        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry fe1fdf07",
+        "findings": [
+          {
+            "category": "addon-no-data",
+            "severity": "info",
+            "key": "addon-no-data/external-dns",
+            "title": "no lifecycle data for ExternalDNS 0.18.0",
+            "detail": "Detected ExternalDNS version 0.18.0 via image in namespace(s): survey. The registry has no release-line data for this version, so its end of life was not assessed.",
+            "objects": [],
+            "objectsTotal": 0
+          }
+        ],
+        "notAssessed": [
+          "deprecated-calls",
+          "helm",
+          "versions"
+        ],
+        "unrecognizedImages": []
+      },
+      "scanPrev": {
+        "target": "1.36",
+        "ok": true,
+        "error": null,
+        "verdict": "ready",
+        "score": 100,
+        "blockers": 0,
+        "warnings": 0,
+        "blockerKeys": []
+      },
+      "scanOfPrevRender": null,
+      "images": [
+        "docker.io/bitnami/external-dns:0.18.0-debian-12-r4"
+      ]
+    },
+    {
+      "rank": 26,
+      "name": "airflow",
+      "repository": "apache-airflow",
+      "repoUrl": "https://airflow.apache.org/",
+      "repoKind": "http",
+      "stars": 198,
+      "official": true,
+      "verifiedPublisher": true,
+      "cncf": false,
+      "packageId": "c9a58f93-9e65-4991-9f9a-4c6fd8e63568",
+      "version": "1.22.0",
+      "latestVersion": "1.22.0",
+      "appVersion": "3.2.2",
+      "chart": {
+        "apiVersion": "v2",
+        "type": "application",
+        "appVersion": "3.2.2",
+        "kubeVersion": "",
+        "dependencies": [
+          {
+            "name": "postgresql",
+            "version": "13.2.24",
+            "repository": "https://charts.bitnami.com/bitnami",
+            "condition": "postgresql.enabled"
+          }
+        ]
+      },
+      "fetch": {
+        "ok": true,
+        "error": null
+      },
+      "render": {
+        "ok": true,
+        "class": null,
+        "error": null,
+        "prev": {
+          "kubeVersion": "1.36.0",
+          "ok": true,
+          "class": null,
+          "error": null
+        }
+      },
+      "scan": {
+        "ok": true,
+        "error": null,
+        "verdict": "ready",
+        "score": 100,
+        "toolVersion": "dev",
+        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry fe1fdf07",
+        "findings": [],
+        "notAssessed": [
+          "deprecated-calls",
+          "helm",
+          "versions"
+        ],
+        "unrecognizedImages": [
+          "docker.io/apache/airflow",
+          "docker.io/bitnamilegacy/postgresql",
+          "docker.io/library/redis",
+          "quay.io/prometheus/statsd-exporter"
+        ]
+      },
+      "scanPrev": {
+        "target": "1.36",
+        "ok": true,
+        "error": null,
+        "verdict": "ready",
+        "score": 100,
+        "blockers": 0,
+        "warnings": 0,
+        "blockerKeys": []
+      },
+      "scanOfPrevRender": null,
+      "images": [
+        "apache/airflow:3.2.2",
+        "docker.io/bitnamilegacy/postgresql:16.1.0-debian-11-r15",
+        "quay.io/prometheus/statsd-exporter:v0.30.0",
+        "redis:7.2-bookworm"
+      ]
+    },
+    {
+      "rank": 27,
+      "name": "mysql",
+      "repository": "bitnami",
+      "repoUrl": "https://charts.bitnami.com/bitnami",
+      "repoKind": "http",
+      "stars": 197,
+      "official": false,
+      "verifiedPublisher": true,
+      "cncf": false,
+      "packageId": "b7b1cb6a-de09-4d09-abea-91a1f5e688b6",
+      "version": "14.0.3",
+      "latestVersion": "14.0.3",
+      "appVersion": "9.4.0",
+      "chart": {
+        "apiVersion": "v2",
+        "type": "application",
+        "appVersion": "9.4.0",
+        "kubeVersion": "",
+        "dependencies": [
+          {
+            "name": "common",
+            "version": "2.x.x",
+            "repository": "oci://registry-1.docker.io/bitnamicharts",
+            "condition": null
+          }
+        ]
+      },
+      "fetch": {
+        "ok": true,
+        "error": null
+      },
+      "render": {
+        "ok": true,
+        "class": null,
+        "error": null,
+        "prev": {
+          "kubeVersion": "1.36.0",
+          "ok": true,
+          "class": null,
+          "error": null
+        }
+      },
+      "scan": {
+        "ok": true,
+        "error": null,
+        "verdict": "ready",
+        "score": 100,
+        "toolVersion": "dev",
+        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry fe1fdf07",
+        "findings": [],
+        "notAssessed": [
+          "deprecated-calls",
+          "helm",
+          "versions"
+        ],
+        "unrecognizedImages": [
+          "docker.io/bitnami/mysql"
+        ]
+      },
+      "scanPrev": {
+        "target": "1.36",
+        "ok": true,
+        "error": null,
+        "verdict": "ready",
+        "score": 100,
+        "blockers": 0,
+        "warnings": 0,
+        "blockerKeys": []
+      },
+      "scanOfPrevRender": null,
+      "images": [
+        "docker.io/bitnami/mysql:9.4.0-debian-12-r1"
+      ]
+    },
+    {
+      "rank": 28,
+      "name": "elasticsearch",
+      "repository": "elastic",
+      "repoUrl": "https://helm.elastic.co",
+      "repoKind": "http",
+      "stars": 193,
+      "official": true,
+      "verifiedPublisher": true,
+      "cncf": false,
+      "packageId": "e96e99a4-0930-4d25-9363-4e82befe985f",
+      "version": "8.5.1",
+      "latestVersion": "8.5.1",
+      "appVersion": "8.5.1",
+      "chart": {
+        "apiVersion": "v1",
+        "type": "application",
+        "appVersion": "8.5.1",
+        "kubeVersion": "",
+        "dependencies": []
+      },
+      "fetch": {
+        "ok": true,
+        "error": null
+      },
+      "render": {
+        "ok": true,
+        "class": null,
+        "error": null,
+        "prev": {
+          "kubeVersion": "1.36.0",
+          "ok": true,
+          "class": null,
+          "error": null
+        }
+      },
+      "scan": {
+        "ok": true,
+        "error": null,
+        "verdict": "ready",
+        "score": 100,
+        "toolVersion": "dev",
+        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry fe1fdf07",
+        "findings": [],
+        "notAssessed": [
+          "deprecated-calls",
+          "helm",
+          "versions"
+        ],
+        "unrecognizedImages": [
+          "docker.elastic.co/elasticsearch/elasticsearch"
+        ]
+      },
+      "scanPrev": {
+        "target": "1.36",
+        "ok": true,
+        "error": null,
+        "verdict": "ready",
+        "score": 100,
+        "blockers": 0,
+        "warnings": 0,
+        "blockerKeys": []
+      },
+      "scanOfPrevRender": null,
+      "images": [
+        "docker.elastic.co/elasticsearch/elasticsearch:8.5.1"
+      ]
+    },
+    {
+      "rank": 29,
+      "name": "mongodb",
+      "repository": "bitnami",
+      "repoUrl": "https://charts.bitnami.com/bitnami",
+      "repoKind": "http",
+      "stars": 193,
+      "official": false,
+      "verifiedPublisher": true,
+      "cncf": false,
+      "packageId": "c5f53072-a6e2-41e9-8455-622f591ba6e6",
+      "version": "20.0.0",
+      "latestVersion": "20.0.0",
+      "appVersion": "9.0.2",
+      "chart": {
+        "apiVersion": "v2",
+        "type": "application",
+        "appVersion": "9.0.2",
+        "kubeVersion": "",
+        "dependencies": [
+          {
+            "name": "common",
+            "version": "2.41.0",
+            "repository": "oci://registry-1.docker.io/bitnamicharts",
+            "condition": null
+          }
+        ]
+      },
+      "fetch": {
+        "ok": true,
+        "error": null
+      },
+      "render": {
+        "ok": true,
+        "class": null,
+        "error": null,
+        "prev": {
+          "kubeVersion": "1.36.0",
+          "ok": true,
+          "class": null,
+          "error": null
+        }
+      },
+      "scan": {
+        "ok": true,
+        "error": null,
+        "verdict": "ready",
+        "score": 100,
+        "toolVersion": "dev",
+        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry fe1fdf07",
+        "findings": [],
+        "notAssessed": [
+          "deprecated-calls",
+          "helm",
+          "versions"
+        ],
+        "unrecognizedImages": [
+          "docker.io/bitnami/mongodb"
+        ]
+      },
+      "scanPrev": {
+        "target": "1.36",
+        "ok": true,
+        "error": null,
+        "verdict": "ready",
+        "score": 100,
+        "blockers": 0,
+        "warnings": 0,
+        "blockerKeys": []
+      },
+      "scanOfPrevRender": null,
+      "images": [
+        "registry-1.docker.io/bitnami/mongodb:latest"
+      ]
+    },
+    {
+      "rank": 30,
+      "name": "velero",
+      "repository": "vmware-tanzu",
+      "repoUrl": "https://vmware-tanzu.github.io/helm-charts/",
+      "repoKind": "http",
+      "stars": 191,
+      "official": false,
+      "verifiedPublisher": false,
+      "cncf": false,
+      "packageId": "8f456ca8-4f86-455b-ade0-91c979c44b6a",
+      "version": "12.2.1",
+      "latestVersion": "12.2.1",
+      "appVersion": "1.18.2",
+      "chart": {
+        "apiVersion": "v2",
+        "type": "application",
+        "appVersion": "1.18.2",
+        "kubeVersion": ">=1.16.0-0",
+        "dependencies": []
+      },
+      "fetch": {
+        "ok": true,
+        "error": null
+      },
+      "render": {
+        "ok": true,
+        "class": null,
+        "error": null,
+        "prev": {
+          "kubeVersion": "1.36.0",
+          "ok": true,
+          "class": null,
+          "error": null
+        }
+      },
+      "scan": {
+        "ok": true,
+        "error": null,
+        "verdict": "ready",
+        "score": 100,
+        "toolVersion": "dev",
+        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry fe1fdf07",
+        "findings": [
+          {
+            "category": "addon-no-data",
+            "severity": "info",
+            "key": "addon-no-data/velero",
+            "title": "no lifecycle data for Velero 1.18.2",
+            "detail": "Detected Velero version 1.18.2 via image in namespace(s): survey. The registry has no release-line data for this version, so its end of life was not assessed.",
+            "objects": [],
+            "objectsTotal": 0
+          }
+        ],
+        "notAssessed": [
+          "deprecated-calls",
+          "helm",
+          "versions"
+        ],
+        "unrecognizedImages": []
+      },
+      "scanPrev": {
+        "target": "1.36",
+        "ok": true,
+        "error": null,
+        "verdict": "ready",
+        "score": 100,
+        "blockers": 0,
+        "warnings": 0,
+        "blockerKeys": []
+      },
+      "scanOfPrevRender": null,
+      "images": [
+        "docker.io/velero/velero:v1.18.2"
+      ]
+    },
+    {
+      "rank": 31,
+      "name": "nextcloud",
+      "repository": "nextcloud",
+      "repoUrl": "https://nextcloud.github.io/helm/",
+      "repoKind": "http",
+      "stars": 190,
+      "official": false,
+      "verifiedPublisher": false,
+      "cncf": false,
+      "packageId": "3c40975b-a9b5-425a-9ea1-8fc3d9405082",
+      "version": "9.4.0",
+      "latestVersion": "9.4.0",
+      "appVersion": "35.0.1",
+      "chart": {
+        "apiVersion": "v2",
+        "type": "application",
+        "appVersion": "35.0.1",
+        "kubeVersion": "",
+        "dependencies": [
+          {
+            "name": "postgresql",
+            "version": "16.7.4",
+            "repository": "oci://registry-1.docker.io/bitnamicharts",
+            "condition": "postgresql.enabled"
+          },
+          {
+            "name": "mariadb",
+            "version": "20.5.5",
+            "repository": "oci://registry-1.docker.io/bitnamicharts",
+            "condition": "mariadb.enabled"
+          },
+          {
+            "name": "redis",
+            "version": "21.1.3",
+            "repository": "oci://registry-1.docker.io/bitnamicharts",
+            "condition": "redis.enabled"
+          },
+          {
+            "name": "collabora-online",
+            "version": "1.1.60",
+            "repository": "https://collaboraonline.github.io/online",
+            "condition": "collabora.enabled"
+          }
+        ]
+      },
+      "fetch": {
+        "ok": true,
+        "error": null
+      },
+      "render": {
+        "ok": true,
+        "class": null,
+        "error": null,
+        "prev": {
+          "kubeVersion": "1.36.0",
+          "ok": true,
+          "class": null,
+          "error": null
+        }
+      },
+      "scan": {
+        "ok": true,
+        "error": null,
+        "verdict": "ready",
+        "score": 100,
+        "toolVersion": "dev",
+        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry fe1fdf07",
+        "findings": [],
+        "notAssessed": [
+          "deprecated-calls",
+          "helm",
+          "versions"
+        ],
+        "unrecognizedImages": [
+          "docker.io/library/nextcloud"
+        ]
+      },
+      "scanPrev": {
+        "target": "1.36",
+        "ok": true,
+        "error": null,
+        "verdict": "ready",
+        "score": 100,
+        "blockers": 0,
+        "warnings": 0,
+        "blockerKeys": []
+      },
+      "scanOfPrevRender": null,
+      "images": [
+        "docker.io/library/nextcloud:35.0.1-apache"
+      ]
+    },
+    {
+      "rank": 32,
+      "name": "minio",
+      "repository": "bitnami",
+      "repoUrl": "https://charts.bitnami.com/bitnami",
+      "repoKind": "http",
+      "stars": 169,
+      "official": false,
+      "verifiedPublisher": true,
+      "cncf": false,
+      "packageId": "14ffa4bf-0798-45df-bc0a-0ef44a882f4e",
+      "version": "17.0.21",
+      "latestVersion": "17.0.21",
+      "appVersion": "2025.7.23",
+      "chart": {
+        "apiVersion": "v2",
+        "type": "application",
+        "appVersion": "2025.7.23",
+        "kubeVersion": "",
+        "dependencies": [
+          {
+            "name": "common",
+            "version": "2.x.x",
+            "repository": "oci://registry-1.docker.io/bitnamicharts",
+            "condition": null
+          }
+        ]
+      },
+      "fetch": {
+        "ok": true,
+        "error": null
+      },
+      "render": {
+        "ok": true,
+        "class": null,
+        "error": null,
+        "prev": {
+          "kubeVersion": "1.36.0",
+          "ok": true,
+          "class": null,
+          "error": null
+        }
+      },
+      "scan": {
+        "ok": true,
+        "error": null,
+        "verdict": "ready",
+        "score": 100,
+        "toolVersion": "dev",
+        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry fe1fdf07",
+        "findings": [],
+        "notAssessed": [
+          "deprecated-calls",
+          "helm",
+          "versions"
+        ],
+        "unrecognizedImages": [
+          "docker.io/bitnami/minio",
+          "docker.io/bitnami/minio-object-browser"
+        ]
+      },
+      "scanPrev": {
+        "target": "1.36",
+        "ok": true,
+        "error": null,
+        "verdict": "ready",
+        "score": 100,
+        "blockers": 0,
+        "warnings": 0,
+        "blockerKeys": []
+      },
+      "scanOfPrevRender": null,
+      "images": [
+        "docker.io/bitnami/minio-object-browser:2.0.2-debian-12-r3",
+        "docker.io/bitnami/minio:2025.7.23-debian-12-r3"
+      ]
+    },
+    {
+      "rank": 33,
+      "name": "cluster-autoscaler",
+      "repository": "cluster-autoscaler",
+      "repoUrl": "https://kubernetes.github.io/autoscaler",
+      "repoKind": "http",
+      "stars": 168,
+      "official": false,
+      "verifiedPublisher": false,
+      "cncf": false,
+      "packageId": "99846b72-aace-4de6-8aef-733d6b0485b7",
+      "version": "9.59.0",
+      "latestVersion": "9.59.0",
+      "appVersion": "1.35.0",
+      "chart": {
+        "apiVersion": "v2",
+        "type": "application",
+        "appVersion": "1.35.0",
+        "kubeVersion": "",
+        "dependencies": []
+      },
+      "fetch": {
+        "ok": true,
+        "error": null
+      },
+      "render": {
+        "ok": true,
+        "class": null,
+        "error": null,
+        "prev": {
+          "kubeVersion": "1.36.0",
+          "ok": true,
+          "class": null,
+          "error": null
+        }
+      },
+      "scan": {
+        "ok": true,
+        "error": null,
+        "verdict": "ready",
+        "score": 100,
+        "toolVersion": "dev",
+        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry fe1fdf07",
+        "findings": [],
+        "notAssessed": [
+          "deprecated-calls",
+          "helm",
+          "versions"
+        ],
+        "unrecognizedImages": []
+      },
+      "scanPrev": {
+        "target": "1.36",
+        "ok": true,
+        "error": null,
+        "verdict": "ready",
+        "score": 100,
+        "blockers": 0,
+        "warnings": 0,
+        "blockerKeys": []
+      },
+      "scanOfPrevRender": null,
+      "images": []
+    },
+    {
+      "rank": 34,
+      "name": "metallb",
+      "repository": "metallb",
+      "repoUrl": "https://metallb.github.io/metallb",
+      "repoKind": "http",
+      "stars": 154,
+      "official": false,
+      "verifiedPublisher": true,
+      "cncf": false,
+      "packageId": "0a8ae203-1315-4aca-a206-349a83f2c605",
+      "version": "0.16.1",
+      "latestVersion": "0.16.1",
+      "appVersion": "v0.16.1",
+      "chart": {
+        "apiVersion": "v2",
+        "type": "application",
+        "appVersion": "v0.16.1",
+        "kubeVersion": ">= 1.19.0-0",
+        "dependencies": [
+          {
+            "name": "crds",
+            "version": "0.16.1",
+            "repository": "",
+            "condition": "crds.enabled"
+          },
+          {
+            "name": "frr-k8s",
+            "version": "0.0.25",
+            "repository": "https://metallb.github.io/frr-k8s",
+            "condition": "frrk8s.enabled"
+          }
+        ]
+      },
+      "fetch": {
+        "ok": true,
+        "error": null
+      },
+      "render": {
+        "ok": true,
+        "class": null,
+        "error": null,
+        "prev": {
+          "kubeVersion": "1.36.0",
+          "ok": true,
+          "class": null,
+          "error": null
+        }
+      },
+      "scan": {
+        "ok": true,
+        "error": null,
+        "verdict": "ready",
+        "score": 100,
+        "toolVersion": "dev",
+        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry fe1fdf07",
+        "findings": [
+          {
+            "category": "crd-version",
+            "severity": "info",
+            "key": "crd-version/deprecated/metallb.io/v1beta1/BGPPeer",
+            "title": "metallb.io/v1beta1 BGPPeer is a deprecated CRD version",
+            "detail": "No custom resource was found written through this version. CRD bgppeers.metallb.io marks v1beta1 deprecated. The CRD says: \"v1beta1 is deprecated, please use v1beta2\". CRD versions are set by the add-on that ships the CRD, independent of Kubernetes 1.37.",
+            "objects": [],
+            "objectsTotal": 0
+          }
+        ],
+        "notAssessed": [
+          "deprecated-calls",
+          "helm",
+          "versions"
+        ],
+        "unrecognizedImages": [
+          "quay.io/frrouting/frr",
+          "quay.io/metallb/controller",
+          "quay.io/metallb/frr-k8s",
+          "quay.io/metallb/speaker"
+        ]
+      },
+      "scanPrev": {
+        "target": "1.36",
+        "ok": true,
+        "error": null,
+        "verdict": "ready",
+        "score": 100,
+        "blockers": 0,
+        "warnings": 0,
+        "blockerKeys": []
+      },
+      "scanOfPrevRender": null,
+      "images": [
+        "quay.io/frrouting/frr:10.4.3",
+        "quay.io/metallb/controller:v0.16.1",
+        "quay.io/metallb/frr-k8s:v0.0.25",
+        "quay.io/metallb/speaker:v0.16.1"
+      ]
+    },
+    {
+      "rank": 35,
+      "name": "istiod",
+      "repository": "istio-official",
+      "repoUrl": "https://istio-release.storage.googleapis.com/charts",
+      "repoKind": "http",
+      "stars": 143,
+      "official": true,
+      "verifiedPublisher": true,
+      "cncf": true,
+      "packageId": "cc720a54-333c-4b12-a191-c971ab4435fa",
+      "version": "1.30.5",
+      "latestVersion": "1.31.0-rc.0",
+      "appVersion": "1.30.5",
+      "chart": {
+        "apiVersion": "v2",
+        "type": "application",
+        "appVersion": "1.30.5",
+        "kubeVersion": "",
+        "dependencies": []
+      },
+      "fetch": {
+        "ok": true,
+        "error": null
+      },
+      "render": {
+        "ok": true,
+        "class": null,
+        "error": null,
+        "prev": {
+          "kubeVersion": "1.36.0",
+          "ok": true,
+          "class": null,
+          "error": null
+        }
+      },
+      "scan": {
+        "ok": true,
+        "error": null,
+        "verdict": "blocked",
+        "score": 70,
+        "toolVersion": "dev",
+        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry fe1fdf07",
+        "findings": [
+          {
+            "category": "chart-incompat",
+            "severity": "blocker",
+            "key": "chart-incompat/istio/1.30",
+            "title": "Istio 1.30.5 supports Kubernetes up to 1.36 (target 1.37)",
+            "detail": "Installed version 1.30.5 is in the 1.30 release line, which supports Kubernetes 1.32 through 1.36.",
+            "objects": [],
+            "objectsTotal": 0
+          },
+          {
+            "category": "eol-approaching",
+            "severity": "warning",
+            "key": "eol-approaching/istio/1.30",
+            "title": "Istio 1.30 reaches end-of-life on 2026-12-31",
+            "detail": "Detected Istio version 1.30.5 via labels in namespace(s): survey. Upstream support for the 1.30 release line ends on 2026-12-31.",
+            "objects": [],
+            "objectsTotal": 0
+          }
+        ],
+        "notAssessed": [
+          "deprecated-calls",
+          "helm",
+          "versions"
+        ],
+        "unrecognizedImages": [
+          "registry.istio.io/release/pilot"
+        ]
+      },
+      "scanPrev": {
+        "target": "1.36",
+        "ok": true,
+        "error": null,
+        "verdict": "ready",
+        "score": 95,
+        "blockers": 0,
+        "warnings": 1,
+        "blockerKeys": []
+      },
+      "scanOfPrevRender": null,
+      "images": [
+        "busybox:1.28",
+        "registry.istio.io/release/pilot:1.30.5"
+      ]
+    },
+    {
+      "rank": 36,
+      "name": "rancher",
+      "repository": "rancher-stable",
+      "repoUrl": "https://releases.rancher.com/server-charts/stable",
+      "repoKind": "http",
+      "stars": 141,
+      "official": false,
+      "verifiedPublisher": false,
+      "cncf": false,
+      "packageId": "be8d1533-f57c-4a35-bd38-7926d49c9d67",
+      "version": "2.15.2",
+      "latestVersion": "2.15.2",
+      "appVersion": "v2.15.2",
+      "chart": {
+        "apiVersion": "v2",
+        "type": "application",
+        "appVersion": "v2.15.2",
+        "kubeVersion": "< 1.37.0-0",
+        "dependencies": []
+      },
+      "fetch": {
+        "ok": true,
+        "error": null
+      },
+      "render": {
+        "ok": false,
+        "class": "kubeVersion",
+        "error": "Error: chart requires kubeVersion: < 1.37.0-0 which is incompatible with Kubernetes v1.37.0",
+        "prev": {
+          "kubeVersion": "1.36.0",
+          "ok": true,
+          "class": null,
+          "error": null
+        }
+      },
+      "scan": null,
+      "scanPrev": {
+        "target": "1.36",
+        "ok": true,
+        "error": null,
+        "verdict": "ready",
+        "score": 100,
+        "blockers": 0,
+        "warnings": 0,
+        "blockerKeys": []
+      },
+      "scanOfPrevRender": {
+        "ok": true,
+        "error": null,
+        "verdict": "ready",
+        "score": 100,
+        "toolVersion": "dev",
+        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry fe1fdf07",
+        "findings": [],
+        "notAssessed": [
+          "crds",
+          "deprecated-calls",
+          "helm",
+          "versions"
+        ],
+        "unrecognizedImages": [
+          "docker.io/rancher/rancher",
+          "docker.io/rancher/shell"
+        ]
+      },
+      "images": null
+    },
+    {
+      "rank": 37,
+      "name": "kyverno",
+      "repository": "kyverno",
+      "repoUrl": "https://kyverno.github.io/kyverno/",
+      "repoKind": "http",
+      "stars": 140,
+      "official": true,
+      "verifiedPublisher": true,
+      "cncf": false,
+      "packageId": "537dc014-a208-497b-9916-4d282c0e517e",
+      "version": "3.9.1",
+      "latestVersion": "3.9.1",
+      "appVersion": "v1.19.1",
+      "chart": {
+        "apiVersion": "v2",
+        "type": "application",
+        "appVersion": "v1.19.1",
+        "kubeVersion": ">=1.25.0-0",
+        "dependencies": [
+          {
+            "name": "grafana",
+            "version": "3.9.1",
+            "repository": "",
+            "condition": "grafana.enabled"
+          },
+          {
+            "name": "crds",
+            "version": "3.9.1",
+            "repository": "",
+            "condition": "crds.install"
+          },
+          {
+            "name": "kyverno-api",
+            "version": "0.0.1-alpha.4",
+            "repository": "https://kyverno.github.io/api",
+            "condition": "crds.install"
+          },
+          {
+            "name": "openreports",
+            "version": "0.1.0",
+            "repository": "https://openreports.github.io/reports-api",
+            "condition": "openreports.installCrds"
+          },
+          {
+            "name": "reports-server",
+            "version": "0.1.6",
+            "repository": "https://kyverno.github.io/reports-server/",
+            "condition": "reportsServer.enabled"
+          }
+        ]
+      },
+      "fetch": {
+        "ok": true,
+        "error": null
+      },
+      "render": {
+        "ok": true,
+        "class": null,
+        "error": null,
+        "prev": {
+          "kubeVersion": "1.36.0",
+          "ok": true,
+          "class": null,
+          "error": null
+        }
+      },
+      "scan": {
+        "ok": true,
+        "error": null,
+        "verdict": "blocked",
+        "score": 75,
+        "toolVersion": "dev",
+        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry fe1fdf07",
+        "findings": [
+          {
+            "category": "chart-incompat",
+            "severity": "blocker",
+            "key": "chart-incompat/kyverno/1.19",
+            "title": "Kyverno 1.19.1 supports Kubernetes up to 1.35 (target 1.37)",
+            "detail": "Installed version 1.19.1 is in the 1.19 release line, which supports Kubernetes 1.33 through 1.35.",
+            "objects": [],
+            "objectsTotal": 0
+          },
+          {
+            "category": "crd-version",
+            "severity": "info",
+            "key": "crd-version/deprecated/kyverno.io/v1/ClusterPolicy",
+            "title": "kyverno.io/v1 ClusterPolicy is a deprecated CRD version",
+            "detail": "No custom resource was found written through this version. CRD clusterpolicies.kyverno.io marks v1 deprecated. The CRD says: \"kyverno.io/v1 ClusterPolicy is deprecated and will be removed in a future release; migrate to ValidatingPolicy, MutatingPolicy, GeneratingPolicy or ImageValidatingPolicy (policies.kyverno.io), see https://kyverno.io/docs/guides/migration-to-cel/\". CRD versions are set by the add-on that ships the CRD, independent of Kubernetes 1.37.",
+            "objects": [],
+            "objectsTotal": 0
+          },
+          {
+            "category": "crd-version",
+            "severity": "info",
+            "key": "crd-version/deprecated/kyverno.io/v1/Policy",
+            "title": "kyverno.io/v1 Policy is a deprecated CRD version",
+            "detail": "No custom resource was found written through this version. CRD policies.kyverno.io marks v1 deprecated. The CRD says: \"kyverno.io/v1 Policy is deprecated and will be removed in a future release; migrate to NamespacedValidatingPolicy and the other namespaced policy types (policies.kyverno.io), see https://kyverno.io/docs/guides/migration-to-cel/\". CRD versions are set by the add-on that ships the CRD, independent of Kubernetes 1.37.",
+            "objects": [],
+            "objectsTotal": 0
+          },
+          {
+            "category": "crd-version",
+            "severity": "info",
+            "key": "crd-version/deprecated/kyverno.io/v2/CleanupPolicy",
+            "title": "kyverno.io/v2 CleanupPolicy is a deprecated CRD version",
+            "detail": "No custom resource was found written through this version. CRD cleanuppolicies.kyverno.io marks v2 deprecated. The CRD says: \"kyverno.io/v2 CleanupPolicy is deprecated and will be removed in a future release; migrate to NamespacedDeletingPolicy (policies.kyverno.io), see https://kyverno.io/docs/guides/migration-to-cel/\". CRD versions are set by the add-on that ships the CRD, independent of Kubernetes 1.37.",
+            "objects": [],
+            "objectsTotal": 0
+          },
+          {
+            "category": "crd-version",
+            "severity": "info",
+            "key": "crd-version/deprecated/kyverno.io/v2/ClusterCleanupPolicy",
+            "title": "kyverno.io/v2 ClusterCleanupPolicy is a deprecated CRD version",
+            "detail": "No custom resource was found written through this version. CRD clustercleanuppolicies.kyverno.io marks v2 deprecated. The CRD says: \"kyverno.io/v2 ClusterCleanupPolicy is deprecated and will be removed in a future release; migrate to DeletingPolicy (policies.kyverno.io), see https://kyverno.io/docs/guides/migration-to-cel/\". CRD versions are set by the add-on that ships the CRD, independent of Kubernetes 1.37.",
+            "objects": [],
+            "objectsTotal": 0
+          },
+          {
+            "category": "crd-version",
+            "severity": "info",
+            "key": "crd-version/deprecated/kyverno.io/v2/PolicyException",
+            "title": "kyverno.io/v2 PolicyException is a deprecated CRD version",
+            "detail": "No custom resource was found written through this version. CRD policyexceptions.kyverno.io marks v2 deprecated. The CRD says: \"kyverno.io/v2 PolicyException is deprecated and will be removed in a future release; migrate to PolicyException (policies.kyverno.io), see https://kyverno.io/docs/guides/migration-to-cel/\". CRD versions are set by the add-on that ships the CRD, independent of Kubernetes 1.37.",
+            "objects": [],
+            "objectsTotal": 0
+          },
+          {
+            "category": "crd-version",
+            "severity": "info",
+            "key": "crd-version/deprecated/kyverno.io/v2alpha1/GlobalContextEntry",
+            "title": "kyverno.io/v2alpha1 GlobalContextEntry is a deprecated CRD version",
+            "detail": "No custom resource was found written through this version. CRD globalcontextentries.kyverno.io marks v2alpha1 deprecated. The CRD says: \"kyverno.io/v2alpha1 GlobalContextEntry is deprecated; use kyverno.io/v2 GlobalContextEntry\". CRD versions are set by the add-on that ships the CRD, independent of Kubernetes 1.37.",
+            "objects": [],
+            "objectsTotal": 0
+          },
+          {
+            "category": "crd-version",
+            "severity": "info",
+            "key": "crd-version/deprecated/kyverno.io/v2beta1/CleanupPolicy",
+            "title": "kyverno.io/v2beta1 CleanupPolicy is a deprecated CRD version",
+            "detail": "No custom resource was found written through this version. CRD cleanuppolicies.kyverno.io marks v2beta1 deprecated. The CRD says: \"kyverno.io/v2beta1 CleanupPolicy is deprecated and will be removed in a future release; migrate to NamespacedDeletingPolicy (policies.kyverno.io), see https://kyverno.io/docs/guides/migration-to-cel/\". CRD versions are set by the add-on that ships the CRD, independent of Kubernetes 1.37.",
+            "objects": [],
+            "objectsTotal": 0
+          },
+          {
+            "category": "crd-version",
+            "severity": "info",
+            "key": "crd-version/deprecated/kyverno.io/v2beta1/ClusterCleanupPolicy",
+            "title": "kyverno.io/v2beta1 ClusterCleanupPolicy is a deprecated CRD version",
+            "detail": "No custom resource was found written through this version. CRD clustercleanuppolicies.kyverno.io marks v2beta1 deprecated. The CRD says: \"kyverno.io/v2beta1 ClusterCleanupPolicy is deprecated and will be removed in a future release; migrate to DeletingPolicy (policies.kyverno.io), see https://kyverno.io/docs/guides/migration-to-cel/\". CRD versions are set by the add-on that ships the CRD, independent of Kubernetes 1.37.",
+            "objects": [],
+            "objectsTotal": 0
+          },
+          {
+            "category": "crd-version",
+            "severity": "info",
+            "key": "crd-version/deprecated/kyverno.io/v2beta1/ClusterPolicy",
+            "title": "kyverno.io/v2beta1 ClusterPolicy is a deprecated CRD version",
+            "detail": "No custom resource was found written through this version. CRD clusterpolicies.kyverno.io marks v2beta1 deprecated. The CRD says: \"kyverno.io/v2beta1 ClusterPolicy is deprecated and will be removed in a future release; migrate to ValidatingPolicy, MutatingPolicy, GeneratingPolicy or ImageValidatingPolicy (policies.kyverno.io), see https://kyverno.io/docs/guides/migration-to-cel/\". CRD versions are set by the add-on that ships the CRD, independent of Kubernetes 1.37.",
+            "objects": [],
+            "objectsTotal": 0
+          },
+          {
+            "category": "crd-version",
+            "severity": "info",
+            "key": "crd-version/deprecated/kyverno.io/v2beta1/Policy",
+            "title": "kyverno.io/v2beta1 Policy is a deprecated CRD version",
+            "detail": "No custom resource was found written through this version. CRD policies.kyverno.io marks v2beta1 deprecated. The CRD says: \"kyverno.io/v2beta1 Policy is deprecated and will be removed in a future release; migrate to NamespacedValidatingPolicy and the other namespaced policy types (policies.kyverno.io), see https://kyverno.io/docs/guides/migration-to-cel/\". CRD versions are set by the add-on that ships the CRD, independent of Kubernetes 1.37.",
+            "objects": [],
+            "objectsTotal": 0
+          },
+          {
+            "category": "crd-version",
+            "severity": "info",
+            "key": "crd-version/deprecated/kyverno.io/v2beta1/PolicyException",
+            "title": "kyverno.io/v2beta1 PolicyException is a deprecated CRD version",
+            "detail": "No custom resource was found written through this version. CRD policyexceptions.kyverno.io marks v2beta1 deprecated. The CRD says: \"kyverno.io/v2beta1 PolicyException is deprecated and will be removed in a future release; migrate to PolicyException (policies.kyverno.io), see https://kyverno.io/docs/guides/migration-to-cel/\". CRD versions are set by the add-on that ships the CRD, independent of Kubernetes 1.37.",
+            "objects": [],
+            "objectsTotal": 0
+          },
+          {
+            "category": "crd-version",
+            "severity": "info",
+            "key": "crd-version/deprecated/policies.kyverno.io/v1alpha1/DeletingPolicy",
+            "title": "policies.kyverno.io/v1alpha1 DeletingPolicy is a deprecated CRD version",
+            "detail": "No custom resource was found written through this version. CRD deletingpolicies.policies.kyverno.io marks v1alpha1 deprecated. CRD versions are set by the add-on that ships the CRD, independent of Kubernetes 1.37.",
+            "objects": [],
+            "objectsTotal": 0
+          },
+          {
+            "category": "crd-version",
+            "severity": "info",
+            "key": "crd-version/deprecated/policies.kyverno.io/v1alpha1/GeneratingPolicy",
+            "title": "policies.kyverno.io/v1alpha1 GeneratingPolicy is a deprecated CRD version",
+            "detail": "No custom resource was found written through this version. CRD generatingpolicies.policies.kyverno.io marks v1alpha1 deprecated. CRD versions are set by the add-on that ships the CRD, independent of Kubernetes 1.37.",
+            "objects": [],
+            "objectsTotal": 0
+          },
+          {
+            "category": "crd-version",
+            "severity": "info",
+            "key": "crd-version/deprecated/policies.kyverno.io/v1alpha1/ImageValidatingPolicy",
+            "title": "policies.kyverno.io/v1alpha1 ImageValidatingPolicy is a deprecated CRD version",
+            "detail": "No custom resource was found written through this version. CRD imagevalidatingpolicies.policies.kyverno.io marks v1alpha1 deprecated. CRD versions are set by the add-on that ships the CRD, independent of Kubernetes 1.37.",
+            "objects": [],
+            "objectsTotal": 0
+          },
+          {
+            "category": "crd-version",
+            "severity": "info",
+            "key": "crd-version/deprecated/policies.kyverno.io/v1alpha1/MutatingPolicy",
+            "title": "policies.kyverno.io/v1alpha1 MutatingPolicy is a deprecated CRD version",
+            "detail": "No custom resource was found written through this version. CRD mutatingpolicies.policies.kyverno.io marks v1alpha1 deprecated. CRD versions are set by the add-on that ships the CRD, independent of Kubernetes 1.37.",
+            "objects": [],
+            "objectsTotal": 0
+          },
+          {
+            "category": "crd-version",
+            "severity": "info",
+            "key": "crd-version/deprecated/policies.kyverno.io/v1alpha1/PolicyException",
+            "title": "policies.kyverno.io/v1alpha1 PolicyException is a deprecated CRD version",
+            "detail": "No custom resource was found written through this version. CRD policyexceptions.policies.kyverno.io marks v1alpha1 deprecated. CRD versions are set by the add-on that ships the CRD, independent of Kubernetes 1.37.",
+            "objects": [],
+            "objectsTotal": 0
+          },
+          {
+            "category": "crd-version",
+            "severity": "info",
+            "key": "crd-version/deprecated/policies.kyverno.io/v1alpha1/ValidatingPolicy",
+            "title": "policies.kyverno.io/v1alpha1 ValidatingPolicy is a deprecated CRD version",
+            "detail": "No custom resource was found written through this version. CRD validatingpolicies.policies.kyverno.io marks v1alpha1 deprecated. CRD versions are set by the add-on that ships the CRD, independent of Kubernetes 1.37.",
+            "objects": [],
+            "objectsTotal": 0
+          }
+        ],
+        "notAssessed": [
+          "deprecated-calls",
+          "helm",
+          "versions"
+        ],
+        "unrecognizedImages": [
+          "ghcr.io/kyverno/readiness-checker",
+          "reg.kyverno.io/kyverno/kyverno-cli"
+        ]
+      },
+      "scanPrev": {
+        "target": "1.36",
+        "ok": true,
+        "error": null,
+        "verdict": "blocked",
+        "score": 75,
+        "blockers": 1,
+        "warnings": 0,
+        "blockerKeys": [
+          "chart-incompat/kyverno/1.19"
+        ]
+      },
+      "scanOfPrevRender": null,
+      "images": [
+        "ghcr.io/kyverno/readiness-checker:latest",
+        "ghcr.io/kyverno/readiness-checker:v1.19.1",
+        "reg.kyverno.io/kyverno/background-controller:v1.19.1",
+        "reg.kyverno.io/kyverno/cleanup-controller:v1.19.1",
+        "reg.kyverno.io/kyverno/kyverno-cli:v1.19.1",
+        "reg.kyverno.io/kyverno/kyverno:v1.19.1",
+        "reg.kyverno.io/kyverno/kyvernopre:v1.19.1",
+        "reg.kyverno.io/kyverno/reports-controller:v1.19.1"
+      ]
+    },
+    {
+      "rank": 38,
+      "name": "cloudnative-pg",
+      "repository": "cloudnative-pg",
+      "repoUrl": "https://cloudnative-pg.io/charts/",
+      "repoKind": "http",
+      "stars": 140,
+      "official": false,
+      "verifiedPublisher": true,
+      "cncf": false,
+      "packageId": "8d3dd90d-2369-4830-b210-1f0fe0dab886",
+      "version": "0.29.1",
+      "latestVersion": "0.29.1",
+      "appVersion": "1.30.1",
+      "chart": {
+        "apiVersion": "v2",
+        "type": "application",
+        "appVersion": "1.30.1",
+        "kubeVersion": ">=1.29.0-0",
+        "dependencies": [
+          {
+            "name": "cluster",
+            "version": "0.0",
+            "repository": "https://cloudnative-pg.github.io/grafana-dashboards",
+            "condition": "monitoring.grafanaDashboard.create"
+          }
+        ]
+      },
+      "fetch": {
+        "ok": true,
+        "error": null
+      },
+      "render": {
+        "ok": true,
+        "class": null,
+        "error": null,
+        "prev": {
+          "kubeVersion": "1.36.0",
+          "ok": true,
+          "class": null,
+          "error": null
+        }
+      },
+      "scan": {
+        "ok": true,
+        "error": null,
+        "verdict": "ready",
+        "score": 100,
+        "toolVersion": "dev",
+        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry fe1fdf07",
+        "findings": [],
+        "notAssessed": [
+          "deprecated-calls",
+          "helm",
+          "versions"
+        ],
+        "unrecognizedImages": [
+          "ghcr.io/cloudnative-pg/cloudnative-pg"
+        ]
+      },
+      "scanPrev": {
+        "target": "1.36",
+        "ok": true,
+        "error": null,
+        "verdict": "ready",
+        "score": 100,
+        "blockers": 0,
+        "warnings": 0,
+        "blockerKeys": []
+      },
+      "scanOfPrevRender": null,
+      "images": [
+        "ghcr.io/cloudnative-pg/cloudnative-pg:1.30.1"
+      ]
+    },
+    {
+      "rank": 39,
+      "name": "argo-workflows",
+      "repository": "argo",
+      "repoUrl": "https://argoproj.github.io/argo-helm",
+      "repoKind": "http",
+      "stars": 139,
+      "official": true,
+      "verifiedPublisher": true,
+      "cncf": false,
+      "packageId": "bd00cabc-4819-452e-88ed-b3be13225c39",
+      "version": "2.0.12",
+      "latestVersion": "2.0.12",
+      "appVersion": "v4.1.5",
+      "chart": {
+        "apiVersion": "v2",
+        "type": "application",
+        "appVersion": "v4.1.5",
+        "kubeVersion": "",
+        "dependencies": []
+      },
+      "fetch": {
+        "ok": true,
+        "error": null
+      },
+      "render": {
+        "ok": true,
+        "class": null,
+        "error": null,
+        "prev": {
+          "kubeVersion": "1.36.0",
+          "ok": true,
+          "class": null,
+          "error": null
+        }
+      },
+      "scan": {
+        "ok": true,
+        "error": null,
+        "verdict": "ready",
+        "score": 100,
+        "toolVersion": "dev",
+        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry fe1fdf07",
+        "findings": [],
+        "notAssessed": [
+          "deprecated-calls",
+          "helm",
+          "versions"
+        ],
+        "unrecognizedImages": [
+          "quay.io/argoproj/argo-workflows-crdinstaller",
+          "quay.io/argoproj/argocli",
+          "quay.io/argoproj/workflow-controller"
+        ]
+      },
+      "scanPrev": {
+        "target": "1.36",
+        "ok": true,
+        "error": null,
+        "verdict": "ready",
+        "score": 100,
+        "blockers": 0,
+        "warnings": 0,
+        "blockerKeys": []
+      },
+      "scanOfPrevRender": null,
+      "images": [
+        "quay.io/argoproj/argo-workflows-crdinstaller:v4.1.5",
+        "quay.io/argoproj/argocli:v4.1.5",
+        "quay.io/argoproj/workflow-controller:v4.1.5"
+      ]
+    },
+    {
+      "rank": 40,
+      "name": "gitea",
+      "repository": "gitea",
+      "repoUrl": "https://dl.gitea.com/charts",
+      "repoKind": "http",
+      "stars": 135,
+      "official": true,
+      "verifiedPublisher": true,
+      "cncf": false,
+      "packageId": "50d2c3f1-394d-44c9-9431-dafab7a74922",
+      "version": "12.7.0",
+      "latestVersion": "12.7.0",
+      "appVersion": "1.27.0",
+      "chart": {
+        "apiVersion": "v2",
+        "type": "application",
+        "appVersion": "1.27.0",
+        "kubeVersion": "",
+        "dependencies": [
+          {
+            "name": "postgresql",
+            "version": "16.7.27",
+            "repository": "oci://registry-1.docker.io/bitnamicharts",
+            "condition": "postgresql.enabled"
+          },
+          {
+            "name": "postgresql-ha",
+            "version": "16.3.2",
+            "repository": "oci://registry-1.docker.io/bitnamicharts",
+            "condition": "postgresql-ha.enabled"
+          },
+          {
+            "name": "valkey-cluster",
+            "version": "3.0.24",
+            "repository": "oci://registry-1.docker.io/bitnamicharts",
+            "condition": "valkey-cluster.enabled"
+          },
+          {
+            "name": "valkey",
+            "version": "3.0.31",
+            "repository": "oci://registry-1.docker.io/bitnamicharts",
+            "condition": "valkey.enabled"
+          }
+        ]
+      },
+      "fetch": {
+        "ok": true,
+        "error": null
+      },
+      "render": {
+        "ok": true,
+        "class": null,
+        "error": null,
+        "prev": {
+          "kubeVersion": "1.36.0",
+          "ok": true,
+          "class": null,
+          "error": null
+        }
+      },
+      "scan": {
+        "ok": true,
+        "error": null,
+        "verdict": "ready",
+        "score": 100,
+        "toolVersion": "dev",
+        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry fe1fdf07",
+        "findings": [],
+        "notAssessed": [
+          "deprecated-calls",
+          "helm",
+          "versions"
+        ],
+        "unrecognizedImages": [
+          "docker.gitea.com/gitea",
+          "docker.io/bitnamilegacy/pgpool",
+          "docker.io/bitnamilegacy/postgresql-repmgr",
+          "docker.io/bitnamilegacy/valkey-cluster",
+          "docker.io/library/busybox"
+        ]
+      },
+      "scanPrev": {
+        "target": "1.36",
+        "ok": true,
+        "error": null,
+        "verdict": "ready",
+        "score": 100,
+        "blockers": 0,
+        "warnings": 0,
+        "blockerKeys": []
+      },
+      "scanOfPrevRender": null,
+      "images": [
+        "busybox:latest",
+        "docker.gitea.com/gitea:1.27.0-rootless",
+        "docker.io/bitnamilegacy/pgpool:4.6.3-debian-12-r0",
+        "docker.io/bitnamilegacy/postgresql-repmgr:17.6.0-debian-12-r2",
+        "docker.io/bitnamilegacy/valkey-cluster:8.1.3-debian-12-r3"
+      ]
+    },
+    {
+      "rank": 41,
+      "name": "sonarqube",
+      "repository": "sonarqube",
+      "repoUrl": "https://SonarSource.github.io/helm-chart-sonarqube",
+      "repoKind": "http",
+      "stars": 135,
+      "official": true,
+      "verifiedPublisher": true,
+      "cncf": false,
+      "packageId": "e908a05c-10b3-41d5-9175-1824486078a8",
+      "version": "2026.5.1002",
+      "latestVersion": "2026.5.1002",
+      "appVersion": "2026.5.2",
+      "chart": {
+        "apiVersion": "v2",
+        "type": "application",
+        "appVersion": "2026.5.2",
+        "kubeVersion": ">= 1.24.0-0",
+        "dependencies": [
+          {
+            "name": "keda",
+            "version": "2.20.2",
+            "repository": "https://kedacore.github.io/charts",
+            "condition": "keda.enabled"
+          }
+        ]
+      },
+      "fetch": {
+        "ok": true,
+        "error": null
+      },
+      "render": {
+        "ok": false,
+        "class": "required-value",
+        "error": "Error: execution error at (sonarqube/templates/validation.yaml:13:4): ** The values.yaml file is not valid. ** Please provide a passcode either setting \"monitoringPasscode\" or \"monitoringPasscodeSecretName\" and \"monitoringPasscodeSecretKey\"",
+        "prev": {
+          "kubeVersion": "1.36.0",
+          "ok": false,
+          "class": "required-value",
+          "error": "Error: execution error at (sonarqube/templates/validation.yaml:13:4): ** The values.yaml file is not valid. ** Please provide a passcode either setting \"monitoringPasscode\" or \"monitoringPasscodeSecretName\" and \"monitoringPasscodeSecretKey\""
+        }
+      },
+      "scan": null,
+      "scanPrev": null,
+      "scanOfPrevRender": null,
+      "images": null
+    },
+    {
+      "rank": 42,
+      "name": "fluent-bit",
+      "repository": "fluent",
+      "repoUrl": "https://fluent.github.io/helm-charts",
+      "repoKind": "http",
+      "stars": 128,
+      "official": false,
+      "verifiedPublisher": false,
+      "cncf": false,
+      "packageId": "632b48a6-9b30-4c25-9963-999027685fda",
+      "version": "0.58.3",
+      "latestVersion": "0.58.3",
+      "appVersion": "5.1.3",
+      "chart": {
+        "apiVersion": "v1",
+        "type": "application",
+        "appVersion": "5.1.3",
+        "kubeVersion": "",
+        "dependencies": []
+      },
+      "fetch": {
+        "ok": true,
+        "error": null
+      },
+      "render": {
+        "ok": true,
+        "class": null,
+        "error": null,
+        "prev": {
+          "kubeVersion": "1.36.0",
+          "ok": true,
+          "class": null,
+          "error": null
+        }
+      },
+      "scan": {
+        "ok": true,
+        "error": null,
+        "verdict": "ready",
+        "score": 100,
+        "toolVersion": "dev",
+        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry fe1fdf07",
+        "findings": [],
+        "notAssessed": [
+          "deprecated-calls",
+          "helm",
+          "versions"
+        ],
+        "unrecognizedImages": [
+          "docker.io/library/busybox"
+        ]
+      },
+      "scanPrev": {
+        "target": "1.36",
+        "ok": true,
+        "error": null,
+        "verdict": "ready",
+        "score": 100,
+        "blockers": 0,
+        "warnings": 0,
+        "blockerKeys": []
+      },
+      "scanOfPrevRender": null,
+      "images": [
+        "busybox:latest",
+        "cr.fluentbit.io/fluent/fluent-bit:5.1.3"
+      ]
+    },
+    {
+      "rank": 43,
+      "name": "datadog",
+      "repository": "datadog",
+      "repoUrl": "https://helm.datadoghq.com",
+      "repoKind": "http",
+      "stars": 117,
+      "official": true,
+      "verifiedPublisher": true,
+      "cncf": false,
+      "packageId": "faae2a5c-d503-49ad-b487-3d31d4af1243",
+      "version": "3.253.2",
+      "latestVersion": "3.253.2",
+      "appVersion": "7",
+      "chart": {
+        "apiVersion": "v1",
+        "type": "application",
+        "appVersion": "7",
+        "kubeVersion": "",
+        "dependencies": [
+          {
+            "name": "datadog-crds",
+            "version": "2.24.0",
+            "repository": "https://helm.datadoghq.com",
+            "condition": "datadog.autoscaling.workload.enabled,clusterAgent.metricsProvider.useDatadogMetrics"
+          },
+          {
+            "name": "datadog-crds",
+            "version": "2.24.0",
+            "repository": "https://helm.datadoghq.com",
+            "condition": "datadog.instrumentationCrd.enabled"
+          },
+          {
+            "name": "kube-state-metrics",
+            "version": "2.13.2",
+            "repository": "https://prometheus-community.github.io/helm-charts",
+            "condition": "datadog.kubeStateMetricsEnabled"
+          },
+          {
+            "name": "datadog-csi-driver",
+            "version": "0.17.0",
+            "repository": "https://helm.datadoghq.com",
+            "condition": "datadog.csi.enabled"
+          },
+          {
+            "name": "datadog-operator",
+            "version": "2.26.0",
+            "repository": "https://helm.datadoghq.com",
+            "condition": "datadog.operator.enabled"
+          }
+        ]
+      },
+      "fetch": {
+        "ok": true,
+        "error": null
+      },
+      "render": {
+        "ok": true,
+        "class": null,
+        "error": null,
+        "prev": {
+          "kubeVersion": "1.36.0",
+          "ok": true,
+          "class": null,
+          "error": null
+        }
+      },
+      "scan": {
+        "ok": true,
+        "error": null,
+        "verdict": "ready",
+        "score": 100,
+        "toolVersion": "dev",
+        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry fe1fdf07",
+        "findings": [],
+        "notAssessed": [
+          "deprecated-calls",
+          "helm",
+          "versions"
+        ],
+        "unrecognizedImages": [
+          "registry.datadoghq.com/cluster-agent",
+          "registry.datadoghq.com/operator"
+        ]
+      },
+      "scanPrev": {
+        "target": "1.36",
+        "ok": true,
+        "error": null,
+        "verdict": "ready",
+        "score": 100,
+        "blockers": 0,
+        "warnings": 0,
+        "blockerKeys": []
+      },
+      "scanOfPrevRender": null,
+      "images": [
+        "registry.datadoghq.com/cluster-agent:7.84.2",
+        "registry.datadoghq.com/operator:1.30.0"
+      ]
+    },
+    {
+      "rank": 44,
+      "name": "oauth2-proxy",
+      "repository": "oauth2-proxy",
+      "repoUrl": "https://oauth2-proxy.github.io/manifests",
+      "repoKind": "http",
+      "stars": 112,
+      "official": true,
+      "verifiedPublisher": true,
+      "cncf": false,
+      "packageId": "d7d634b4-efc8-4a41-b5ed-40704a62ef15",
+      "version": "10.7.1",
+      "latestVersion": "10.7.1",
+      "appVersion": "7.15.5",
+      "chart": {
+        "apiVersion": "v2",
+        "type": "application",
+        "appVersion": "7.15.5",
+        "kubeVersion": ">=1.16.0-0",
+        "dependencies": [
+          {
+            "name": "redis-ha",
+            "version": "4.35.10",
+            "repository": "https://dandydeveloper.github.io/charts",
+            "condition": "redis-ha.enabled"
+          }
+        ]
+      },
+      "fetch": {
+        "ok": true,
+        "error": null
+      },
+      "render": {
+        "ok": true,
+        "class": null,
+        "error": null,
+        "prev": {
+          "kubeVersion": "1.36.0",
+          "ok": true,
+          "class": null,
+          "error": null
+        }
+      },
+      "scan": {
+        "ok": true,
+        "error": null,
+        "verdict": "ready",
+        "score": 100,
+        "toolVersion": "dev",
+        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry fe1fdf07",
+        "findings": [],
+        "notAssessed": [
+          "deprecated-calls",
+          "helm",
+          "versions"
+        ],
+        "unrecognizedImages": [
+          "quay.io/oauth2-proxy/oauth2-proxy"
+        ]
+      },
+      "scanPrev": {
+        "target": "1.36",
+        "ok": true,
+        "error": null,
+        "verdict": "ready",
+        "score": 100,
+        "blockers": 0,
+        "warnings": 0,
+        "blockerKeys": []
+      },
+      "scanOfPrevRender": null,
+      "images": [
+        "quay.io/oauth2-proxy/oauth2-proxy:v7.15.5"
+      ]
+    },
+    {
+      "rank": 45,
+      "name": "pgadmin4",
+      "repository": "runix",
+      "repoUrl": "https://helm.runix.net/",
+      "repoKind": "http",
+      "stars": 112,
+      "official": false,
+      "verifiedPublisher": true,
+      "cncf": false,
+      "packageId": "b812a22a-b35a-4a7b-9dff-72583ae3d6ba",
+      "version": "1.70.4",
+      "latestVersion": "1.70.4",
+      "appVersion": "9.18",
+      "chart": {
+        "apiVersion": "v2",
+        "type": "application",
+        "appVersion": "9.18",
+        "kubeVersion": "",
+        "dependencies": []
+      },
+      "fetch": {
+        "ok": true,
+        "error": null
+      },
+      "render": {
+        "ok": true,
+        "class": null,
+        "error": null,
+        "prev": {
+          "kubeVersion": "1.36.0",
+          "ok": true,
+          "class": null,
+          "error": null
+        }
+      },
+      "scan": {
+        "ok": true,
+        "error": null,
+        "verdict": "ready",
+        "score": 100,
+        "toolVersion": "dev",
+        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry fe1fdf07",
+        "findings": [],
+        "notAssessed": [
+          "deprecated-calls",
+          "helm",
+          "versions"
+        ],
+        "unrecognizedImages": [
+          "docker.io/dpage/pgadmin4",
+          "docker.io/library/busybox"
+        ]
+      },
+      "scanPrev": {
+        "target": "1.36",
+        "ok": true,
+        "error": null,
+        "verdict": "ready",
+        "score": 100,
+        "blockers": 0,
+        "warnings": 0,
+        "blockerKeys": []
+      },
+      "scanOfPrevRender": null,
+      "images": [
+        "docker.io/busybox:1.38.0",
+        "docker.io/dpage/pgadmin4:9.18"
+      ]
+    },
+    {
+      "rank": 46,
+      "name": "nginx",
+      "repository": "bitnami",
+      "repoUrl": "https://charts.bitnami.com/bitnami",
+      "repoKind": "http",
+      "stars": 107,
+      "official": false,
+      "verifiedPublisher": true,
+      "cncf": false,
+      "packageId": "bec45f52-fe90-46a1-b6eb-a3dcd9bb203f",
+      "version": "25.2.1",
+      "latestVersion": "25.2.1",
+      "appVersion": "1.31.6",
+      "chart": {
+        "apiVersion": "v2",
+        "type": "application",
+        "appVersion": "1.31.6",
+        "kubeVersion": "",
+        "dependencies": [
+          {
+            "name": "common",
+            "version": "2.41.0",
+            "repository": "oci://registry-1.docker.io/bitnamicharts",
+            "condition": null
+          }
+        ]
+      },
+      "fetch": {
+        "ok": true,
+        "error": null
+      },
+      "render": {
+        "ok": true,
+        "class": null,
+        "error": null,
+        "prev": {
+          "kubeVersion": "1.36.0",
+          "ok": true,
+          "class": null,
+          "error": null
+        }
+      },
+      "scan": {
+        "ok": true,
+        "error": null,
+        "verdict": "ready",
+        "score": 100,
+        "toolVersion": "dev",
+        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry fe1fdf07",
+        "findings": [],
+        "notAssessed": [
+          "deprecated-calls",
+          "helm",
+          "versions"
+        ],
+        "unrecognizedImages": [
+          "docker.io/bitnami/nginx"
+        ]
+      },
+      "scanPrev": {
+        "target": "1.36",
+        "ok": true,
+        "error": null,
+        "verdict": "ready",
+        "score": 100,
+        "blockers": 0,
+        "warnings": 0,
+        "blockerKeys": []
+      },
+      "scanOfPrevRender": null,
+      "images": [
+        "registry-1.docker.io/bitnami/nginx:latest"
+      ]
+    },
+    {
+      "rank": 47,
+      "name": "thanos",
+      "repository": "bitnami",
+      "repoUrl": "https://charts.bitnami.com/bitnami",
+      "repoKind": "http",
+      "stars": 107,
+      "official": false,
+      "verifiedPublisher": true,
+      "cncf": false,
+      "packageId": "d1337d39-d4d9-4af9-b148-e7cb1d8024de",
+      "version": "17.3.1",
+      "latestVersion": "17.3.1",
+      "appVersion": "0.39.2",
+      "chart": {
+        "apiVersion": "v2",
+        "type": "application",
+        "appVersion": "0.39.2",
+        "kubeVersion": "",
+        "dependencies": [
+          {
+            "name": "minio",
+            "version": "17.x.x",
+            "repository": "oci://registry-1.docker.io/bitnamicharts",
+            "condition": "minio.enabled"
+          },
+          {
+            "name": "common",
+            "version": "2.x.x",
+            "repository": "oci://registry-1.docker.io/bitnamicharts",
+            "condition": null
+          }
+        ]
+      },
+      "fetch": {
+        "ok": true,
+        "error": null
+      },
+      "render": {
+        "ok": true,
+        "class": null,
+        "error": null,
+        "prev": {
+          "kubeVersion": "1.36.0",
+          "ok": true,
+          "class": null,
+          "error": null
+        }
+      },
+      "scan": {
+        "ok": true,
+        "error": null,
+        "verdict": "ready",
+        "score": 100,
+        "toolVersion": "dev",
+        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry fe1fdf07",
+        "findings": [],
+        "notAssessed": [
+          "deprecated-calls",
+          "helm",
+          "versions"
+        ],
+        "unrecognizedImages": [
+          "docker.io/bitnami/thanos"
+        ]
+      },
+      "scanPrev": {
+        "target": "1.36",
+        "ok": true,
+        "error": null,
+        "verdict": "ready",
+        "score": 100,
+        "blockers": 0,
+        "warnings": 0,
+        "blockerKeys": []
+      },
+      "scanOfPrevRender": null,
+      "images": [
+        "docker.io/bitnami/thanos:0.39.2-debian-12-r2"
+      ]
+    },
+    {
+      "rank": 48,
+      "name": "wordpress",
+      "repository": "bitnami",
+      "repoUrl": "https://charts.bitnami.com/bitnami",
+      "repoKind": "http",
+      "stars": 107,
+      "official": false,
+      "verifiedPublisher": true,
+      "cncf": false,
+      "packageId": "aba45f84-39d0-4150-9f57-f2f130ed2044",
+      "version": "34.1.3",
+      "latestVersion": "34.1.3",
+      "appVersion": "7.1.3",
+      "chart": {
+        "apiVersion": "v2",
+        "type": "application",
+        "appVersion": "7.1.3",
+        "kubeVersion": "",
+        "dependencies": [
+          {
+            "name": "memcached",
+            "version": "8.8.3",
+            "repository": "oci://registry-1.docker.io/bitnamicharts",
+            "condition": "memcached.enabled"
+          },
+          {
+            "name": "mariadb",
+            "version": "28.1.1",
+            "repository": "oci://registry-1.docker.io/bitnamicharts",
+            "condition": "mariadb.enabled"
+          },
+          {
+            "name": "common",
+            "version": "2.41.0",
+            "repository": "oci://registry-1.docker.io/bitnamicharts",
+            "condition": null
+          }
+        ]
+      },
+      "fetch": {
+        "ok": true,
+        "error": null
+      },
+      "render": {
+        "ok": true,
+        "class": null,
+        "error": null,
+        "prev": {
+          "kubeVersion": "1.36.0",
+          "ok": true,
+          "class": null,
+          "error": null
+        }
+      },
+      "scan": {
+        "ok": true,
+        "error": null,
+        "verdict": "ready",
+        "score": 100,
+        "toolVersion": "dev",
+        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry fe1fdf07",
+        "findings": [],
+        "notAssessed": [
+          "deprecated-calls",
+          "helm",
+          "versions"
+        ],
+        "unrecognizedImages": [
+          "docker.io/bitnami/mariadb",
+          "docker.io/bitnami/wordpress"
+        ]
+      },
+      "scanPrev": {
+        "target": "1.36",
+        "ok": true,
+        "error": null,
+        "verdict": "ready",
+        "score": 100,
+        "blockers": 0,
+        "warnings": 0,
+        "blockerKeys": []
+      },
+      "scanOfPrevRender": null,
+      "images": [
+        "registry-1.docker.io/bitnami/mariadb:latest",
+        "registry-1.docker.io/bitnami/wordpress:latest"
+      ]
+    },
+    {
+      "rank": 49,
+      "name": "authentik",
+      "repository": "goauthentik",
+      "repoUrl": "https://charts.goauthentik.io/",
+      "repoKind": "http",
+      "stars": 105,
+      "official": true,
+      "verifiedPublisher": true,
+      "cncf": false,
+      "packageId": "92a6a496-2b0d-4302-846e-9fb302c6cccd",
+      "version": "2026.8.3",
+      "latestVersion": "2026.8.3",
+      "appVersion": "2026.8.3",
+      "chart": {
+        "apiVersion": "v2",
+        "type": "application",
+        "appVersion": "2026.8.3",
+        "kubeVersion": "",
+        "dependencies": [
+          {
+            "name": "postgresql",
+            "version": "18.8.17",
+            "repository": "oci://registry-1.docker.io/bitnamicharts",
+            "condition": "postgresql.enabled"
+          },
+          {
+            "name": "authentik-remote-cluster",
+            "version": "2.1.0",
+            "repository": "https://charts.goauthentik.io",
+            "condition": "serviceAccount.create"
+          }
+        ]
+      },
+      "fetch": {
+        "ok": true,
+        "error": null
+      },
+      "render": {
+        "ok": true,
+        "class": null,
+        "error": null,
+        "prev": {
+          "kubeVersion": "1.36.0",
+          "ok": true,
+          "class": null,
+          "error": null
+        }
+      },
+      "scan": {
+        "ok": true,
+        "error": null,
+        "verdict": "ready",
+        "score": 100,
+        "toolVersion": "dev",
+        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry fe1fdf07",
+        "findings": [],
+        "notAssessed": [
+          "deprecated-calls",
+          "helm",
+          "versions"
+        ],
+        "unrecognizedImages": [
+          "ghcr.io/goauthentik/server"
+        ]
+      },
+      "scanPrev": {
+        "target": "1.36",
+        "ok": true,
+        "error": null,
+        "verdict": "ready",
+        "score": 100,
+        "blockers": 0,
+        "warnings": 0,
+        "blockerKeys": []
+      },
+      "scanOfPrevRender": null,
+      "images": [
+        "ghcr.io/goauthentik/server:2026.8.3"
+      ]
+    },
+    {
+      "rank": 50,
+      "name": "sealed-secrets",
+      "repository": "bitnami-labs",
+      "repoUrl": "https://bitnami-labs.github.io/sealed-secrets/",
+      "repoKind": "http",
+      "stars": 102,
+      "official": false,
+      "verifiedPublisher": true,
+      "cncf": false,
+      "packageId": "b66562a1-0484-4ddc-a8cf-54656f991a80",
+      "version": "2.18.6",
+      "latestVersion": "2.18.6",
+      "appVersion": "0.37.0",
+      "chart": null,
+      "fetch": {
+        "ok": false,
+        "error": "Error: looks like \"https://bitnami-labs.github.io/sealed-secrets/\" is not a valid chart repository or cannot be reached: failed to fetch https://bitnami-labs.github.io/sealed-secrets/index.yaml : 404 Not Found"
+      },
+      "render": null,
+      "scan": null,
+      "scanPrev": null,
+      "scanOfPrevRender": null,
+      "images": null
+    }
+  ]
+}

@@ -1,0 +1,51 @@
+rank,repository,name,version,appVersion,stars,repoKind,official,verifiedPublisher,chartType,kubeVersion,fetchOk,renderOk,renderClass,acceptsPrev,verdict,score,blockers,warnings,infos,blockerCategories,findingKeys,addons,prevVerdict,prevBlockers
+1,"prometheus-community","kube-prometheus-stack","92.3.0","v0.94.1",1235,"http",true,true,"application",">=1.25.0-0",true,true,,,"ready",100,0,0,2,"","addon-no-data/prometheus-operator;addon-no-data/kube-state-metrics","kube-state-metrics;prometheus-operator","ready",0
+2,"cert-manager","cert-manager","1.21.2","v1.21.2",997,"http",true,true,"application",">= 1.22.0-0",true,true,,,"blocked",75,1,0,0,"chart-incompat","chart-incompat/cert-manager/1.21","cert-manager","ready",0
+3,"argo","argo-cd","10.10.2","v3.5.4",846,"http",true,true,"application",">=1.25.0-0",true,true,,,"ready",100,0,0,0,"","","","ready",0
+4,"ingress-nginx","ingress-nginx","4.15.1","1.15.1",822,"http",false,false,"application",">=1.21.0-0",true,true,,,"blocked",75,1,0,0,"eol-addon","eol-addon/ingress-nginx","ingress-nginx","blocked",1
+5,"prometheus-community","prometheus","29.36.1","v3.15.0",555,"http",true,true,"application",">=1.19.0-0",true,true,,,"ready",100,0,0,1,"","addon-no-data/kube-state-metrics","kube-state-metrics","ready",0
+6,"bitnami","redis","28.3.1","8.10.2",507,"http",false,true,"application","",true,true,,,"ready",100,0,0,0,"","","","ready",0
+7,"traefik","traefik","41.7.1","v3.7.14",431,"http",true,true,"application",">=1.25.0-0",true,true,,,"ready",100,0,0,0,"","","","ready",0
+8,"bitnami","postgresql","18.12.4","18.6.0",430,"http",false,true,"application","",true,true,,,"ready",100,0,0,0,"","","","ready",0
+9,"k8s-dashboard","kubernetes-dashboard","7.14.0","",365,"http",false,false,,,false,,,,,,0,0,0,"","","",,
+10,"grafana","loki","7.3.0","3.6.12",333,"http",false,false,"application","",true,false,"required-value",,,,0,0,0,"","","",,
+11,"metrics-server","metrics-server","3.14.0","0.9.0",320,"http",false,true,"application","",true,true,,,"ready",100,0,0,1,"","addon-no-data/metrics-server","metrics-server","ready",0
+12,"hashicorp","vault","0.34.1","2.0.4",298,"http",true,true,"application",">= 1.20.0-0",true,true,,,"ready",100,0,0,0,"","","","ready",0
+13,"gitlab","gitlab","10.4.1","v19.4.1",282,"http",false,true,"application","",true,false,"required-value",,,,0,0,0,"","","",,
+14,"harbor","harbor","1.19.2","2.15.2",275,"http",true,true,"application","",true,true,,,"ready",100,0,0,0,"","","","ready",0
+15,"bitnami","keycloak","25.2.0","26.3.3",275,"http",false,true,"application","",true,true,,,"ready",100,0,0,0,"","","","ready",0
+16,"jenkinsci","jenkins","5.9.67","2.580.1",255,"http",true,true,"application","",true,true,,,"ready",100,0,0,0,"","","","ready",0
+17,"external-secrets-operator","external-secrets","2.12.0","v2.12.0",249,"http",false,true,"application",">= 1.19.0-0",true,true,,,"ready",100,0,0,0,"","","","ready",0
+18,"external-dns","external-dns","1.23.0","0.23.0",240,"http",false,true,"application","",true,false,"required-value",,,,0,0,0,"","","",,
+19,"longhorn","longhorn","1.13.0","v1.13.0",225,"http",false,false,"application",">=1.34.0-0",true,true,,,"ready",100,0,0,0,"","","","ready",0
+20,"bitnami","rabbitmq","16.0.14","4.1.3",215,"http",false,true,"application","",true,true,,,"ready",100,0,0,0,"","","","ready",0
+21,"gitlab","gitlab-runner","0.93.0","19.4.0",213,"http",false,true,"application","",true,true,,,"ready",100,0,0,0,"","","","ready",0
+22,"aws","aws-load-balancer-controller","3.6.0","v3.6.0",210,"http",false,false,"application","",true,false,"required-value",,,,0,0,0,"","","",,
+23,"bitnami","kafka","32.4.3","4.0.0",204,"http",false,true,"application","",true,true,,,"ready",100,0,0,0,"","","","ready",0
+24,"cilium","cilium","1.20.2","1.20.2",201,"http",true,true,"application",">= 1.21.0-0",true,true,,,"ready",100,0,0,0,"","","","ready",0
+25,"bitnami","external-dns","9.0.3","0.18.0",200,"http",false,true,"application","",true,true,,,"ready",100,0,0,1,"","addon-no-data/external-dns","external-dns","ready",0
+26,"apache-airflow","airflow","1.22.0","3.2.2",198,"http",true,true,"application","",true,true,,,"ready",100,0,0,0,"","","","ready",0
+27,"bitnami","mysql","14.0.3","9.4.0",197,"http",false,true,"application","",true,true,,,"ready",100,0,0,0,"","","","ready",0
+28,"elastic","elasticsearch","8.5.1","8.5.1",193,"http",true,true,"application","",true,true,,,"ready",100,0,0,0,"","","","ready",0
+29,"bitnami","mongodb","20.0.0","9.0.2",193,"http",false,true,"application","",true,true,,,"ready",100,0,0,0,"","","","ready",0
+30,"vmware-tanzu","velero","12.2.1","1.18.2",191,"http",false,false,"application",">=1.16.0-0",true,true,,,"ready",100,0,0,1,"","addon-no-data/velero","velero","ready",0
+31,"nextcloud","nextcloud","9.4.0","35.0.1",190,"http",false,false,"application","",true,true,,,"ready",100,0,0,0,"","","","ready",0
+32,"bitnami","minio","17.0.21","2025.7.23",169,"http",false,true,"application","",true,true,,,"ready",100,0,0,0,"","","","ready",0
+33,"cluster-autoscaler","cluster-autoscaler","9.59.0","1.35.0",168,"http",false,false,"application","",true,true,,,"ready",100,0,0,0,"","","","ready",0
+34,"metallb","metallb","0.16.1","v0.16.1",154,"http",false,true,"application",">= 1.19.0-0",true,true,,,"ready",100,0,0,1,"","crd-version/deprecated/metallb.io/v1beta1/BGPPeer","","ready",0
+35,"istio-official","istiod","1.30.5","1.30.5",143,"http",true,true,"application","",true,true,,,"blocked",70,1,1,0,"chart-incompat","chart-incompat/istio/1.30;eol-approaching/istio/1.30","istio","ready",0
+36,"rancher-stable","rancher","2.15.2","v2.15.2",141,"http",false,false,"application","< 1.37.0-0",true,false,"kubeVersion",true,,,0,0,0,"","","","ready",0
+37,"kyverno","kyverno","3.9.1","v1.19.1",140,"http",true,true,"application",">=1.25.0-0",true,true,,,"blocked",75,1,0,17,"chart-incompat","chart-incompat/kyverno/1.19;crd-version/deprecated/kyverno.io/v1/ClusterPolicy;crd-version/deprecated/kyverno.io/v1/Policy;crd-version/deprecated/kyverno.io/v2/CleanupPolicy;crd-version/deprecated/kyverno.io/v2/ClusterCleanupPolicy;crd-version/deprecated/kyverno.io/v2/PolicyException;crd-version/deprecated/kyverno.io/v2alpha1/GlobalContextEntry;crd-version/deprecated/kyverno.io/v2beta1/CleanupPolicy;crd-version/deprecated/kyverno.io/v2beta1/ClusterCleanupPolicy;crd-version/deprecated/kyverno.io/v2beta1/ClusterPolicy;crd-version/deprecated/kyverno.io/v2beta1/Policy;crd-version/deprecated/kyverno.io/v2beta1/PolicyException;crd-version/deprecated/policies.kyverno.io/v1alpha1/DeletingPolicy;crd-version/deprecated/policies.kyverno.io/v1alpha1/GeneratingPolicy;crd-version/deprecated/policies.kyverno.io/v1alpha1/ImageValidatingPolicy;crd-version/deprecated/policies.kyverno.io/v1alpha1/MutatingPolicy;crd-version/deprecated/policies.kyverno.io/v1alpha1/PolicyException;crd-version/deprecated/policies.kyverno.io/v1alpha1/ValidatingPolicy","kyverno","blocked",1
+38,"cloudnative-pg","cloudnative-pg","0.29.1","1.30.1",140,"http",false,true,"application",">=1.29.0-0",true,true,,,"ready",100,0,0,0,"","","","ready",0
+39,"argo","argo-workflows","2.0.12","v4.1.5",139,"http",true,true,"application","",true,true,,,"ready",100,0,0,0,"","","","ready",0
+40,"gitea","gitea","12.7.0","1.27.0",135,"http",true,true,"application","",true,true,,,"ready",100,0,0,0,"","","","ready",0
+41,"sonarqube","sonarqube","2026.5.1002","2026.5.2",135,"http",true,true,"application",">= 1.24.0-0",true,false,"required-value",,,,0,0,0,"","","",,
+42,"fluent","fluent-bit","0.58.3","5.1.3",128,"http",false,false,"application","",true,true,,,"ready",100,0,0,0,"","","","ready",0
+43,"datadog","datadog","3.253.2","7",117,"http",true,true,"application","",true,true,,,"ready",100,0,0,0,"","","","ready",0
+44,"oauth2-proxy","oauth2-proxy","10.7.1","7.15.5",112,"http",true,true,"application",">=1.16.0-0",true,true,,,"ready",100,0,0,0,"","","","ready",0
+45,"runix","pgadmin4","1.70.4","9.18",112,"http",false,true,"application","",true,true,,,"ready",100,0,0,0,"","","","ready",0
+46,"bitnami","nginx","25.2.1","1.31.6",107,"http",false,true,"application","",true,true,,,"ready",100,0,0,0,"","","","ready",0
+47,"bitnami","thanos","17.3.1","0.39.2",107,"http",false,true,"application","",true,true,,,"ready",100,0,0,0,"","","","ready",0
+48,"bitnami","wordpress","34.1.3","7.1.3",107,"http",false,true,"application","",true,true,,,"ready",100,0,0,0,"","","","ready",0
+49,"goauthentik","authentik","2026.8.3","2026.8.3",105,"http",true,true,"application","",true,true,,,"ready",100,0,0,0,"","","","ready",0
+50,"bitnami-labs","sealed-secrets","2.18.6","0.37.0",102,"http",false,true,,,false,,,,,,0,0,0,"","","",,
