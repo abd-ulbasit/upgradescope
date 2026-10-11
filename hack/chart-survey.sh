@@ -21,6 +21,8 @@
 #       YAML to JSON with helm's own fromYaml (no yq needed).
 #   hack/chart-survey.sh images <dir>
 #       The image references on the image: lines of a render, as JSON.
+#   hack/chart-survey.sh error <helm-stderr-file>
+#       The error a record keeps, on one line.
 #
 # Method, for each selected chart:
 #   1. select: Artifact Hub's search API, sorted by stars (Artifact Hub has
@@ -52,8 +54,8 @@ ARTIFACTHUB=${SURVEY_ARTIFACTHUB:-https://artifacthub.io}
 PAGE=60 # the search API's largest page
 
 usage() {
-  echo "usage: $0 run|select|classify|aggregate|yaml2json ..." >&2
-  sed -n '3,23p' "$self" | sed 's/^# \{0,1\}//' >&2
+  echo "usage: $0 run|select|classify|aggregate|yaml2json|images|error ..." >&2
+  sed -n '2,25p' "$self" | sed 's/^# \{0,1\}//' >&2
   exit 2
 }
 die() { echo "chart-survey: $*" >&2; exit 1; }
@@ -326,13 +328,19 @@ get() { # url file: a harness failure if Artifact Hub does not answer
   mv "$2.tmp" "$2"
 }
 
-# trim <file>: the error to record, the first "Error:" line or else the last
-# line, with the output directory replaced so no local path is recorded.
+# trim <file>: the error to record: helm's message from its first "Error"
+# line to the end, on one line (a schema error names the value on a later
+# line), or else the last line; at most 600 characters, with the output
+# directory replaced so no local path is recorded.
 trim() {
   local e
-  e=$( (grep -m1 '^Error' "$1" || tail -n1 "$1") | cut -c1-600)
-  printf '%s' "${e//$out/<out>}"
+  e=$(sed -n '/^Error/,$p' "$1" | { grep -v '^Use --debug flag' || true; } | tr '\n' ' ' |
+    sed -E 's/[[:space:]]+/ /g; s/ $//' | cut -c1-600)
+  [ -n "$e" ] || e=$(tail -n1 "$1" | cut -c1-600)
+  if [ -n "${out:-}" ]; then e=${e//$out/<out>}; fi
+  printf '%s' "$e"
 }
+cmd_error() { [ $# -eq 1 ] || usage; trim "$1"; echo; }
 
 render() { # tgz kube-version dest errfile
   rm -rf "$3"
@@ -485,7 +493,7 @@ cmd_run() {
 }
 
 case "${1:-}" in
-  run | select | classify | aggregate | yaml2json | images)
+  run | select | classify | aggregate | yaml2json | images | error)
     cmd=$1
     shift
     "cmd_$cmd" "$@"

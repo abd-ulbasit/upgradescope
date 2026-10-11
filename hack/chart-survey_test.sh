@@ -128,6 +128,16 @@ external-dns:
 - at '/policy': got null, want string"
 classify_is "anything else" other 'Error: template: x/templates/a.yaml:3:9: executing "x" at <.Values.a.b>: nil pointer'
 
+# --- error -------------------------------------------------------------------
+printf 'walk.go:75: found symbolic link\nError: values don'"'"'t meet the specifications of the schema(s):\nexternal-dns:\n- at '"'"'/policy'"'"': got null, want string\n\nUse --debug flag to render out invalid YAML\n' >"$work/err"
+got=$(hack/chart-survey.sh error "$work/err" 2>/dev/null || true)
+want="Error: values don't meet the specifications of the schema(s): external-dns: - at '/policy': got null, want string"
+if [ "$got" = "$want" ]; then ok "error keeps a multi-line helm error on one line"; else bad "error: got '$got'"; fi
+printf 'something odd\nlast words\n' >"$work/err"
+if [ "$(hack/chart-survey.sh error "$work/err")" = "last words" ]; then ok "error falls back to the last line"; else
+  bad "error fallback: $(hack/chart-survey.sh error "$work/err")"
+fi
+
 # --- aggregate ---------------------------------------------------------------
 out=$work/out-dir
 mkdir -p "$out/charts"
