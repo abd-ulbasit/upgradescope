@@ -161,9 +161,9 @@ crd=$(f crd-version blocker crd-version/unserved/x.io/v1alpha1/Thing 'x.io/v1alp
 inc=$(f chart-incompat blocker chart-incompat/istio 'istio 1.20 does not support Kubernetes 1.37')
 inc=$(jq -c 'del(.objects[]) | .objectsTotal = 0' <<<"$inc") # add-on findings list no object
 rec 01-r-c1 "$(mk 1 c1 "$(scan blocked "[$psp,$dep]")")"
-rec 02-r-c2 "$(mk 2 c2 "$(scan blocked "[$nginx,$nodata]")")"
+rec 02-r-c2 "$(mk 2 c2 "$(scan blocked "[$nginx,$nodata]" | jq -c '.unrecognizedImages = ["docker.io/bitnami/redis", "quay.io/x/y"]')")"
 rec 03-r-c3 "$(mk 3 c3 "$(scan ready "[$dep]")")"
-rec 04-r-c4 "$(mk 4 c4 "$(scan ready '[]')")"
+rec 04-r-c4 "$(mk 4 c4 "$(scan ready '[]' | jq -c '.unrecognizedImages = ["quay.io/x/y"]')")"
 rec 05-r-c5 "$(mk 5 c5 null '{"chart":{"type":"application","kubeVersion":">=1.20.0-0 <1.37.0-0"},
   "render":{"ok":false,"class":"kubeVersion","error":"incompatible with Kubernetes v1.37.0",
   "prev":{"kubeVersion":"1.36.0","ok":true,"class":null}},"scanPrev":null,
@@ -205,6 +205,9 @@ check "aggregate: the blocker list names chart, finding and file" \
   'any(.summary.blockerList[]; .chart == "c1" and .version == "1.1.0"
      and .category == "removed-api" and .file == "c1/templates/psp.yaml")
    and (.summary.blockerList | length) == 4' "$r"
+check "aggregate: image repositories no add-on matcher recognised" \
+  '.summary.unrecognizedImages == {charts: 2, distinct: 2,
+     top: [{image: "quay.io/x/y", charts: 2}, {image: "docker.io/bitnami/redis", charts: 1}]}' "$r"
 check "aggregate: the minor before, from the same charts" '.summary.prevVerdicts == {"ready": 6}' "$r"
 
 csv=$out/results.csv

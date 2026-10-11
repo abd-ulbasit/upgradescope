@@ -197,6 +197,10 @@ cmd_aggregate() {
           blockerList: [.[] | select(scanned) | . as $r | blockers[]
             | {rank: $r.rank, chart: $r.name, repository: $r.repository, version: $r.version,
                category, key, title, file: (.objects[0].file // null), line: (.objects[0].line // null)}],
+          unrecognizedImages: ([.[] | select(scanned) | (.scan.unrecognizedImages // []) | unique[]] as $u
+            | {charts: ([.[] | select(scanned and ((.scan.unrecognizedImages // []) | length) > 0)] | length),
+               distinct: ($u | unique | length),
+               top: ($u | group_by(.) | map({image: .[0], charts: length}) | sort_by(-.charts, .image) | .[:25])}),
           refused: [.[] | select(.render.class == "kubeVersion")
             | {rank, chart: .name, repository, version, kubeVersion: .chart.kubeVersion,
                acceptsPrev: (.render.prev.ok == true),
@@ -272,6 +276,11 @@ cmd_aggregate() {
       "### Add-ons matched to the registry (from findings)", "",
       "| Add-on | Finding category | Charts |", "|---|---|---|",
       ($s.addons[] | row([.id, .category, .charts])),
+      "",
+      "### Images no add-on matcher recognised", "",
+      "\($s.unrecognizedImages.distinct) distinct image repositories in \($s.unrecognizedImages.charts) charts. The most common:", "",
+      "| Image repository | Charts |", "|---|---|",
+      ($s.unrecognizedImages.top[] | row([.image, .charts])),
       "",
       "### Every chart", "",
       "| # | Chart | Repository | Version | Stars | Render at \($t).0 | Verdict at \($t) | Blockers | Warnings | Verdict at \($p) |",
