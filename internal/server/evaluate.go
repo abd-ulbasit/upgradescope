@@ -531,19 +531,39 @@ func (s *Server) outboxFor(cluster store.Cluster, deltas *changeMerger, now time
 // again against what is there now, up to maxIngestAttempts times, so no
 // became-ready or new-blocker is lost or sent twice. The last conflict is
 // returned, and the agent retries the push.
-func (s *Server) ingestSnapshot(ctx context.Context, cluster store.Cluster, snap store.Snapshot, inv inventory.Inventory, token string) (int64, bool, error) {
+//
+// adopting says the push binds cluster.ClusterUID to a name registered
+// without a clusterId (#368): the history it continues may be another
+// cluster's, so its pass sends no became-ready, and once it commits one
+// line is logged with the name, the clusterId and the snapshot. Such a
+// push always checks the latest snapshot at commit, so a racing push
+// that bound the name first sends it round again, now as an ordinary
+// push or a 409.
+func (s *Server) ingestSnapshot(ctx context.Context, cluster store.Cluster, snap store.Snapshot, inv inventory.Inventory, token string, adopting bool) (int64, bool, error) {
 	for attempt := 1; ; attempt++ {
-		id, dup, err := s.ingestOnce(ctx, cluster, snap, inv, token)
+		id, dup, err := s.ingestOnce(ctx, cluster, snap, inv, token, adopting)
+		if err == nil && adopting && !dup {
+			// Structured, and quoted: the name and the clusterId are the
+			// pusher's text. The token is never logged.
+			log.Printf("server: cluster name adopted its first clusterId: cluster=%q clusterId=%q snapshotId=%d "+
+				"(it was registered by pushes with no clusterId, whose history this cluster now continues)",
+				cluster.Name, cluster.ClusterUID, id)
+		}
 		if !errors.Is(err, store.ErrConflict) || attempt == maxIngestAttempts {
 			return id, dup, err
 		}
 		log.Printf("server: push of cluster %q raced another writer (attempt %d), evaluating it again: %v", cluster.Name, attempt, err)
-		if cluster.ID == 0 { // registered by the push that raced this one
+		if cluster.ID == 0 || adopting { // registered, or bound, by the push that raced this one
 			c, err := s.cfg.Store.ClusterByName(ctx, cluster.Name)
 			if err != nil && !errors.Is(err, store.ErrNotFound) {
 				return 0, false, fmt.Errorf("loading cluster %q: %w", cluster.Name, err)
 			}
-			cluster.ID = c.ID
+			if cluster.ID == 0 {
+				cluster.ID = c.ID
+			}
+			// Never set cluster.ID from a cluster other than the one looked
+			// up: the commit's recheck refuses that one (ErrClusterChanged).
+			adopting = adopting && c.ID == cluster.ID && c.ClusterUID == ""
 		}
 	}
 }
@@ -555,7 +575,7 @@ func (s *Server) ingestSnapshot(ctx context.Context, cluster store.Cluster, snap
 const maxIngestAttempts = 3
 
 // ingestOnce is one attempt of ingestSnapshot.
-func (s *Server) ingestOnce(ctx context.Context, cluster store.Cluster, snap store.Snapshot, inv inventory.Inventory, token string) (int64, bool, error) {
+func (s *Server) ingestOnce(ctx context.Context, cluster store.Cluster, snap store.Snapshot, inv inventory.Inventory, token string, adopting bool) (int64, bool, error) {
 	var latestID int64 // the latest snapshot this attempt read; 0 for none
 	// A duplicate (the agent's hourly force-sync) is the common push: go
 	// straight to re-evaluating what is stale, instead of evaluating every
@@ -605,7 +625,7 @@ func (s *Server) ingestOnce(ctx context.Context, cluster store.Cluster, snap sto
 	now := s.now()
 	hold := s.callsHoldOf(inv, snap.ServerVersion, true)
 	batch := store.EvaluationBatch{Cluster: &cluster, Snapshot: &snap, IngestToken: token}
-	if len(s.sinks) > 0 {
+	if len(s.sinks) > 0 || adopting {
 		batch.Expect = &store.Expectation{LatestSnapshotID: latestID, Baselines: map[string]int64{}}
 	}
 	var deltas changeMerger // each target's changes, merged as they come
@@ -615,6 +635,9 @@ func (s *Server) ingestOnce(ctx context.Context, cluster store.Cluster, snap sto
 			return 0, false, err
 		}
 		d := s.deltaFor(ctx, cluster, e, rep, baseline{}, unassessedIn(rep, hold))
+		if adopting {
+			d.changes = slices.DeleteFunc(d.changes, func(c notify.Change) bool { return c.Kind == notify.KindBecameReady })
+		}
 		d.carried = s.keepCarried(&e, hold.stamp(d.carried))
 		batch.Insert = append(batch.Insert, e)
 		expectBaselines(batch.Expect, d)

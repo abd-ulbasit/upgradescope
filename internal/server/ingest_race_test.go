@@ -45,7 +45,12 @@ func (s *beforeCommitStore) CommitEvaluations(ctx context.Context, b store.Evalu
 // cluster came back without its tokens, and the rename left a second
 // cluster with the same UID (#240). Each interleaving, on the duplicate
 // fast path and with a changed inventory, now writes nothing: the revoke
-// answers 401, the rename and the delete 409.
+// answers 401, the rename and the delete 409. The same holds for a push
+// with the shared ingest token once it has looked its cluster up: the
+// commit refuses a cluster that is no longer the one under its name
+// (#369; an operation before the lookup is
+// TestPerClusterPushRacingRenameBeforeLookupAnswers409 and
+// TestSharedTokenPushRacingDeleteBeforeLookupRegistersTheName).
 func TestPushRacingAnAdminOperationWritesNothing(t *testing.T) {
 	const tok = "prod-test-token-0123456789abcdef01234"
 	base := testInventory()
@@ -66,65 +71,79 @@ func TestPushRacingAnAdminOperationWritesNothing(t *testing.T) {
 			name string
 			inv  inventory.Inventory
 		}{{"changed inventory", changed}, {"duplicate", base}} {
-			t.Run(tc.name+", "+second.name, func(t *testing.T) {
-				ctx := context.Background()
-				st := &beforeCommitStore{Store: openSQLite(t)}
-				if _, err := st.CreateToken(ctx, "prod-test", tok); err != nil {
-					t.Fatal(err)
+			for _, shared := range []bool{false, true} {
+				if shared && tc.name == "revoke" {
+					continue // the store holds no shared token to revoke
 				}
-				s := newTestServer(t, nil, func(c *Config) { c.Store = st; c.IngestToken = "" })
-				ts := httptest.NewServer(s.Handler())
-				defer ts.Close()
-				push := func(inv inventory.Inventory) (*http.Response, map[string]any) {
-					body, err := json.Marshal(map[string]any{"schemaVersion": 1, "clusterName": "prod-test", "inventory": inv})
+				name := tc.name + ", " + second.name
+				if shared {
+					name += ", shared token"
+				}
+				t.Run(name, func(t *testing.T) {
+					ctx := context.Background()
+					st := &beforeCommitStore{Store: openSQLite(t)}
+					if _, err := st.CreateToken(ctx, "prod-test", tok); err != nil {
+						t.Fatal(err)
+					}
+					s := newTestServer(t, nil, func(c *Config) { c.Store = st; c.IngestToken = "" })
+					pushToken := tok
+					if shared {
+						s = newTestServer(t, nil, func(c *Config) { c.Store = st; c.IngestToken = "shared-ingest-token" })
+						pushToken = "shared-ingest-token"
+					}
+					ts := httptest.NewServer(s.Handler())
+					defer ts.Close()
+					push := func(inv inventory.Inventory) (*http.Response, map[string]any) {
+						body, err := json.Marshal(map[string]any{"schemaVersion": 1, "clusterName": "prod-test", "inventory": inv})
+						if err != nil {
+							t.Fatal(err)
+						}
+						return postSnapshot(t, ts, pushToken, body, false)
+					}
+					if resp, out := push(base); resp.StatusCode != http.StatusAccepted {
+						t.Fatalf("first push = %d %v", resp.StatusCode, out)
+					}
+					first, err := st.ClusterByName(ctx, "prod-test")
 					if err != nil {
 						t.Fatal(err)
 					}
-					return postSnapshot(t, ts, tok, body, false)
-				}
-				if resp, out := push(base); resp.StatusCode != http.StatusAccepted {
-					t.Fatalf("first push = %d %v", resp.StatusCode, out)
-				}
-				first, err := st.ClusterByName(ctx, "prod-test")
-				if err != nil {
-					t.Fatal(err)
-				}
-				before, err := st.LatestSnapshot(ctx, first.ID)
-				if err != nil {
-					t.Fatal(err)
-				}
-				st.arm(func() {
-					if err := tc.op(ctx, st.Store); err != nil {
-						t.Errorf("%s: %v", tc.name, err)
+					before, err := st.LatestSnapshot(ctx, first.ID)
+					if err != nil {
+						t.Fatal(err)
+					}
+					st.arm(func() {
+						if err := tc.op(ctx, st.Store); err != nil {
+							t.Errorf("%s: %v", tc.name, err)
+						}
+					})
+					if resp, out := push(second.inv); resp.StatusCode != tc.status {
+						t.Errorf("push racing the %s = %d %v, want %d", tc.name, resp.StatusCode, out, tc.status)
+					}
+					list, err := st.ListClusters(ctx)
+					if err != nil {
+						t.Fatal(err)
+					}
+					var names []string
+					for _, c := range list {
+						names = append(names, c.Name)
+						if c.ID != first.ID {
+							t.Errorf("the push registered cluster %q (id %d), a second one", c.Name, c.ID)
+						}
+					}
+					if len(names) != len(tc.left) || (len(names) == 1 && names[0] != tc.left[0]) {
+						t.Errorf("clusters after the push = %v, want %v", names, tc.left)
+					}
+					if tc.left != nil {
+						after, err := st.LatestSnapshot(ctx, first.ID)
+						if err != nil || after.ID != before.ID {
+							t.Errorf("latest snapshot = %d (%v), want the first push's %d: nothing stored", after.ID, err, before.ID)
+						}
+						if c, _ := st.GetCluster(ctx, first.ID); !c.LastSeen.Equal(first.LastSeen) {
+							t.Errorf("last seen moved from %v to %v", first.LastSeen, c.LastSeen)
+						}
 					}
 				})
-				if resp, out := push(second.inv); resp.StatusCode != tc.status {
-					t.Errorf("push racing the %s = %d %v, want %d", tc.name, resp.StatusCode, out, tc.status)
-				}
-				list, err := st.ListClusters(ctx)
-				if err != nil {
-					t.Fatal(err)
-				}
-				var names []string
-				for _, c := range list {
-					names = append(names, c.Name)
-					if c.ID != first.ID {
-						t.Errorf("the push registered cluster %q (id %d), a second one", c.Name, c.ID)
-					}
-				}
-				if len(names) != len(tc.left) || (len(names) == 1 && names[0] != tc.left[0]) {
-					t.Errorf("clusters after the push = %v, want %v", names, tc.left)
-				}
-				if tc.left != nil {
-					after, err := st.LatestSnapshot(ctx, first.ID)
-					if err != nil || after.ID != before.ID {
-						t.Errorf("latest snapshot = %d (%v), want the first push's %d: nothing stored", after.ID, err, before.ID)
-					}
-					if c, _ := st.GetCluster(ctx, first.ID); !c.LastSeen.Equal(first.LastSeen) {
-						t.Errorf("last seen moved from %v to %v", first.LastSeen, c.LastSeen)
-					}
-				}
-			})
+			}
 		}
 	}
 }
