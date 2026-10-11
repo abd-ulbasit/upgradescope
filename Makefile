@@ -351,6 +351,7 @@ examples-test:
 .PHONY: claims-check
 claims-check:
 	./hack/claims-check.sh
+	./hack/docs-cosign-minimum.sh
 
 # Offline self-tests of the hack/ scripts CI is built from (stubs and
 # fixtures only: no network, cluster or Docker).
@@ -388,6 +389,7 @@ hack-test:
 	./hack/check-asset-names_test.sh
 	./hack/check-host-leak_test.sh
 	./hack/release-footer_test.sh
+	./hack/docs-cosign-minimum_test.sh
 	./hack/check-breaking_test.sh
 	./hack/check-release-ancestry_test.sh
 	./hack/release-preflight_test.sh

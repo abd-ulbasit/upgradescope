@@ -42,7 +42,8 @@ sudo install upgradescope /usr/local/bin/
 From v0.2.0, `checksums.txt` is signed keylessly by the repository's release
 workflow ([cosign](https://docs.sigstore.dev/cosign/system_config/installation/)
 bundle `checksums.txt.sigstore.json`). Verify the signature, then the
-archive against the checksums:
+archive against the checksums (`cosign verify-blob` of this bundle works from
+cosign 2.4.3, the oldest tested; the image and chart need a newer one, below):
 
 ```sh
 curl -fsSLO "$base/checksums.txt.sigstore.json"
@@ -96,7 +97,7 @@ docker run --rm ghcr.io/abd-ulbasit/upgradescope:0.2.0 version
 
 A distroless, non-root (UID 65532) image with only the binary and its
 license notices in `/licenses/`, for linux/amd64 and linux/arm64. Verify
-the signature:
+the signature with **cosign 3.x, or 2.6.3 or later**:
 
 ```sh
 cosign verify ghcr.io/abd-ulbasit/upgradescope:0.2.0 \
@@ -105,6 +106,15 @@ cosign verify ghcr.io/abd-ulbasit/upgradescope:0.2.0 \
 ```
 
 Each platform image is signed too and verifies on its own, by digest.
+
+The signatures are in cosign 3's bundle format, stored as OCI referrers. On
+cosign 2.6.2 or older the command above fails with `Error: no signatures
+found` (exit 10), though the image is signed: nothing is wrongly accepted, it
+fails closed. Upgrade cosign (the default of `sigstore/cosign-installer` v3.10.1
+is 2.6.1, too old: set `cosign-release` to `v2.6.3` or later, or use
+installer v4). From v0.2.0 on, each release run verifies every published image and
+chart with this command, once with cosign v2.6.3 and once with the current
+default.
 
 ## Helm chart
 
@@ -115,7 +125,8 @@ helm install upgradescope oci://ghcr.io/abd-ulbasit/charts/upgradescope \
 
 The published chart pins the image of its release by digest. It is signed
 with cosign (`cosign verify ghcr.io/abd-ulbasit/charts/upgradescope:0.2.0`
-with the flags above). Before v0.2.0 is published, install from a clone of
+with the flags above, and the same minimum: **cosign 3.x, or 2.6.3 or
+later**; older versions fail with `no signatures found`). Before v0.2.0 is published, install from a clone of
 the repository: `helm install upgradescope deploy/chart ...`, with
 `image.repository` and `image.tag` set to an image built from the clone
 (`make docker-build`) when you run unreleased changes: a clone's chart

@@ -462,7 +462,11 @@ cannot write the step summary, so a warning replaces it.
     https://github.com/abd-ulbasit/upgradescope/.github/workflows/release.yml@refs/tags/<tag>
     --certificate-oidc-issuer https://token.actions.githubusercontent.com`:
     `checksums.txt` must be signed by that workflow at that tag, and the
-    archive is held to it by its sha256;
+    archive is held to it by its sha256. No cosign minimum beyond
+    `verify-blob`'s applies: it verifies `checksums.txt.sigstore.json` on
+    every cosign tested, 2.4.3 to 3.1.3. (The release's image and chart
+    signatures, which this step does not check, need cosign 3.x or 2.6.3 or
+    later: [Install](https://abd-ulbasit.github.io/upgradescope/operations/install/));
   - with neither, the step fails and says so: install `gh` (2.68 or later)
     or `cosign` (`sigstore/cosign-installer`) before the action, or set
     `verify-provenance: false`.
