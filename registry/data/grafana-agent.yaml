@@ -3,6 +3,9 @@
 # states that "Grafana Agent has reached End-of-Life (EOL) on November 1,
 # 2025", for Static mode, Flow mode and the Agent Operator alike, and the
 # source repository is archived (moved to grafana-cold-storage/agent).
+# Support status re-read 2026-10-12: the Grafana Agent page still reads "reached
+# End-of-Life (EOL) on November 1, 2025", and grafana/agent now redirects to the
+# archived grafana-cold-storage/agent. No change.
 schema_version: 2
 id: grafana-agent
 display_name: Grafana Agent

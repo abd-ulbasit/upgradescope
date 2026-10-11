@@ -4,6 +4,23 @@
 # series is released. The official Helm chart (fluent/helm-charts) is named
 # fluent-bit, with the Fluent Bit version as its appVersion, and pulls
 # cr.fluentbit.io/fluent/fluent-bit, the Docker Hub image fluent/fluent-bit.
+# Re-read 2026-10-12: the cycles match endoflife.date (make eol-check), and the
+# synced dates DISAGREE with the project's own SECURITY.md. Its "Security Updates
+# Until" table (https://github.com/fluent/fluent-bit/blob/00821ba87c60b96680ee8d8482135bda3624176b/SECURITY.md,
+# the file's last change, 2026-08-15; identical on master on 2026-10-12) says:
+#   line   SECURITY.md       synced here (endoflife.date)
+#   5.1.x  to be announced   false
+#   5.0.x  2026-11-30        2026-11-06
+#   4.2.x  2026-07-30        2026-06-30
+#   4.1.x  2026-02-28        2026-02-11
+#   4.0.x  2025-12-23        2025-12-24
+# endoflife.date derives its dates as the release of the next line plus three
+# months (the older-versions page it reads no longer publishes dates for these
+# lines) and never reads SECURITY.md. The synced cycles are not hand-edited, so
+# until that is settled a 5.0 install gets the end-of-life finding from 2026-11-06
+# and the eol-approaching warning 24 days earlier than the project's date warrants.
+# Open: an endoflife.date correction, and a maintainer decision on whether the
+# registry follows SECURITY.md.
 schema_version: 2
 id: fluent-bit
 display_name: Fluent Bit

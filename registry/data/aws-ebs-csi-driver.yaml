@@ -1,0 +1,43 @@
+# registry/data/aws-ebs-csi-driver.yaml
+# Hand-curated: endoflife.date does not track it.
+#
+# No compat rows and no cycles. The README's "Compatibility" section
+# (https://github.com/kubernetes-sigs/aws-ebs-csi-driver/blob/75ae9386bbf79eacef9a2ff2a880abf28faa61b8/README.md#compatibility,
+# read on 2026-10-12) says "The EBS CSI Driver is compatible with all Kubernetes
+# versions supported by the Kubernetes project and/or Amazon EKS (including
+# extended support versions)": a policy relative to Kubernetes' own support
+# window, with no per-release table and no bound to encode. docs/install.md
+# lists "Kubernetes Version >= 1.20" as a prerequisite, for the unversioned
+# master branch; it carries no release scope and the README's later statement
+# supersedes it, so it is not encoded either (a minimum cannot trip a forward
+# upgrade scan in any case).
+#
+# Lifecycle: the README's "Support" section says "Support will be provided for the
+# latest version and one prior version" and calls the policy "non-binding and
+# subject to change". Releases are monthly, so it is a rolling window with no
+# dates; there are no cycles, and an installed version gets the "no lifecycle
+# data" info finding rather than an invented end of life.
+#
+# Images: registry.k8s.io/provider-aws/aws-ebs-csi-driver (k8s.gcr.io before
+# 2023), ECR Public (public.ecr.aws/ebs-csi-driver/aws-ebs-csi-driver), the EKS
+# add-on's private ECR repository (<account>.dkr.ecr.<region>.amazonaws.com/eks/
+# aws-ebs-csi-driver, tagged v<ver>-eksbuild.<n>) and the old Docker Hub path.
+# The sidecars (csi-provisioner, csi-attacher, ...) version separately and are
+# not matched.
+schema_version: 2
+id: aws-ebs-csi-driver
+display_name: AWS EBS CSI Driver
+matchers:
+  images:
+    - provider-aws/aws-ebs-csi-driver
+    - ebs-csi-driver/aws-ebs-csi-driver
+    - eks/aws-ebs-csi-driver
+    - amazon/aws-ebs-csi-driver
+  charts:
+    - aws-ebs-csi-driver
+support:
+  status: supported
+  citations:
+    - https://github.com/kubernetes-sigs/aws-ebs-csi-driver/blob/75ae9386bbf79eacef9a2ff2a880abf28faa61b8/README.md#support
+    - https://github.com/kubernetes-sigs/aws-ebs-csi-driver/blob/75ae9386bbf79eacef9a2ff2a880abf28faa61b8/README.md#compatibility
+recommendation: Keep the driver on the latest or the previous release; the project supports only those two.

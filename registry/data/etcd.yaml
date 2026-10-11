@@ -2,6 +2,12 @@
 # cycles are generated from the endoflife.date API by tools/eol-sync; do not
 # edit them by hand. support is hand-curated: status eol is only for a
 # product upstream retired as a whole.
+# Re-read 2026-10-12: the cycles match endoflife.date (make eol-check). etcd's
+# branch_management.md says "We will keep fixing the backward-compatible bugs for
+# the latest two stable releases"; endoflife.date carries 3.5 to 2027-07-08, later
+# than that rule alone gives now that 3.7 exists, and that date is what is synced.
+# It comes from etcd's own announcement (3.7 release plus one year):
+# https://etcd.io/blog/2026/etcd-370-beta/
 schema_version: 2
 id: etcd
 display_name: etcd
