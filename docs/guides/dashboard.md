@@ -29,7 +29,11 @@ An empty cell (`—`) has no stored evaluation; it opens a what-if, which the
 server computes on request and does not store. `n/a` means the cluster
 already runs that target. A cluster whose agent has stopped pushing carries
 a `stale` badge and its last-seen time: its scores describe the cluster as it
-was then.
+was then. A finding whose objects carry an `upgradescope.basit.engineer/ignore`
+annotation with its reason is accepted, as `scan`, the agent and `/gate` accept
+it: it counts toward neither the cell's score, its verdict nor its blockers.
+The agent's `spec.ignore` rules never reach the server and are not applied
+([Where annotations apply](suppressions-and-baselines.md#where-annotations-apply)).
 
 The **summary strip** above the matrix counts the clusters for one target
 (the selector lists only the targets the matrix shows; it starts on the one
@@ -107,6 +111,13 @@ Each finding has a `#` link whose address is that finding: the target and
 link is a query parameter that scrolls to and highlights the finding, not an
 element anchor. Picking another target drops the
 filters, because a category that exists for one target may not for the next.
+
+The line under the verdict counts the findings by severity and ends in
+"N suppressed" when object annotations accepted N findings, or objects of
+findings. What they accept is left out of the findings list, the score and
+the verdict (a finding only some of whose objects are accepted stays, with
+the others); `GET /api/v1/clusters/{id}/report` lists them in `suppressed` with
+each reason, and the auditor exports list them too.
 
 ### Fresh data
 

@@ -230,8 +230,13 @@ removed from `--targets`, which is never rewritten, never puts it back in
 the old team's.
 
 **Which findings and teams.** Of an in-scope cluster's report, a scoped
-read keeps the findings (and suppressed findings) attributed to one of
-its teams, and the team scores of its teams. Findings no team owns, such
+read keeps the findings (and suppressed findings: those the objects'
+`upgradescope.basit.engineer/ignore` annotations accepted, which the
+server's evaluations apply; never the agent's `spec.ignore`, see
+[Where annotations apply](../guides/suppressions-and-baselines.md#where-annotations-apply))
+attributed to one of its teams, and the team scores of its teams. A
+suppressed finding whose accepted objects are all another team's is left
+out. Findings no team owns, such
 as a cluster-wide add-on in a namespace without a team, are left out:
 they are not the scope's to see. A team's score is still computed from
 the whole report, so the team's verdict is the one the fleet-wide view

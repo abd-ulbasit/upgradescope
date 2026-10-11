@@ -467,12 +467,20 @@ func TestScopedReadCutsFindingsThatSpanTeams(t *testing.T) {
 	}
 	// What the fleet-wide token reads has them all: the fixture holds
 	// what the test looks for.
-	// (Exports list namespaces, not objects.)
+	// (Exports list namespaces, not objects. The web Ingress is accepted
+	// by its annotation, #381: the report and the exports list it in
+	// suppressed, and /findings, the open findings, not at all.)
 	for _, p := range []string{shared + "/report", shared + "/findings", shared + "/export?format=csv", shared + "/export?format=html"} {
 		_, raw := fetch(t, ts, p, "fleet-tok")
 		want := []string{"web-secret-ns", "shared-tools", "pay-prod"}
 		if !strings.Contains(p, "/export") {
-			want = append(want, "web-secret-ingress", "tools-ingress", "pay-ingress")
+			want = append(want, "tools-ingress", "pay-ingress")
+		}
+		if !strings.HasSuffix(p, "/findings") {
+			want = append(want, "web-secret-reason")
+		}
+		if strings.HasSuffix(p, "/report") {
+			want = append(want, "web-secret-ingress")
 		}
 		for _, s := range want {
 			if !bytes.Contains(raw, []byte(s)) {
@@ -516,8 +524,11 @@ func TestScopedReadCutsFindingsThatSpanTeams(t *testing.T) {
 			!slices.Equal(f.Namespaces, []string{"pay-prod"}) || len(f.Objects) != 1 || f.Objects[0].Name != "pay-ingress" {
 			t.Errorf("%s: finding = %+v, want the Ingress finding cut to pay-prod's pay-ingress", p, f)
 		}
-		if !strings.HasSuffix(f.Title, "(1 object in scope)") {
-			t.Errorf("%s: title %q, want the scope's count of objects", p, f.Title)
+		// The engine's count (3) includes the web object its annotation
+		// accepted, which the finding no longer lists (#381): the cut
+		// cannot prove a count from the listed objects and drops it.
+		if f.Title != "extensions/v1beta1 Ingress removed in 1.22" {
+			t.Errorf("%s: title %q, want the count of every object dropped", p, f.Title)
 		}
 	}
 	if _, raw := fetch(t, ts, shared+"/export?format=csv", "pay-tok"); !bytes.Contains(raw, []byte("pay-prod")) {

@@ -16,7 +16,8 @@ import (
 // arbitrary target using the server's KB. Nothing is stored. now is injected
 // by the caller (the server passes s.now()) so EOL-window math stays
 // deterministic and testable. tm (nil = no-op) applies the server's
-// namespace→team override, matching what ingest stores. Returns
+// namespace→team override, and the objects' ignore annotations are
+// applied (suppressAnnotated), matching what ingest stores. Returns
 // store.ErrNotFound (wrapped) when the cluster has no snapshots.
 func WhatIf(ctx context.Context, st store.Store, k kb.KB, tm TeamMap, clusterID int64, target inventory.Version, now time.Time) (engine.Report, error) {
 	snap, err := st.LatestSnapshot(ctx, clusterID)
@@ -30,14 +31,19 @@ func WhatIf(ctx context.Context, st store.Store, k kb.KB, tm TeamMap, clusterID 
 	inv.CutFreeText() // as ingest judged it (decodeInventory)
 	inv = judgedView(inv, snap.AgentVersion, snap.KBVersion, k)
 	inv.Namespaces = tm.Apply(inv.Namespaces)
-	return engine.Evaluate(inv, k, target, now), nil
+	return suppressAnnotated(engine.Evaluate(inv, k, target, now), now), nil
 }
 
 // evaluateWhatIf evaluates an already-loaded inventory the way ingest
-// would (team map applied, within maxReportBytes), for read paths that
-// hold the snapshot. It returns a *reportTooLargeError for a report over
-// the limit.
+// would (team map applied, within maxReportBytes, the objects' ignore
+// annotations applied: suppressAnnotated), for read paths that hold the
+// snapshot. It returns a *reportTooLargeError for a report over the
+// limit.
 func (s *Server) evaluateWhatIf(inv inventory.Inventory, target inventory.Version, now time.Time) (engine.Report, error) {
 	inv.Namespaces = s.cfg.TeamMap.Apply(inv.Namespaces)
-	return s.evaluateWithin(inv, target, now)
+	rep, err := s.evaluateWithin(inv, target, now)
+	if err != nil {
+		return rep, err
+	}
+	return suppressAnnotated(rep, now), nil
 }

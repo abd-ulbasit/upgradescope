@@ -125,6 +125,45 @@ API. On a live cluster the collector keeps at most 16 KiB of each
 annotation (of `ignore`, the categories and keys that fit whole), as the
 server takes it.
 
+### Where annotations apply
+
+Every view that judges objects applies the annotations, with the same code:
+
+- `scan`, live or `--files`, and the MCP server's scan tools;
+- the agent, in each `status.targets[]` entry of its `ClusterReadiness`
+  ([The agent](#the-agent-specignore));
+- `/gate`, to the posted manifests and, with `?cluster=`, to the cluster's
+  stored objects ([The server gate](#the-server-gate));
+- the server's stored evaluations, into which the agent's pushes carry
+  each object's annotations: the dashboard (its fleet cells and the cluster
+  page's "N suppressed"), the fleet and team rollups, history,
+  notifications, the auditor exports and `GET /api/v1/clusters/{id}/report`,
+  read-time what-ifs included.
+
+On the server, an accepted finding counts toward neither the score, the
+verdict, `blockers` nor a notification. Annotating a blocked cluster's last
+blocker sends `became-ready`; a new object that arrives already annotated
+sends no `new-blocker`; removing the annotation makes the finding a
+`new-blocker` again. `GET /report` lists the accepted finding in
+`suppressed`, with `source: annotation` and the reason, and `/findings`
+lists only the open ones. The CSV export has one `suppressed` row per
+accepted finding (its severity, what accepted it, the reason and the
+objects, in the detail) and counts them in the summary row; the HTML export
+lists them in a suppressed section. An audit never loses an accepted
+finding.
+
+The server applies the annotations only, never the agent's `spec.ignore`,
+which the push does not carry (see [The agent](#the-agent-specignore)).
+
+An annotation is as trusted as write access to its object: whoever can edit
+the object can accept its finding in every view, the fleet's included. The
+exports and `GET /report` name each acceptance with its reason.
+
+An evaluation stored by an earlier server version picks the annotations up
+when it is next re-evaluated: on the next push that changes the inventory,
+when the knowledge base changes, or in the first background pass after UTC
+midnight.
+
 ## Baselines
 
 A baseline lets CI adopt the gate on an existing estate: the gate fails
@@ -255,10 +294,17 @@ already rejects a rule without a reason or with a malformed `expires`. The
 agent catches the rest (for example, both `key` and `category`). `file`
 never matches live objects.
 
-The agent still pushes the raw inventory to the server. The server's
-dashboard does not apply `spec.ignore`, and neither does its gate, which
-applies the rules sent with each request instead
-([The server gate](#the-server-gate)).
+The agent pushes the raw inventory to the server: each object's
+annotations, but not `spec.ignore`. So the server applies the object
+annotations and never `spec.ignore`, both in its stored evaluations (the
+dashboard, the fleet, history, notifications, exports and `GET /report`;
+see [Where annotations apply](#where-annotations-apply)) and in its gate,
+which applies the rules sent with each request instead
+([The server gate](#the-server-gate)). A finding that `spec.ignore` alone
+accepts is suppressed in the `ClusterReadiness` status and open on the
+server. When the finding lists objects (API usage), annotating them
+accepts it in both; an add-on or version-skew finding lists none, so no
+server view can accept it yet.
 
 ## Finding keys
 

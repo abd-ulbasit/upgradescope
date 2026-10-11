@@ -15,6 +15,7 @@ import (
 	"github.com/abd-ulbasit/upgradescope/internal/inventory"
 	"github.com/abd-ulbasit/upgradescope/internal/server/notify"
 	"github.com/abd-ulbasit/upgradescope/internal/server/store"
+	"github.com/abd-ulbasit/upgradescope/internal/suppress"
 )
 
 // Evaluation passes. A verdict depends on more than the inventory: on the
@@ -134,13 +135,36 @@ func (s *Server) evaluateWithin(inv inventory.Inventory, target inventory.Versio
 	return rep, err
 }
 
-// evaluation runs the engine for one target and builds the row to store:
-// a report of at most maxReportBytes, encoded, or a *reportTooLargeError.
+// suppressAnnotated applies the objects' upgradescope.basit.engineer/ignore
+// annotations (each with its ignore-reason) to a report the server judges
+// a stored snapshot by, with the code scan, the agent and /gate use
+// (suppress.Apply), and with no rules: the agent's spec.ignore never
+// reaches the server (#44), so it is the annotations alone. An accepted
+// finding, or the accepted objects of one, leaves Findings for Suppressed
+// (source "annotation"), and score and verdict are recomputed, so the
+// stored verdict, the fleet, history, notifications, exports and GET
+// /report agree with the CR and /gate?cluster= (#381). An annotation
+// without a reason is not applied; its warning (scan prints it) has no
+// reader here and is dropped. Not in evaluateWithin: /gate shares it and
+// applies the annotations and its ?config= rules itself (suppressGate),
+// once.
+func suppressAnnotated(rep engine.Report, now time.Time) engine.Report {
+	rep, _ = suppress.Apply(rep, nil, suppress.Options{Now: now})
+	return rep
+}
+
+// evaluation runs the engine for one target, applies the objects' ignore
+// annotations (suppressAnnotated), and builds the row to store: a report
+// of at most maxReportBytes, encoded, or a *reportTooLargeError. Blockers
+// and warnings count what stays in Findings; teams include those of the
+// suppressed findings, so a team-scoped read still sees the cluster whose
+// only findings of its own are accepted.
 func (s *Server) evaluation(cluster store.Cluster, inv inventory.Inventory, target inventory.Version, now time.Time) (store.Evaluation, engine.Report, error) {
 	rep, err := s.evaluateWithin(inv, target, now)
 	if err != nil {
 		return store.Evaluation{}, engine.Report{}, err
 	}
+	rep = suppressAnnotated(rep, now)
 	repJSON, err := marshalJSON(rep)
 	if err != nil {
 		return store.Evaluation{}, engine.Report{}, fmt.Errorf("marshaling report (cluster %d, target %s): %w", cluster.ID, target, err)
@@ -171,8 +195,21 @@ func (s *Server) evaluation(cluster store.Cluster, inv inventory.Inventory, targ
 		CreatedAt:   now,
 		EvaluatedAt: now,
 		TeamMapHash: s.teamMapHash,
-		Teams:       clusterTeams(inv, rep),
+		Teams:       storedTeams(inv, rep),
 	}, rep, nil
+}
+
+// storedTeams is clusterTeams with the teams of rep's suppressed findings.
+func storedTeams(inv inventory.Inventory, rep engine.Report) []string {
+	teams := clusterTeams(inv, rep)
+	if len(rep.Suppressed) == 0 {
+		return teams
+	}
+	for _, sf := range rep.Suppressed {
+		teams = append(teams, sf.Teams...)
+	}
+	slices.Sort(teams)
+	return slices.Compact(teams)
 }
 
 // futureTolerance is how far ahead of this server's clock a stored
