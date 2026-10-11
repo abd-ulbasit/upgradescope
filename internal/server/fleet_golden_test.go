@@ -21,7 +21,12 @@ import (
 // without read scopes, or the test proves nothing. Fields added since
 // (fleet-teams.json's `verdict` and `excluded`, shared-history.json's `verdict`, #243;
 // shared.json's `volumes` capability, #351) are written in by hand, and the unowned team bucket's key was renamed "(unattributed)"
-// the same way: nothing else in them changed.
+// the same way. Since stored and read-time evaluations apply the objects'
+// ignore annotations (#381), the shared cluster's annotated web Ingress is
+// in the report's and the exports' suppressed findings instead of its
+// finding (shared-report, -whatif, -findings and -export, rewritten from
+// this build and checked to differ by that alone): nothing else in them
+// changed.
 const fleetGoldenDir = "testdata/fleet-wide"
 
 // fleetGoldenReads are the reads the golden files hold, by file name:
