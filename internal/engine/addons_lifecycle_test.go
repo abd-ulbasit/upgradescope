@@ -763,3 +763,53 @@ func TestEvalAddOnsRKE2IngressNginxSupportEnd(t *testing.T) {
 		}
 	}
 }
+
+// Group 1 of the v0.3.0 registry depth work (GitOps, policy, autoscaling and
+// Crossplane) against the embedded registry: a Crossplane line is judged by
+// the README's EOL table, Kyverno and KEDA by the Kubernetes range of their
+// line, and Argo CD, Flux and Gatekeeper, which publish no range, are never
+// called incompatible with a target.
+func TestEvalAddOnsGitOpsPolicyAutoscalingRealKB(t *testing.T) {
+	addons, err := registry.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	k := kb.KB{AddOns: addons, Skew: kb.DefaultSkewPolicy(), MaxKnownK8s: inventory.Version{Major: 1, Minor: 37}}
+	now := day("2026-10-12")
+	v := func(minor int) inventory.Version { return inventory.Version{Major: 1, Minor: minor} }
+
+	for _, tc := range []struct {
+		id, version string
+		target      inventory.Version
+		want        string // "<severity> <category>" lines, sorted; empty means no finding at all
+	}{
+		// Crossplane: v2.1 ended 2026-08-20 (v2.4.0 shipped), v1.20 ends with
+		// the November 2026 table row, v2.4 is the newest line.
+		{"crossplane", "2.1.0", v(36), "blocker eol-addon"},
+		{"crossplane", "1.20.13", v(36), "warning eol-approaching"},
+		{"crossplane", "2.4.2", v(36), ""},
+		{"crossplane", "1.5.0", v(36), "blocker eol-addon"}, // older than every cycle
+		// Kyverno 1.17 supports Kubernetes 1.32 to 1.35: 1.36 is above its row.
+		{"kyverno", "1.17.2", v(36), "blocker chart-incompat"},
+		{"kyverno", "1.17.2", v(35), ""},
+		{"keda", "2.20.1", v(36), "blocker chart-incompat"}, // 2.20 is listed for 1.33 to 1.35
+		{"keda", "2.20.1", v(35), ""},
+		// No range published: any target, so only lifecycle can speak.
+		{"argo-cd", "3.5.1", v(37), ""},
+		{"flux", "2.9.0", v(37), ""},
+		{"gatekeeper", "3.23.0", v(37), ""},
+	} {
+		var got []string
+		for _, f := range evalAddOns(addOnAt(tc.id, tc.version), k, tc.target, now) {
+			if f.Category == CatAddOnNoData {
+				t.Errorf("%s %s: %s", tc.id, tc.version, f.Title)
+				continue
+			}
+			got = append(got, string(f.Severity)+" "+string(f.Category))
+		}
+		slices.Sort(got)
+		if g := strings.Join(got, "; "); g != tc.want {
+			t.Errorf("%s %s on 1.%d: findings %q, want %q", tc.id, tc.version, tc.target.Minor, g, tc.want)
+		}
+	}
+}
