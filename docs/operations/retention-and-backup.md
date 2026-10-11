@@ -251,8 +251,8 @@ decoded every inventory).
 ## What the history records
 
 `GET /api/v1/clusters/{id}/history` is a change log, not a sample taken at
-every evaluation: it returns one point (`at`, `score`, `ready`) per stored
-evaluation of the target, and a row is stored only when the result is new.
+every evaluation: it returns one point (`at`, `score`, `ready`, `verdict`) per
+stored evaluation of the target, and a row is stored only when the result is new.
 
 - **A row is added** when a pushed snapshot differs from the cluster's
   latest (one row per target, whatever its score), when a re-evaluation
@@ -277,9 +277,9 @@ Team attribution is part of the stored report, not of what is compared. A
 team-map change that leaves every verdict, score and finding as it was
 rewrites the row's report in place with the new teams: the earlier
 attribution is gone from the database as well as from the API, and
-`/history` keeps only `at`, `score` and `ready`. `/report`, `/teams` and the
-exports always read the latest stored evaluation, so they cannot answer
-which team owned a blocker at an earlier time. An auditor who needs that
+`/history` keeps only `at`, `score`, `ready` and `verdict`. `/report`,
+`/teams` and the exports always read the latest stored evaluation, so they
+cannot answer which team owned a blocker at an earlier time. An auditor who needs that
 keeps the exports from the time (`GET /api/v1/clusters/{id}/export`).
 
 ## Backup and restore
