@@ -565,6 +565,35 @@ func TestRBACDocsMatchRole(t *testing.T) {
 	}
 }
 
+// TestRBACDocsNameTheUnrestrictedCreate (#366): the role grants `create` on
+// clusterreadinesses, and RBAC cannot limit create by name, so the agent can
+// create a ClusterReadiness under any name; only update and patch are limited
+// to agent.crName. The pages that describe the chart's writes must not say it
+// writes only to the one named object without saying so.
+func TestRBACDocsNameTheUnrestrictedCreate(t *testing.T) {
+	flatten := func(s string) string {
+		return strings.ToLower(strings.Join(strings.Fields(strings.NewReplacer("`", "", "\n  # ", " ", "\n# ", " ").Replace(s)), " "))
+	}
+	for _, page := range []string{
+		"deploy/chart/values.yaml",
+		"deploy/chart/README.md",
+		"docs/reference/helm-values.md",
+		"docs/operations/security-model-and-rbac.md",
+	} {
+		b, err := os.ReadFile(filepath.Join("..", "..", page))
+		if err != nil {
+			t.Fatal(err)
+		}
+		flat := flatten(string(b))
+		if !strings.Contains(flat, "create cannot be limited by name") && !strings.Contains(flat, "cannot limit create by name") {
+			t.Errorf("%s does not say that `create` on clusterreadinesses cannot be limited by name", page)
+		}
+		if strings.Contains(flat, "writes only to the clusterreadiness cr named agent.crname") {
+			t.Errorf("%s says the agent writes only to the ClusterReadiness named agent.crName; it can create one under any name", page)
+		}
+	}
+}
+
 // --- namespaced Helm reads (#344) ---
 
 // renderedRBAC is the agent's RBAC as the chart renders it: the

@@ -109,6 +109,37 @@ else
   echo "FAIL docs/claims.md" >>"$work/results"
 fi
 
+# TestClaimsLedgerNoUntrackedPaths (#366): a path in backticks anywhere in the
+# ledger (a row's prose included, which claims-check does not resolve) is in
+# `git ls-files`, so the ledger cannot name a directory a reader of the public
+# repository cannot find (DS-16 once named docs/superpowers/). Paths with a
+# glob or a placeholder are patterns, not files, and are skipped.
+untracked_paths() {
+  grep -oE '`(docs|hack|internal|deploy|\.github|cmd|web|registry|action|api|packaging|tools|examples|ci)/[^` ]*`' "$1" |
+    tr -d '`' | sort -u | while IFS= read -r p; do
+      case "$p" in *'*'* | *'<'* | *'{'*) continue ;; esac
+      [ -n "$(git ls-files -- "${p%/}")" ] || echo "$p"
+    done
+}
+printf '%s\n' '| XX-01 | Names `hack/claims-check.sh` and `docs/superpowers/` | `TestScore` |' >"$work/paths.md"
+if [ "$(untracked_paths "$work/paths.md")" = "docs/superpowers/" ]; then
+  echo "ok   a path in a row's prose that git does not track is found" | tee -a "$work/results"
+else
+  echo "FAIL the untracked-path finder: $(untracked_paths "$work/paths.md")" | tee -a "$work/results" >&2
+fi
+untracked=$(untracked_paths docs/claims.md)
+if [ -z "$untracked" ]; then
+  echo "ok   docs/claims.md names no path git does not track" | tee -a "$work/results"
+else
+  echo "FAIL docs/claims.md names paths git does not track: $untracked" | tee -a "$work/results" >&2
+fi
+# The ledger no longer says round 2 "has not run yet" (#366).
+if tr '\n' ' ' <docs/claims.md | grep -qE 'has not +run +yet'; then
+  echo "FAIL docs/claims.md still says a round has not run yet" | tee -a "$work/results" >&2
+else
+  echo "ok   docs/claims.md does not say a round has not run yet" | tee -a "$work/results"
+fi
+
 pass=$(grep -c '^ok' "$work/results" || true)
 fail=$(grep -c '^FAIL' "$work/results" || true)
 echo "claims-check_test: $pass passed, $fail failed"

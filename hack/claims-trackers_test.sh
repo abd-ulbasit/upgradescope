@@ -97,9 +97,12 @@ expect "no gh skips" 0 "skipping: gh is not installed" "$head
 expect "no gh fails when required" 1 "gh is not installed" "$head
 | XX-02 | Gap | not true yet: #121 |" CLAIMS_TRACKERS_GH=no-such-gh CLAIMS_TRACKERS_REQUIRE=1
 
-# The real ledger, against the fake's idea of GitHub (every number open): the
-# extraction must find trackers in it, and the repository's own wiring holds.
-grep -oE '#[0-9]+' docs/claims.md | tr -d '#' | sort -u | awk '{print $1 " OPEN"}' >"$work/states"
+# The real ledger (TestClaimsLedgerTrackersOpen): against a fake GitHub where
+# every issue it mentions is open except the ones that were closed under it
+# (#366: 71, 76, 121, 126, 226, 228, 229, 233, 247, 248), no tracker may be
+# one of those, and the extraction must find trackers in it.
+grep -oE '#[0-9]+' docs/claims.md | tr -d '#' | sort -u |
+  awk 'BEGIN { n = split("71 76 121 126 226 228 229 233 247 248", c, " "); for (i = 1; i <= n; i++) closed[c[i]] = 1 } { print $1, (grep -oE '#[0-9]+' docs/claims.md | tr -d '#' | sort -u | awk '{print $1 " OPEN"}' >"$work/states" in closed) ? "CLOSED" : "OPEN" }' >"$work/states"
 got=0
 PATH="$work/bin:$PATH" GH_TOKEN=tok "$script" >"$work/out" 2>&1 || got=$?
 if [ "$got" = 0 ] && grep -qE '[1-9][0-9]* trackers' "$work/out"; then
