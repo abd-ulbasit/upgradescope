@@ -13,6 +13,9 @@
 // judges that cycle's end of life, so every cycle the API publishes is
 // written — date or boolean eol, plus the supported Kubernetes range where
 // the product publishes one — each citing https://endoflife.date/<slug>.
+// A tested-with table is not a bound: an entry whose Kubernetes range is one
+// (KEDA, Kyverno) carries the column-0 comment line
+// "# eol-sync: ignore-k8s-range" and gets its cycles without the range.
 // eol-sync never touches support.status: a product-level "eol" means the
 // whole product was retired (ingress-nginx), which a human records. When
 // every cycle has ended, eol-sync says so in its output for that review.
@@ -95,7 +98,10 @@ func run(dir string, check bool, fetch func(slug string) ([]byte, error), now ti
 		if slug == "" {
 			continue // hand-curated entry
 		}
-		key, render := "cycles", renderEntryCycles
+		key := "cycles"
+		render := func(body []byte, slug string, now time.Time) (syncResult, error) {
+			return renderEntryCycles(body, slug, now, ignoresK8sRange(raw))
+		}
 		if filepath.Base(filepath.Dir(path)) == "providers" {
 			key, render = "versions", renderEntryWindows
 		}
@@ -128,11 +134,17 @@ func run(dir string, check bool, fetch func(slug string) ([]byte, error), now ti
 	return drift, nil
 }
 
-// renderEntryCycles renders an add-on entry's cycles block.
-func renderEntryCycles(body []byte, slug string, now time.Time) (syncResult, error) {
+// renderEntryCycles renders an add-on entry's cycles block. With
+// ignoreRange the Kubernetes range of every cycle is left out.
+func renderEntryCycles(body []byte, slug string, now time.Time, ignoreRange bool) (syncResult, error) {
 	rows, err := computeCycles(body)
 	if err != nil {
 		return syncResult{}, err
+	}
+	if ignoreRange {
+		for i := range rows {
+			rows[i].k8sMin, rows[i].k8sMax = "", ""
+		}
 	}
 	res := syncResult{
 		block:   renderCycles(rows, "https://endoflife.date/"+slug),

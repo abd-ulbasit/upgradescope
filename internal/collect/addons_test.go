@@ -344,6 +344,13 @@ func TestMatchAddOnsRealWorldImages(t *testing.T) {
 		{"ghcr.io/kyverno/kyverno:v1.12.5", "kyverno", "1.12.5"},
 		{"reg.kyverno.io/kyverno/kyverno:v1.14.1", "kyverno", "1.14.1"},
 		{"quay.io/argoproj/argocd:v2.12.3", "argo-cd", "2.12.3"},
+		{"xpkg.crossplane.io/crossplane/crossplane:v2.4.2", "crossplane", "2.4.2"},
+		{"xpkg.upbound.io/crossplane/crossplane:v1.14.5", "crossplane", "1.14.5"},
+		{"crossplane/crossplane:v1.20.13", "crossplane", "1.20.13"},
+		// Provider and function packages version separately, and Upbound's own
+		// distribution is a different product.
+		{"xpkg.crossplane.io/crossplane-contrib/provider-aws:v1.0.0", "", ""},
+		{"xpkg.upbound.io/upbound/crossplane:v1.20.0-up.1", "", ""},
 		{"registry.k8s.io/etcd:3.5.15-0", "etcd", "3.5.15"},
 		{"bitnami/etcd:3.5.15-debian-12-r3", "etcd", "3.5.15"},
 		{"quay.io/coreos/etcd:v3.5.15", "etcd", "3.5.15"},

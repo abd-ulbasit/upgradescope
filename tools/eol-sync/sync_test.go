@@ -350,3 +350,59 @@ func compatBlock(s string) string {
 	}
 	return strings.TrimRight(strings.Join(lines[start:end], ""), "\n")
 }
+
+func TestIgnoresK8sRange(t *testing.T) {
+	for name, tc := range map[string]struct {
+		raw  string
+		want bool
+	}{
+		"absent":                {sampleEntry, false},
+		"directive":             {sampleEntry + "# eol-sync: ignore-k8s-range\n", true},
+		"directive at the top":  {"# eol-sync: ignore-k8s-range\n" + sampleEntry, true},
+		"indented is not one":   {sampleEntry + "  # eol-sync: ignore-k8s-range\n", false},
+		"mentioned in prose":    {sampleEntry + "# not an eol-sync: ignore-k8s-range directive\n", false},
+		"a different directive": {sampleEntry + "# eol-sync: ignore-k8s-ranges\n", false},
+	} {
+		if got := ignoresK8sRange([]byte(tc.raw)); got != tc.want {
+			t.Errorf("%s: ignoresK8sRange = %v, want %v", name, got, tc.want)
+		}
+	}
+}
+
+// An entry whose endoflife.date range is a tested-with table (KEDA, Kyverno)
+// carries the directive: the sync keeps the lifecycle and drops the range,
+// and an entry without the directive keeps it.
+func TestRunDropsK8sRangeOnlyWhereTheEntryAsksFor(t *testing.T) {
+	const api = `[{"cycle":"2.21","eol":false,"supportedKubernetesVersions":"1.34 - 1.36"},
+	              {"cycle":"2.5","eol":"2022-05-05","supportedKubernetesVersions":"1.17+"}]`
+	for name, tc := range map[string]struct {
+		entry     string
+		wantRange bool
+	}{
+		"ordinary entry":    {sampleEntry, true},
+		"tested-with entry": {"# eol-sync: ignore-k8s-range\n" + sampleEntry, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "istio.yaml")
+			if err := os.WriteFile(path, []byte(tc.entry), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			fetch := func(string) ([]byte, error) { return []byte(api), nil }
+			if _, err := run(dir, false, fetch, today, &bytes.Buffer{}); err != nil {
+				t.Fatal(err)
+			}
+			raw, _ := os.ReadFile(path)
+			if has := strings.Contains(string(raw), "k8s_m"); has != tc.wantRange {
+				t.Errorf("k8s_min/k8s_max present = %v, want %v:\n%s", has, tc.wantRange, raw)
+			}
+			if !strings.Contains(string(raw), `{cycle: "2.21", eol: false`) || !strings.Contains(string(raw), `{cycle: "2.5", eol: "2022-05-05"`) {
+				t.Errorf("lifecycle rows lost:\n%s", raw)
+			}
+			// A second pass must be a no-op in check mode, or the weekly refresh would flap.
+			if drift, err := run(dir, true, fetch, today, &bytes.Buffer{}); err != nil || drift != 0 {
+				t.Errorf("re-check: drift=%d err=%v", drift, err)
+			}
+		})
+	}
+}
