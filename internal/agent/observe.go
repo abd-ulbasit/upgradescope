@@ -31,7 +31,10 @@ const (
 	msgTickComplete = "tick complete"
 	msgTickFailed   = "tick failed"
 	msgStopping     = "agent stopping"
-	msgLegacyCRD    = "the pre-v0.2.0 ClusterReadiness CRD is still installed; nothing uses it, delete it when no GitOps tool or policy reads it"
+	// A snapshot whose push failed at a tick is retried between ticks.
+	msgPushRetried     = "buffered snapshot pushed"
+	msgPushRetryFailed = "buffered snapshot push failed"
+	msgLegacyCRD       = "the pre-v0.2.0 ClusterReadiness CRD is still installed; nothing uses it, delete it when no GitOps tool or policy reads it"
 )
 
 // tickReport is one tick's outcome. A tick fails when anything but the
@@ -97,12 +100,15 @@ type observer struct {
 	tickErrors   prometheus.Counter
 	pushErrors   prometheus.Counter
 
-	mu          sync.Mutex
-	ticks       int       // completed ticks, failed or not
-	failures    int       // consecutive failed ticks
-	lastErr     error     // of the latest failed tick
-	lastSuccess time.Time // zero until a tick succeeds
-	good        tickReport
+	mu       sync.Mutex
+	ticks    int // completed ticks, failed or not
+	failures int // consecutive failed ticks
+	// pushFailures is the ticks in a row whose push failed; a retry that
+	// delivers the buffered snapshot between ticks ends the streak.
+	pushFailures int
+	lastErr      error     // of the latest failed tick
+	lastSuccess  time.Time // zero until a tick succeeds
+	good         tickReport
 }
 
 func newObserver(log *slog.Logger, k kb.KB, interval time.Duration) *observer {
@@ -123,7 +129,7 @@ func newObserver(log *slog.Logger, k kb.KB, interval time.Duration) *observer {
 		}),
 		pushErrors: prometheus.NewCounter(prometheus.CounterOpts{
 			Name: "upgradescope_agent_push_errors_total",
-			Help: "Snapshot pushes to the upgradescope server that failed (transient errors are retried first).",
+			Help: "Snapshot pushes to the upgradescope server that failed, a tick's push or a retry of the buffered snapshot between ticks (each retries transient errors up to three times first).",
 		}),
 	}
 	o.reg.MustRegister(o.tickDuration, o.tickErrors, o.pushErrors, o,
@@ -139,6 +145,11 @@ func (o *observer) record(rep tickReport) {
 	}
 	o.mu.Lock()
 	o.ticks++
+	if rep.pushErr != nil {
+		o.pushFailures++
+	} else {
+		o.pushFailures = 0
+	}
 	if rep.err != nil {
 		o.failures++
 		o.lastErr = rep.err
@@ -148,7 +159,16 @@ func (o *observer) record(rep tickReport) {
 		o.lastSuccess = o.now()
 		o.good = rep
 	}
-	failures := o.failures
+	// The count is of the failure the line reports (#386): failed ticks in
+	// a row on a failed tick's line, failed pushes in a row on a line whose
+	// push failed, else 0.
+	failures := 0
+	switch {
+	case rep.err != nil:
+		failures = o.failures
+	case rep.pushErr != nil:
+		failures = o.pushFailures
+	}
 	o.mu.Unlock()
 
 	attrs := []any{
@@ -177,6 +197,19 @@ func (o *observer) record(rep tickReport) {
 	default:
 		o.log.Info(msgTickComplete, attrs...)
 	}
+}
+
+// recordRetry folds in one retry of the buffered snapshot between ticks:
+// a failed retry is a failed push (upgradescope_agent_push_errors_total);
+// a delivered one ends the failed-push streak the next tick line counts.
+func (o *observer) recordRetry(err error) {
+	if err != nil {
+		o.pushErrors.Inc()
+		return
+	}
+	o.mu.Lock()
+	o.pushFailures = 0
+	o.mu.Unlock()
 }
 
 // capabilityAttr renders capability availability as a group:

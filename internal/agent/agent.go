@@ -475,6 +475,20 @@ type runner struct {
 	lastHash string    // hash of the last successfully pushed inventory
 	lastPush time.Time // when it was pushed
 
+	// retryPending is set by a tick whose push failed transiently and left
+	// its snapshot buffered in the pusher, of hash pendingHash: loop
+	// retries it between ticks (retryBuffered) until it is delivered or the
+	// next tick, which offers its own, is due (#386); every tick clears it
+	// first (maybePush), so it never outlives the tick after the failed
+	// push unless that tick fails the same way. Only loop's goroutine
+	// touches these, the ticks and the retries alike, so a retry never
+	// runs during a tick and never sends a snapshot older than the latest.
+	retryPending bool
+	pendingHash  string
+	// retryDelay is the wait before retry n (0-based) of the buffered
+	// snapshot: bufferedRetryDelay, jittered. Injectable for tests.
+	retryDelay func(n int) time.Duration
+
 	last tickReport // the latest tick's outcome, for the observer
 
 	// conformed is what the collector left out of the latest collection so
@@ -496,6 +510,7 @@ func newRunner(clients collect.Clients, dyn dynamic.Interface, k kb.KB, cfg Conf
 		now: time.Now,
 
 		tickBudget: tickTimeout(cfg.Interval),
+		retryDelay: func(n int) time.Duration { return bufferedRetryDelay(n, rand.Float64()) },
 	}
 	// The caches outlive the ticks: a release already decoded is not fetched
 	// again until its storage object changes (#71), API discovery is asked
@@ -824,9 +839,12 @@ func (r *runner) runTick(ctx context.Context) tickReport {
 // the hash gate, not the pusher's buffer: lastHash/lastPush only advance on
 // success, so after a failed push the same content still differs from
 // lastHash next tick and a fresh payload is offered (replacing any payload
-// the pusher kept buffered) and flushed again. pushed reports whether a
-// snapshot was sent.
+// the pusher kept buffered) and flushed again. Between ticks, loop
+// retries the buffered payload itself (retryBuffered), so a transient
+// failure does not wait out a whole interval (#386). pushed reports
+// whether a snapshot was sent.
 func (r *runner) maybePush(ctx context.Context, inv inventory.Inventory) (pushed bool, err error) {
+	r.retryPending = false // this tick's snapshot, or none, supersedes a buffered one
 	hash, raw, err := snapshotHash(inv)
 	if err != nil {
 		return false, err
@@ -861,10 +879,61 @@ func (r *runner) maybePush(ctx context.Context, inv inventory.Inventory) (pushed
 		Inventory:     raw,
 	})
 	if err := r.pusher.flush(ctx); err != nil {
+		// Kept buffered (a transient failure, or the tick ran out of
+		// time): retried between ticks. A permanent one was dropped.
+		r.retryPending, r.pendingHash = r.pusher.hasPending(), hash
 		return false, err
 	}
 	r.lastHash, r.lastPush = hash, r.now()
 	return true, nil
+}
+
+// The buffered snapshot's retries between ticks wait 10s, then twice as
+// long each time up to 2m, each ±20% (bufferedRetryDelay).
+const (
+	firstBufferedRetry = 10 * time.Second
+	maxBufferedRetry   = 2 * time.Minute
+)
+
+// bufferedRetryDelay is the wait before retry n (0-based) of a buffered
+// snapshot, for a jitter draw u in [0, 1): 10s, 20s, 40s, 80s, then 2m,
+// each scaled by 0.8 + 0.4u (±20%), so agents whose first push failed
+// together (a fleet whose server restarted) do not retry together.
+func bufferedRetryDelay(n int, u float64) time.Duration {
+	d := min(firstBufferedRetry<<uint(min(n, 10)), maxBufferedRetry)
+	return time.Duration(float64(d) * (0.8 + 0.4*u))
+}
+
+// retryBuffered retries the snapshot the last tick's push kept buffered,
+// one flush (the usual short series of attempts) per retry after
+// retryDelay, until one delivers it, the server refuses it for good
+// (dropped, as at a tick), or ctx ends: the next tick is due, and its own
+// snapshot replaces this one, or the agent is stopping. A delivered
+// snapshot advances the hash gate, as a tick's push does. Each retry logs
+// one line; a failed one is a failed push for the metrics.
+func (r *runner) retryBuffered(ctx context.Context, obs *observer, log *slog.Logger) {
+	for n := 0; r.retryPending; n++ {
+		delay := r.retryDelay(n)
+		if waitFor(ctx, delay) != nil {
+			return
+		}
+		err := r.pusher.flush(ctx)
+		if err != nil && ctx.Err() != nil {
+			return // cut short by the next tick or a stop: that is no failed push
+		}
+		obs.recordRetry(err)
+		switch {
+		case err == nil:
+			r.retryPending = false
+			r.lastHash, r.lastPush = r.pendingHash, r.now()
+			log.Info(msgPushRetried, "retry", n+1, "after", delay.Round(time.Millisecond).String())
+		case !r.pusher.hasPending():
+			r.retryPending = false
+			log.Warn(msgPushRetryFailed, "retry", n+1, "pushError", err.Error(), "retrying", false)
+		default:
+			log.Warn(msgPushRetryFailed, "retry", n+1, "pushError", err.Error(), "retrying", true)
+		}
+	}
 }
 
 // snapshotHash returns (sha256 hex of canonical inventory JSON, wire JSON).
@@ -892,7 +961,8 @@ func snapshotHash(inv inventory.Inventory) (hash string, raw []byte, err error) 
 // cancel is a graceful stop, not an error). The first tick runs immediately;
 // later ticks fire every Interval ±10% jitter, each under tickTimeout. Every
 // tick logs one line and updates the metrics; tick errors are never fatal:
-// the loop never dies on a tick error. With HealthAddr set, /healthz,
+// the loop never dies on a tick error. A snapshot whose push failed is
+// retried between ticks (loop). With HealthAddr set, /healthz,
 // /readyz and /metrics are served until Run returns.
 func Run(ctx context.Context, clients collect.Clients, dyn dynamic.Interface, apiext apiextensionsclient.Interface, k kb.KB, cfg Config) error {
 	if err := cfg.applyDefaults(); err != nil {
@@ -1003,6 +1073,15 @@ func Run(ctx context.Context, clients collect.Clients, dyn dynamic.Interface, ap
 			r.ensureCRD = ensure
 		}
 	}
+	return r.loop(ctx, obs, log, func() time.Duration { return jitter(cfg.Interval) })
+}
+
+// loop runs a tick, then waits spacing() for the next, until ctx is
+// canceled. While it waits, a snapshot the tick's push kept buffered is
+// retried (retryBuffered), up to the moment the next tick is due: a server
+// that was not yet listening at the first tick, as in a combined install,
+// gets the snapshot within seconds, not a whole interval later (#386).
+func (r *runner) loop(ctx context.Context, obs *observer, log *slog.Logger, spacing func() time.Duration) error {
 	for {
 		rep := r.runTick(ctx)
 		if ctx.Err() != nil && (rep.err != nil || rep.pushErr != nil) {
@@ -1011,7 +1090,13 @@ func Run(ctx context.Context, clients collect.Clients, dyn dynamic.Interface, ap
 			return nil
 		}
 		obs.record(rep)
-		timer := time.NewTimer(jitter(cfg.Interval))
+		due := time.Now().Add(spacing())
+		if r.pusher != nil && r.retryPending {
+			rctx, cancel := context.WithDeadline(ctx, due)
+			r.retryBuffered(rctx, obs, log)
+			cancel()
+		}
+		timer := time.NewTimer(time.Until(due))
 		select {
 		case <-ctx.Done():
 			timer.Stop()

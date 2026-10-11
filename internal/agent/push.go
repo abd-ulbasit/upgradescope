@@ -177,6 +177,14 @@ func (p *pusher) offer(pl pushPayload) {
 	p.pending = &pl
 }
 
+// hasPending reports whether a snapshot is buffered: offered and neither
+// delivered nor dropped.
+func (p *pusher) hasPending() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.pending != nil
+}
+
 // flush sends the pending snapshot, if any. Transient failures (network,
 // 5xx, 408, 429) retry up to pushRetries times with jittered exponential
 // backoff (retryDelay); the
