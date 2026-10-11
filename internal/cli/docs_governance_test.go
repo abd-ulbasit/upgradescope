@@ -6,6 +6,7 @@ package cli
 // form checks, and the roadmap links its milestones.
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -80,5 +81,24 @@ func TestRoadmapLinksMilestones(t *testing.T) {
 	const milestones = "https://github.com/abd-ulbasit/upgradescope/milestones"
 	if !strings.Contains(readDoc(t, "ROADMAP.md"), milestones) {
 		t.Errorf("ROADMAP.md does not link %s", milestones)
+	}
+}
+
+// TestRoadmapRegistryCounts: the add-on counts in ROADMAP.md's "Where it
+// stands" match registry/data, counted as TestDocsRegistryCounts counts
+// them for the registry page, so the roadmap cannot quote a stale
+// breakdown.
+func TestRoadmapRegistryCounts(t *testing.T) {
+	s := loadRegistryStats(t)
+	roadmap := strings.Join(strings.Fields(readDoc(t, "ROADMAP.md")), " ")
+	for _, want := range []string{
+		fmt.Sprintf("%d add-ons in the registry", len(s.ids)),
+		fmt.Sprintf("%d synced from endoflife.date", s.eolSynced),
+		fmt.Sprintf("%d with Kubernetes ranges", s.k8sRanges),
+		fmt.Sprintf("%d with no lifecycle data", s.noData),
+	} {
+		if !strings.Contains(roadmap, want) {
+			t.Errorf("ROADMAP.md: want %q (counted from registry/data)", want)
+		}
 	}
 }

@@ -29,7 +29,8 @@ score stay, but are not where new effort goes until users ask for them.
 ## 1. v0.3.0: add-on depth
 
 Where it stands: 27 add-ons in the registry, each claim cited; 14 synced
-from endoflife.date, 6 with Kubernetes ranges and 5 without lifecycle data.
+from endoflife.date, 13 with Kubernetes ranges, and 2 with no lifecycle
+data.
 Target: end of November 2026.
 
 - **More add-ons, and more of each**: the add-ons most clusters run, with
