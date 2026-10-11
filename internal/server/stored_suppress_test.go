@@ -12,6 +12,7 @@ import (
 	"github.com/abd-ulbasit/upgradescope/internal/engine"
 	"github.com/abd-ulbasit/upgradescope/internal/inventory"
 	"github.com/abd-ulbasit/upgradescope/internal/server/notify"
+	"github.com/abd-ulbasit/upgradescope/internal/server/store"
 	"github.com/abd-ulbasit/upgradescope/internal/suppress"
 )
 
@@ -117,42 +118,99 @@ func TestStoredEvaluationAppliesObjectAnnotations(t *testing.T) {
 // #381: notifications follow the annotations. Annotating a blocked
 // cluster's last blocker sends became-ready; a new object that arrives
 // already annotated sends nothing; removing the annotation is a
-// new-blocker.
+// new-blocker. On SQLite and, with UPGRADESCOPE_PG_TEST_DSN, Postgres
+// (forEachStore), so the stores' baselines are the ones judged.
 func TestStoredAnnotationLifecycleNotifications(t *testing.T) {
-	setup := func(t *testing.T) (*Server, *httptest.Server, *recordingNotifier) {
+	setup := func(t *testing.T, st store.Store) (*Server, *httptest.Server, *recordingNotifier) {
 		rec := &recordingNotifier{}
-		s := newTestServer(t, newFakeStore(), func(c *Config) { c.Notifier = rec })
+		s := newTestServer(t, newFakeStore(), func(c *Config) { c.Store, c.Notifier = st, rec })
 		ts := httptest.NewServer(s.Handler())
 		t.Cleanup(ts.Close)
 		return s, ts, rec
 	}
 	t.Run("annotating the last blocker sends became-ready", func(t *testing.T) {
-		s, ts, rec := setup(t)
-		push(t, ts, pspInventory(false))
-		s.deliverOutbox(context.Background())
-		push(t, ts, pspInventory(true))
-		s.deliverOutbox(context.Background())
-		if evs := rec.all(); len(evs) != 1 || evs[0].Kind != notify.KindBecameReady || evs[0].Target != "1.35" {
-			t.Errorf("events = %+v, want one became-ready for 1.35", evs)
-		}
+		forEachStore(t, func(t *testing.T, st store.Store) {
+			s, ts, rec := setup(t, st)
+			push(t, ts, pspInventory(false))
+			s.deliverOutbox(context.Background())
+			push(t, ts, pspInventory(true))
+			s.deliverOutbox(context.Background())
+			if evs := rec.all(); len(evs) != 1 || evs[0].Kind != notify.KindBecameReady || evs[0].Target != "1.35" {
+				t.Errorf("events = %+v, want one became-ready for 1.35", evs)
+			}
+		})
 	})
 	t.Run("a new already-annotated object sends nothing", func(t *testing.T) {
-		s, ts, rec := setup(t)
-		push(t, ts, testInventory())
-		push(t, ts, pspInventory(true))
-		s.deliverOutbox(context.Background())
-		if evs := rec.all(); len(evs) != 0 {
-			t.Errorf("events = %+v, want none: the new object is accepted", evs)
-		}
+		forEachStore(t, func(t *testing.T, st store.Store) {
+			s, ts, rec := setup(t, st)
+			push(t, ts, testInventory())
+			push(t, ts, pspInventory(true))
+			s.deliverOutbox(context.Background())
+			if evs := rec.all(); len(evs) != 0 {
+				t.Errorf("events = %+v, want none: the new object is accepted", evs)
+			}
+		})
 	})
 	t.Run("removing the annotation is a new-blocker", func(t *testing.T) {
-		s, ts, rec := setup(t)
-		push(t, ts, pspInventory(true))
-		push(t, ts, pspInventory(false))
-		s.deliverOutbox(context.Background())
-		if evs := rec.all(); len(evs) != 1 || evs[0].Kind != notify.KindNewBlocker || evs[0].Target != "1.35" {
-			t.Errorf("events = %+v, want one new-blocker for 1.35", evs)
+		forEachStore(t, func(t *testing.T, st store.Store) {
+			s, ts, rec := setup(t, st)
+			push(t, ts, pspInventory(true))
+			push(t, ts, pspInventory(false))
+			s.deliverOutbox(context.Background())
+			if evs := rec.all(); len(evs) != 1 || evs[0].Kind != notify.KindNewBlocker || evs[0].Target != "1.35" {
+				t.Errorf("events = %+v, want one new-blocker for 1.35", evs)
+			}
+		})
+	})
+}
+
+// #380 with #381: on a cluster whose default target is past the knowledge
+// base's horizon (unknown when clean, a notification baseline), the stored
+// verdict is judged after the annotations. An object that arrives already
+// annotated leaves the pass a clean unknown baseline and sends nothing;
+// the annotation removed is the first blocker after unknown passes,
+// announced; annotated again, the unknown pass saw the blocker resolved
+// (no became-ready: the target is not decided), so its return is a
+// new-blocker again.
+func TestAnnotatedBlockerPastTheHorizonNotifies(t *testing.T) {
+	forEachStore(t, func(t *testing.T, st store.Store) {
+		rec := &recordingNotifier{}
+		s := newTestServer(t, newFakeStore(), func(c *Config) {
+			c.Store, c.Notifier = st, rec
+			c.KB.MaxKnownK8s = inventory.Version{Major: 1, Minor: 34} // the 1.34 cluster's default target 1.35 is past it
+		})
+		ts := httptest.NewServer(s.Handler())
+		defer ts.Close()
+		ctx := context.Background()
+		step := func(name string, inv inventory.Inventory, want ...string) {
+			t.Helper()
+			before := len(rec.all())
+			push(t, ts, inv)
+			s.deliverOutbox(ctx)
+			evs := rec.all()[before:]
+			var got []string
+			for _, e := range evs {
+				if e.Target != "1.35" {
+					t.Errorf("%s: event for target %s, want 1.35 only: %+v", name, e.Target, e)
+				}
+				got = append(got, e.Kind)
+			}
+			if !slices.Equal(got, want) {
+				t.Errorf("%s: events = %+v, want %v", name, evs, want)
+			}
 		}
+		step("clean, past the horizon", testInventory())
+		cur, err := st.CurrentEvaluation(ctx, 1, "1.35")
+		if err != nil || cur.Ready || cur.Blockers != 0 || !cur.Baseline {
+			t.Fatalf("clean 1.35 = (ready %v, blockers %d, baseline %v, %v); want unknown, and a baseline", cur.Ready, cur.Blockers, cur.Baseline, err)
+		}
+		step("a new already-annotated PSP", pspInventory(true))
+		if cur, err := st.CurrentEvaluation(ctx, 1, "1.35"); err != nil || cur.Blockers != 0 || !cur.Baseline {
+			t.Fatalf("annotated 1.35 = (blockers %d, baseline %v, %v); want no blocker, a baseline", cur.Blockers, cur.Baseline, err)
+		}
+		step("the annotation removed", pspInventory(false), notify.KindNewBlocker)
+		step("annotated again", pspInventory(true))
+		step("the annotation removed again", pspInventory(false), notify.KindNewBlocker)
 	})
 }
 
