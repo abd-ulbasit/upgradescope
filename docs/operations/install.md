@@ -52,6 +52,9 @@ cosign verify-blob checksums.txt --bundle checksums.txt.sigstore.json \
 sha256sum --ignore-missing -c checksums.txt   # macOS: shasum -a 256 -c --ignore-missing checksums.txt
 ```
 
+cosign 2.4.1 fails on the bundle (`bundle does not contain cert for
+verification`) unless `verify-blob` also gets `--new-bundle-format`.
+
 Each archive also has an SPDX SBOM (`<archive>.sbom.json`) and a GitHub
 build-provenance attestation (`gh attestation verify <archive> --repo
 abd-ulbasit/upgradescope`).
@@ -82,11 +85,15 @@ verifies against the release workflow's signature.
 go install github.com/abd-ulbasit/upgradescope/cmd/upgradescope@latest
 ```
 
-The dashboard is committed in the module, so this binary serves it too,
-and `upgradescope version` reports the module version and commit (CI checks
-both: `make go-install-check`). What it lacks is the registry date stamp
-(`registry date: unknown`), and it is built with your toolchain rather than
-the release's.
+The dashboard is committed in the module, so this binary serves it too, and
+`upgradescope version` reports the module version. It does not report the commit or the build
+date: the go command stamps those only for a build inside a git checkout, so
+from the module proxy `upgradescope version` prints `commit: unknown`,
+`built: unknown` and `registry date: unknown` (seen by the round-3 audit on
+`v0.2.0-rc.3`, #99). `make go-install-check` builds from a
+checkout, where the commit is stamped, so it does not cover the proxy path.
+The binary is built with your toolchain rather than the release's; the
+release archives, image and packages carry all three stamps.
 
 ## Container image
 

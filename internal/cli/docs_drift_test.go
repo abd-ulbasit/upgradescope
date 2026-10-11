@@ -5,7 +5,9 @@ package cli
 
 import (
 	"io/fs"
+	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -141,5 +143,104 @@ func TestDocsRound2Gaps(t *testing.T) {
 				t.Errorf("%s does not say that %s (missing %q)", tc.page, tc.claim, w)
 			}
 		}
+	}
+}
+
+// authorshipPassage returns the sentence of doc that says who wrote the code,
+// from "Most of the code was written by" to the end of its sentence, link
+// targets and line breaks removed so the README and the FAQ can be compared.
+func authorshipPassage(t *testing.T, page string) string {
+	t.Helper()
+	doc := strings.Join(strings.Fields(readDoc(t, page)), " ")
+	doc = regexp.MustCompile(`\]\([^)]*\)`).ReplaceAllString(doc, "]")
+	const start = "Most of the code was written by"
+	i := strings.Index(doc, start)
+	if i < 0 {
+		t.Fatalf("%s does not say that most of the code was written by coding agents (DO-05)", page)
+	}
+	rest := doc[i:]
+	// The sentence ends at the first period that is followed by a space or the end.
+	end := regexp.MustCompile(`\.( |$)`).FindStringIndex(rest)
+	if end == nil {
+		return rest
+	}
+	return rest[:end[0]+1]
+}
+
+// TestAuthorshipNoteConsistent (DO-05, #366): the README and the FAQ say the
+// same thing about who wrote the code, and say only what the public history
+// can show: coding agents wrote most of it (the Co-Authored-By trailers),
+// from plans the author approved but did not write, and those planning notes
+// are not published. "Specs and plans the author wrote" cannot be checked from
+// a clone, and the notes are agent-co-authored themselves.
+func TestAuthorshipNoteConsistent(t *testing.T) {
+	readme, faq := authorshipPassage(t, "README.md"), authorshipPassage(t, "docs/faq.md")
+	if readme != faq {
+		t.Errorf("README.md and docs/faq.md differ on who wrote the code:\n  README.md:   %s\n  docs/faq.md: %s", readme, faq)
+	}
+	for _, page := range []string{"README.md", "docs/faq.md"} {
+		doc := strings.ToLower(strings.Join(strings.Fields(readDoc(t, page)), " "))
+		for _, old := range []string{"specs and plans the author wrote", "specs and plans he wrote"} {
+			if strings.Contains(doc, old) {
+				t.Errorf("%s still says %q: the notes are not published, so \"wrote\" cannot be checked", page, old)
+			}
+		}
+	}
+	for _, want := range []string{"Co-Authored-By", "not published", "approved"} {
+		if !strings.Contains(readme, want) {
+			t.Errorf("the authorship note does not say %q: %s", want, readme)
+		}
+	}
+
+	// The trailers the note points at exist in the history (not asserted in a
+	// shallow clone or an export, which may hold none).
+	if out, err := exec.Command("git", "-C", repoRoot, "rev-parse", "--is-shallow-repository").Output(); err != nil || strings.TrimSpace(string(out)) != "false" {
+		return
+	}
+	out, err := exec.Command("git", "-C", repoRoot, "log", "-i", "--grep=Co-Authored-By: Claude", "--oneline", "-1").Output()
+	if err != nil {
+		t.Skipf("git log: %v", err)
+	}
+	if strings.TrimSpace(string(out)) == "" {
+		t.Error("the note points at Co-Authored-By trailers, and no commit in the history has one")
+	}
+}
+
+// TestReadmeVerifyBlockIsSelfContained (#366): the README's "Verifying a
+// download" block works copied verbatim. It sets every variable it uses,
+// downloads the three files it reads, and checks the signature before the
+// archive against the checksums. Run with $VERSION unset it used to fail with
+// a certificate identity ending in "refs/tags/".
+func TestReadmeVerifyBlockIsSelfContained(t *testing.T) {
+	doc := readDoc(t, "README.md")
+	i := strings.Index(doc, "Verifying a download")
+	if i < 0 {
+		t.Fatal("README.md has no \"Verifying a download\"")
+	}
+	rest := doc[i:]
+	open := strings.Index(rest, "```sh\n")
+	if open < 0 {
+		t.Fatal("README.md: no sh block after \"Verifying a download\"")
+	}
+	block := rest[open+len("```sh\n"):]
+	block = block[:strings.Index(block, "```")]
+
+	assigned := map[string]bool{}
+	for _, m := range regexp.MustCompile(`(?m)^([A-Za-z_][A-Za-z0-9_]*)=`).FindAllStringSubmatch(block, -1) {
+		assigned[m[1]] = true
+	}
+	for _, m := range regexp.MustCompile(`\$\{?([A-Za-z_][A-Za-z0-9_]*)`).FindAllStringSubmatch(block, -1) {
+		if !assigned[m[1]] {
+			t.Errorf("README.md's verify block uses $%s and never sets it", m[1])
+		}
+	}
+	for _, want := range []string{"checksums.txt\"", "checksums.txt.sigstore.json\"", "tar.gz\""} {
+		if !strings.Contains(block, "curl") || !strings.Contains(block, want) {
+			t.Errorf("README.md's verify block does not download %s", want)
+		}
+	}
+	sig, sum := strings.Index(block, "cosign verify-blob"), strings.Index(block, "sha256sum")
+	if sig < 0 || sum < 0 || sig > sum {
+		t.Error("README.md's verify block must check the signature (cosign verify-blob) before the checksums (sha256sum)")
 	}
 }

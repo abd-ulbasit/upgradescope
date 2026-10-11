@@ -41,11 +41,21 @@ every public claim, with the test that proves it: [claims ledger](docs/claims.md
 Verifying a download:
 
 ```sh
-sha256sum --ignore-missing -c checksums.txt   # macOS: shasum -a 256 -c --ignore-missing checksums.txt
+VERSION=v0.2.0   # the release you downloaded
+base=https://github.com/abd-ulbasit/upgradescope/releases/download/$VERSION
+curl -fsSLO "$base/upgradescope_linux_amd64.tar.gz"
+curl -fsSLO "$base/checksums.txt"
+curl -fsSLO "$base/checksums.txt.sigstore.json"
 cosign verify-blob checksums.txt --bundle checksums.txt.sigstore.json \
   --certificate-identity "https://github.com/abd-ulbasit/upgradescope/.github/workflows/release.yml@refs/tags/$VERSION" \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
+sha256sum --ignore-missing -c checksums.txt   # macOS: shasum -a 256 -c --ignore-missing checksums.txt
 ```
+
+The signature is checked first, then the archive against the signed
+checksums. For a pre-release, set `VERSION` to its tag (`v0.2.0-rc.3`).
+cosign 2.4.1 fails on the bundle (`bundle does not contain cert for
+verification`) unless `verify-blob` also gets `--new-bundle-format`.
 
 [Install](https://abd-ulbasit.github.io/upgradescope/operations/install/)
 has every channel, image and chart verification, and what v0.1.x lacks.
@@ -281,6 +291,9 @@ The author interned at chkk.io, which sells in this category. upgradescope
 is clean-room: no proprietary code, data, schemas or documents were used,
 and every knowledge-base entry is generated from upstream source or carries
 a public citation, checked in CI. Most of the code was written by coding
-agents from specs and plans the author wrote and reviewed.
+agents (see the `Co-Authored-By` trailers in the git history), working from
+specs and plans drafted with them and approved by the author; the planning
+notes are not published, and the design decisions are in the
+[architecture guide](docs/architecture.md).
 
 Apache-2.0.
