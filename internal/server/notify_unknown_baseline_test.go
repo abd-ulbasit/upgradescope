@@ -1,11 +1,19 @@
 package server
 
 import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"slices"
+	"sync"
 	"testing"
 
 	"github.com/abd-ulbasit/upgradescope/internal/engine"
 	"github.com/abd-ulbasit/upgradescope/internal/inventory"
+	"github.com/abd-ulbasit/upgradescope/internal/kb"
 	"github.com/abd-ulbasit/upgradescope/internal/server/notify"
+	"github.com/abd-ulbasit/upgradescope/internal/server/store"
 )
 
 // TestHidesNoFindingHidesNothing: the gaps an unknown baseline may have
@@ -95,4 +103,51 @@ func TestUnknownPassKeepsBecameReadyPending(t *testing.T) {
 	if sameHeads(carried, blocked) {
 		t.Error("sameHeads takes a Resolved head for the blocker it was")
 	}
+}
+
+// TestNewestMinorWebhookReceiverGetsOneNewBlocker is #380's lab case end
+// to end, through the real ingest endpoint, outbox and generic webhook: a
+// cluster on the newest minor the KB knows (default target past its
+// horizon) pushes a clean inventory, then one with an EOL add-on, and the
+// receiver logs exactly one notification, one new-blocker for it.
+func TestNewestMinorWebhookReceiverGetsOneNewBlocker(t *testing.T) {
+	forEachStore(t, func(t *testing.T, st store.Store) {
+		var mu sync.Mutex
+		var got []notify.Notification
+		receiver := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			var n notify.Notification
+			if err := json.NewDecoder(r.Body).Decode(&n); err != nil {
+				t.Errorf("receiver: %v", err)
+			}
+			mu.Lock()
+			got = append(got, n)
+			mu.Unlock()
+		}))
+		defer receiver.Close()
+		k, err := kb.Load()
+		if err != nil {
+			t.Fatal(err)
+		}
+		srv, err := New(Config{Store: st, KB: k, Notifier: notify.NewGenericWebhook(receiver.URL), IngestToken: "tok"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		ts := httptest.NewServer(srv.Handler())
+		defer ts.Close()
+		ctx := context.Background()
+		for _, inv := range []inventory.Inventory{newestMinor(), newestMinor(ingressNginx)} {
+			pushInventory(t, ts.URL, "tok", inv)
+			srv.deliverOutbox(ctx)
+		}
+
+		mu.Lock()
+		defer mu.Unlock()
+		if len(got) != 1 || len(got[0].Changes) != 1 {
+			t.Fatalf("receiver logged %+v, want one notification with one change", got)
+		}
+		c := got[0].Changes[0]
+		if c.Kind != notify.KindNewBlocker || c.Key != "eol-addon/ingress-nginx" || !slices.Equal(c.Targets, []string{"1.38"}) {
+			t.Fatalf("change = %+v, want new-blocker eol-addon/ingress-nginx for 1.38", c)
+		}
+	})
 }
