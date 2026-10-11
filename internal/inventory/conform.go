@@ -36,6 +36,12 @@ import (
 //     an identifier, or whose strings are over the limit: the object is
 //     dropped and counted in objectsOmitted, and a namespace key that is not
 //     a namespace name is dropped from the entry's namespaces;
+//   - an API usage entry (apiUsage, apiAuthorshipUnknown, a release's
+//     manifestApis, a CRD's usage) with a negative count, objectsOmitted or
+//     namespace count, which no collector writes and which the engine would
+//     read as nothing found (a Helm release's) or as "-5 objects": the
+//     entry is dropped by dropElement, named in api-usage's Skipped (a
+//     release's whole, named in helm's, a CRD's whole);
 //   - an add-on install any of whose strings (id, version, chartVersion,
 //     source) is over MaxStringBytes: dropped, in one pass, and addons names
 //     SkippedPods, as an install that is gone may be what blocks an upgrade.
