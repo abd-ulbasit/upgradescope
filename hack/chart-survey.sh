@@ -25,7 +25,9 @@
 #      no install counts); deprecated packages, library charts and exact
 #      duplicates (the same name, version and appVersion from another
 #      repository; the more-starred copy is kept) are dropped and logged;
-#   2. fetch: helm pull at the latest version, helm show chart;
+#   2. fetch: helm pull at the latest stable version (a latest version that
+#      Artifact Hub flags as a prerelease, or that has a semver prerelease
+#      suffix, gives way to the newest stable one), helm show chart;
 #   3. render: helm template at default values with --kube-version
 #      <target>.0, and again at the minor before;
 #   4. scan: upgradescope scan --files of each render, at its own minor; a
@@ -70,11 +72,20 @@ cmd_select() {
     jq -c --argjson p "$p" '{pkg: $p, detail: .}' "$details/$repo/$name.json" >>"$tmp"
   done < <(jq -c '.packages[]' "$@")
   jq -s --argjson n "$n" '
+    # A version is a prerelease when Artifact Hub flags it or semver says so
+    # (a "-" suffix): Artifact Hub calls an unflagged 1.21.0-pre.3 the latest.
+    def pre: (.prerelease // false) or ((.version | sub("\\+.*$"; "")) | test("-"));
+    def semver: .version | ltrimstr("v") | sub("[-+].*$"; "") | split(".") | map(tonumber? // 0);
+    def stable($d): if ($d | {version, prerelease} | pre) | not then {version: $d.version, app_version: $d.app_version}
+      else ([($d.available_versions // [])[] | select(pre | not)] | max_by(semver)
+        // {version: $d.version, app_version: $d.app_version}) end;
     reduce .[] as $e ({selected: [], dropped: [], seen: {}};
       if (.selected | length) >= $n then . else
         $e.pkg as $p | $e.detail as $d
-        | ($d.version // $p.version) as $v
-        | ($d.app_version // $p.app_version // "") as $a
+        | ($d.version // $p.version) as $latest
+        | (if $d.version then stable($d) else {version: $p.version, app_version: $p.app_version} end) as $st
+        | $st.version as $v
+        | ($st.app_version // $p.app_version // "") as $a
         | "\($p.repository.name)/\($p.name)" as $id
         | "\($p.name)|\($v)|\($a)" as $dk
         | {name: $p.name, repository: $p.repository.name, stars: $p.stars} as $log
@@ -94,6 +105,7 @@ cmd_select() {
                 cncf: ($p.repository.cncf // false),
                 packageId: $p.package_id,
                 version: $v,
+                latestVersion: $latest,
                 appVersion: $a
               }]
           end
@@ -107,7 +119,7 @@ cmd_classify() {
   [ $# -eq 1 ] || usage
   if grep -qE 'incompatible with Kubernetes' "$1"; then
     echo kubeVersion
-  elif grep -qiE 'is required|are required|must be (set|provided|specified|defined)|missing propert|required value|please (set|provide|specify)' "$1"; then
+  elif grep -qiE 'is required|are required|must be (set|provided|specified|defined)|must (provide|set|specify|define)|missing propert|required value|please (set|provide|specify|define)|without a valid' "$1"; then
     echo required-value
   else
     echo other
@@ -246,7 +258,7 @@ cmd_aggregate() {
       "",
       "### Charts with a blocker at \($t)", "",
       "| Chart | Version | Category | Finding | Rendered file |", "|---|---|---|---|---|",
-      ($s.blockerList[] | row([.chart, .version, .category, .title, "`\(.file)`"])),
+      ($s.blockerList[] | row([.chart, .version, .category, .title, (if .file then "`\(.file)`" else "-" end)])),
       "",
       "### Charts whose `kubeVersion` excludes \($t)", "",
       "| Chart | Version | `kubeVersion` | Accepts \($p) | \($p) render scanned at \($t) |", "|---|---|---|---|---|",
@@ -298,7 +310,7 @@ render() { # tgz kube-version dest errfile
 scan() {
   if "$bin" scan --files "$1" --target "$2" --output json --fail-on never >"$3" 2>"$4"; then
     jq -c '{ok: true, error: null, verdict, score, toolVersion, kbVersion,
-      findings: [.findings[] | {category, severity, key, title,
+      findings: [.findings[] | {category, severity, key, title, detail,
         objects: [(.objects // [])[:3][] | {file, line, name, namespace}],
         objectsTotal: (((.objects // []) | length) + (.objectsOmitted // 0))}],
       notAssessed: [(.notAssessed // [])[] | .capability],

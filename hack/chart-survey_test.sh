@@ -55,6 +55,14 @@ detail r4 alpha 9.9.9 2.0.0 '' false ''
 detail r5 delta 4.1.0 4.1.0 application false '<1.37.0-0' # details are newer than search
 detail r6 eps 5.0.0 5.0.0 application false ''
 detail r7 zeta 6.0.0 6.0.0 application false ''
+# r4's latest is a prerelease (by semver, though Artifact Hub does not flag
+# it): the newest stable version is surveyed instead, with its appVersion.
+jq '.version = "10.0.0-rc.1" | .available_versions = [
+  {version: "10.0.0-rc.1", app_version: "3.0.0-rc.1", prerelease: false},
+  {version: "9.9.9", app_version: "2.0.0", prerelease: false},
+  {version: "9.10.0", app_version: "2.1.0", prerelease: false},
+  {version: "9.11.0", app_version: "2.2.0", prerelease: true},
+  {version: "9.2.0", app_version: "1.9.0", prerelease: false}]' "$work/details/r4/alpha.json" >"$work/x" && mv "$work/x" "$work/details/r4/alpha.json"
 
 SURVEY_DETAILS_DIR=$work/details hack/chart-survey.sh select 3 "$work/page-0.json" "$work/page-1.json" \
   >"$work/sel.json"
@@ -75,6 +83,10 @@ check "select drops an exact duplicate, naming the more-starred copy" \
   'any(.dropped[]; .repository == "r1-oci" and .reason == "duplicate of r1/alpha")' "$work/sel.json"
 check "select keeps a same-named chart that is not a duplicate" \
   'any(.selected[]; .repository == "r4")' "$work/sel.json"
+check "select skips a prerelease latest for the newest stable version" \
+  '.selected[1] | .version == "9.10.0" and .appVersion == "2.1.0" and .latestVersion == "10.0.0-rc.1"' "$work/sel.json"
+check "select records the latest version as the surveyed one when it is stable" \
+  '.selected[0] | .version == "1.0.0" and .latestVersion == "1.0.0"' "$work/sel.json"
 check "select logs only the drops above the cutoff" \
   '(.dropped | length) == 3 and all(.dropped[]; .name != "eps")' "$work/sel.json"
 
@@ -106,6 +118,14 @@ classify_is "a values schema missing property" required-value \
   "Error: values don't meet the specifications of the schema(s) in the following chart(s):
 x:
 - at '': missing property 'adminPassword'"
+classify_is "a fail() asking to define a value" required-value \
+  'Error: execution error at (loki/templates/write/statefulset-write.yaml:50:28): Please define loki.storage.bucketNames.chunks'
+classify_is "a fail() refusing to install without a value" required-value \
+  'Error: execution error at (aws-load-balancer-controller/templates/deployment.yaml:67:28): Chart cannot be installed without a valid clusterName!'
+classify_is "a schema type error is not a missing value" other \
+  "Error: values don't meet the specifications of the schema(s) in the following chart(s):
+external-dns:
+- at '/policy': got null, want string"
 classify_is "anything else" other 'Error: template: x/templates/a.yaml:3:9: executing "x" at <.Values.a.b>: nil pointer'
 
 # --- aggregate ---------------------------------------------------------------
@@ -139,6 +159,7 @@ nginx=$(f eol-addon blocker eol-addon/ingress-nginx 'Ingress NGINX Controller is
 nodata=$(f addon-no-data info addon-no-data/redis 'redis 7.0: no lifecycle data')
 crd=$(f crd-version blocker crd-version/unserved/x.io/v1alpha1/Thing 'x.io/v1alpha1 Thing is not served')
 inc=$(f chart-incompat blocker chart-incompat/istio 'istio 1.20 does not support Kubernetes 1.37')
+inc=$(jq -c 'del(.objects[]) | .objectsTotal = 0' <<<"$inc") # add-on findings list no object
 rec 01-r-c1 "$(mk 1 c1 "$(scan blocked "[$psp,$dep]")")"
 rec 02-r-c2 "$(mk 2 c2 "$(scan blocked "[$nginx,$nodata]")")"
 rec 03-r-c3 "$(mk 3 c3 "$(scan ready "[$dep]")")"
@@ -197,7 +218,8 @@ if grep -q '^5,"r","c5","1.5.0",.*"kubeVersion"' "$csv"; then ok "aggregate: res
   bad "aggregate: results.csv row 5: $(grep '^5,' "$csv")"
 fi
 for want in '| Removed API (blocker) | 1 |' '| `kubeVersion` excludes 1.37 | 1 |' '| None of the above | 1 |' \
-  '| c1 | 1.1.0 | removed-api | policy/v1beta1 PodSecurityPolicy removed in 1.25 (1 object) | `c1/templates/psp.yaml` |'; do
+  '| c1 | 1.1.0 | removed-api | policy/v1beta1 PodSecurityPolicy removed in 1.25 (1 object) | `c1/templates/psp.yaml` |' \
+  '| c8 | 1.8.0 | chart-incompat | istio 1.20 does not support Kubernetes 1.37 | - |'; do
   if grep -qF -- "$want" "$out/tables.md"; then ok "aggregate: tables.md has '$want'"; else
     bad "aggregate: tables.md lacks '$want'"
     sed 's/^/     /' "$out/tables.md" >&2
