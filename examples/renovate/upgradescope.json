@@ -7,6 +7,7 @@
       "matchDatasources": ["helm"],
       "matchPackageNames": [
         "argo-cd",
+        "aws-load-balancer-controller",
         "cert-manager",
         "cilium",
         "coredns",
@@ -25,6 +26,8 @@
         "kube-state-metrics",
         "kubernetes-dashboard",
         "kyverno",
+        "linkerd-control-plane",
+        "linkerd2",
         "metrics-server",
         "prometheus-operator",
         "promtail",
@@ -42,6 +45,7 @@
       "matchDatasources": ["helm"],
       "matchPackageNames": [
         "argo-cd",
+        "aws-load-balancer-controller",
         "cert-manager",
         "cilium",
         "coredns",
@@ -60,6 +64,8 @@
         "kube-state-metrics",
         "kubernetes-dashboard",
         "kyverno",
+        "linkerd-control-plane",
+        "linkerd2",
         "metrics-server",
         "prometheus-operator",
         "promtail",

@@ -4,8 +4,13 @@
 # product upstream retired as a whole.
 #
 # No Kubernetes range is recorded: Traefik publishes no Kubernetes
-# compatibility matrix (checked 2026-10-10: the deprecation/releases page and
-# the Kubernetes provider pages give none).
+# compatibility matrix. Checked 2026-10-12: neither the releases page
+# (https://doc.traefik.io/traefik/deprecation/releases/, a table of
+# Traefik release dates and support windows) nor the Kubernetes getting-started
+# page (https://doc.traefik.io/traefik/getting-started/kubernetes/) states a
+# Kubernetes version for any Traefik release. The Helm chart declares
+# kubeVersion ">=1.25.0-0" in its Chart.yaml, but that constrains the chart,
+# not the Traefik versions it can deploy, so it is not a range for the app.
 schema_version: 2
 id: traefik
 display_name: Traefik Proxy

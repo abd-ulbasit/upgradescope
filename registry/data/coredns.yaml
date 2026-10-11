@@ -1,9 +1,14 @@
 # registry/data/coredns.yaml
-# No compat rows. The cited CoreDNS-k8s_version.md (read on 2026-10-10) lists the
-# CoreDNS version kubeadm installs with each Kubernetes release and says it
-# "should not be read as a recommendation for what version of CoreDNS to
-# currently use": a default, not a support range. CoreDNS defines no support
-# window for its release lines either, so there are no cycles.
+# No compat rows. The cited CoreDNS-k8s_version.md (read on 2026-10-12, at
+# https://github.com/coredns/deployment/blob/c51361611fcd43c3c23b9a402f30b882c4d736bd/kubernetes/CoreDNS-k8s_version.md,
+# newest row v1.33 with CoreDNS v1.12.0) lists the CoreDNS version kubeadm
+# installs with each Kubernetes release and says it "should not be read as a
+# recommendation for what version of CoreDNS to currently use": a default, not
+# a support range. The Kubernetes docs page
+# https://kubernetes.io/docs/tasks/administer-cluster/coredns/ (same day) states
+# no CoreDNS version per Kubernetes release either: it points to that table and
+# says only that the Kubernetes server must be v1.9 or later. CoreDNS defines
+# no support window for its release lines either, so there are no cycles.
 schema_version: 2
 id: coredns
 display_name: CoreDNS
