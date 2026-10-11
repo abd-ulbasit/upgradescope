@@ -401,8 +401,10 @@ CRDs merged into it, and the verdict counts only what the
 manifests introduce (findings tagged `source: manifest`); findings
 the cluster already has are tagged `source: cluster`. A removed or
 deprecated API a posted object uses, an add-on the manifests
-deploy, and a custom resource they write at a version the CRDs do
-not serve are always the manifests'.
+deploy, an in-tree volume plugin a posted pod template, Pod or
+PersistentVolume names (also when the cluster already has pods or
+volumes on it), and a custom resource they write at a version the CRDs
+do not serve are always the manifests'.
 
 With a team-scoped credential, `cluster` is judged as the scope's
 share of it only (its teams' namespaces, and what describes the

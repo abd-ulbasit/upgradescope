@@ -226,6 +226,11 @@ func (s *Server) evaluateGate(w http.ResponseWriter, r *http.Request, g gateRequ
 			u.Objects[i].File = g.artifact
 		}
 	}
+	for _, u := range manifests.VolumePlugins { // the same for the in-tree volume plugins the stream names (#365)
+		for i := range u.Objects {
+			u.Objects[i].File = g.artifact
+		}
+	}
 
 	target := g.target
 	sc := scopeOf(r)

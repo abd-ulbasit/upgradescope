@@ -270,11 +270,15 @@ manifests are judged inside the cluster's latest stored inventory: its
 version, nodes, add-ons, CRDs and team labels. Only what the manifests introduce
 counts toward the verdict, so a cluster's existing EOL add-on does not fail
 every pull request. The manifests' API usage, add-ons and CRDs are merged
-into the cluster's: an EOL add-on the manifests deploy, or a custom
-resource at a version the cluster's CRD (or a CRD in the manifests) does not
-serve, is the manifests' finding, also when the cluster already has the
-same. One case is not seen: the cluster lists its custom resources only at
-versions its own CRDs deprecate or do not serve, so live custom resources
+into the cluster's: an EOL add-on the manifests deploy, an in-tree volume
+plugin a pod template, Pod or PersistentVolume in them names (an `rbd`
+PersistentVolume at a 1.31 target, say), or a custom resource at a version
+the cluster's CRD (or a CRD in the manifests) does not serve, is the
+manifests' finding, also when the cluster already has the same. A volume
+plugin finding stays whole: it lists the cluster's objects beside the pull
+request's, and `clusterVerdict` stays blocked either way, but a pull request
+that adds none passes. One case is not seen: the cluster lists its custom
+resources only at versions its own CRDs deprecate or do not serve, so live custom resources
 at a version that a posted CRD newly deprecates or stops serving are not
 judged.
 
