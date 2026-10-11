@@ -253,7 +253,7 @@ func TestGateVolumePluginSARIFLocatedAtPath(t *testing.T) {
 	defer ts.Close()
 	resp, raw := postGate(t, ts, "?target=1.31&path=deploy/pv.yaml&format=sarif", "", rbdPV, "application/x-yaml")
 	sariftest.AssertGitHubAcceptable(t, raw)
-	if got := sarifResults(t, raw)["volume-plugin/rbd"]; resp.StatusCode != http.StatusUnprocessableEntity || len(got) != 1 {
-		t.Errorf("sarif: %d, rbd results %v; want 422 and one at the PR's file\n%s", resp.StatusCode, got, raw)
+	if got := sarifResults(t, raw)["volume-plugin/rbd"]; resp.StatusCode != http.StatusUnprocessableEntity || got != 1 {
+		t.Errorf("sarif: %d, %d rbd results; want 422 and one at the PR's file\n%s", resp.StatusCode, got, raw)
 	}
 }
