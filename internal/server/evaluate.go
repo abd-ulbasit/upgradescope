@@ -281,7 +281,7 @@ func sameResult(row store.Evaluation, stored []findingHead, rep engine.Report) b
 func findingSignature(h findingHead) string { return string(h.Severity) + "\x00" + h.key() }
 
 // baseline is a notification baseline the caller already holds: the
-// heads of the target's latest decided evaluation (storedHeads.baseline),
+// heads of the target's latest baseline evaluation (storedHeads.baseline),
 // when known.
 type baseline struct {
 	findings []findingHead

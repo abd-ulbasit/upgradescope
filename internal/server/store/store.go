@@ -74,8 +74,9 @@ type Store interface {
 	// then snapshots received before it that no evaluation refers to any
 	// more, except each cluster's latest snapshot and its evaluations (the
 	// cluster's current state, however old) and each (cluster, target)'s
-	// newest decided evaluation (LatestKnownEvaluation: the notification
-	// baseline, of the target itself or of an upgrade), with its snapshot.
+	// newest notification baseline (LatestKnownEvaluation: decided, or
+	// marked Baseline; of the target itself or of an upgrade), with its
+	// snapshot.
 	// baselines limits that last exception to the targets still in use
 	// (PruneBaselines); nil spares every baseline. Tokens, clusters and the
 	// outbox are not touched.
@@ -457,7 +458,8 @@ var ErrClusterChanged = errors.New("store: the cluster was renamed or deleted wh
 var ErrClusterNameTaken = errors.New("store: cluster name is taken")
 
 // PruneBaselines says, per cluster id, which targets' notification
-// baselines (the newest decided evaluation of a cluster and target) a
+// baselines (the newest decided or Baseline evaluation of a cluster and
+// target) a
 // Prune spares however old they are: a cluster's entry lists the targets
 // its server still evaluates or may look back to for an upgrade; the
 // baselines of its other targets age out like any evaluation. A cluster
@@ -545,7 +547,7 @@ type Expectation struct {
 	// stored snapshot a re-evaluation judges is SnapshotID.
 	LatestSnapshotID int64
 	// Baselines maps every target whose baseline the pass read to the id
-	// of that target's newest decided evaluation
+	// of that target's newest baseline, decided or marked Baseline
 	// (LatestKnownEvaluation), 0 for none.
 	Baselines map[string]int64
 }
@@ -680,7 +682,8 @@ func recheckPush(ctx context.Context, tx *sql.Tx, b EvaluationBatch, tokenQuery 
 // the commit's transaction after the writer's lock (SQLite's one write
 // lock, Postgres' cluster row): latestID is the cluster's latest snapshot
 // (0 for none), and knownIDQuery selects the id of a (cluster_id, target)'s
-// newest decided evaluation. Nothing is checked without b.Expect.
+// newest baseline (decided or Baseline). Nothing is checked without
+// b.Expect.
 func checkExpectation(ctx context.Context, tx *sql.Tx, b EvaluationBatch, latestID int64, knownIDQuery string) error {
 	if b.Expect == nil {
 		return nil

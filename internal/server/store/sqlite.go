@@ -251,7 +251,7 @@ func (s *SQLite) RenameCluster(ctx context.Context, name, newName string) error 
 // Prune deletes evaluations created before cutoff, then the snapshots
 // received before it that no evaluation refers to any more, sparing each
 // cluster's latest snapshot and its evaluations and each (cluster,
-// target)'s newest decided evaluation, then those baselines baselines does
+// target)'s newest baseline (decided or Baseline), then those baselines baselines does
 // not spare, in bounded batches of one transaction each (prune.go). Stored
 // times are fixed-width UTC strings, so string order is instant order.
 //

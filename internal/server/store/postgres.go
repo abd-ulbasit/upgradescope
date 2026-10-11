@@ -234,7 +234,7 @@ func (p *Postgres) RenameCluster(ctx context.Context, name, newName string) erro
 // Prune deletes evaluations created before cutoff, then the snapshots
 // received before it that no evaluation refers to any more, sparing each
 // cluster's latest snapshot and its evaluations and each (cluster,
-// target)'s newest decided evaluation (the notification baseline), then
+// target)'s newest notification baseline (decided or Baseline), then
 // those baselines baselines does not spare, in bounded batches of one
 // transaction each (prune.go). A snapshot that becomes non-latest between
 // the statements keeps its evaluations, so it stays until the next run.
