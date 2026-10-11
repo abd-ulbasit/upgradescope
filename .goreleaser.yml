@@ -327,6 +327,14 @@ release:
   replace_existing_artifacts: true
   # The contracts listed under checksum: (#60).
   extra_files: *contracts
+  # The notes below list only the commits whose subject says `type!:` under
+  # Breaking changes (a BREAKING CHANGE footer alone is not seen), so they
+  # open with a link to CHANGELOG.md at the tag, the reviewed record (#388).
+  # The file at the tag, not a #heading anchor: the anchor would need the
+  # release date, which the template does not know. hack/release-footer_test.sh
+  # renders this for a stable tag and a pre-release.
+  header: |
+    The [CHANGELOG](https://github.com/abd-ulbasit/upgradescope/blob/{{ .Tag }}/CHANGELOG.md) is the reviewed record and lists every breaking change; the Breaking changes group below lists only the commits marked `type!:`.
   # The Homebrew line is stable-only: the tap pulls stable releases on a
   # schedule and skips pre-releases (hack/release-footer_test.sh renders
   # this for both). It must stay the last key of the file for that test.
