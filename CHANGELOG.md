@@ -13,6 +13,12 @@ only through a new release.
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-10-11
+
+A patch release after v0.2.0: the agent delivers its first snapshot within
+about a minute on a combined install, and the GitHub Action refuses a
+`latest` that moved back to a release from before provenance.
+
 ### Added
 
 - `make claims-server` (`hack/claims-server.sh`), run by CI's repo-checks
@@ -2551,7 +2557,8 @@ First release.
   deprecated-callers signal is then reported as not assessed.
 - `kind: List` items are not expanded in `--files` mode.
 
-[Unreleased]: https://github.com/abd-ulbasit/upgradescope/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/abd-ulbasit/upgradescope/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/abd-ulbasit/upgradescope/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/abd-ulbasit/upgradescope/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/abd-ulbasit/upgradescope/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/abd-ulbasit/upgradescope/releases/tag/v0.1.0

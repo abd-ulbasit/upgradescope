@@ -114,7 +114,7 @@ Quality reports (`--output junit|gitlab-codequality`): see
 **Run it in the cluster**:
 
 ```sh
-helm install upgradescope oci://ghcr.io/abd-ulbasit/charts/upgradescope --version 0.2.0 \
+helm install upgradescope oci://ghcr.io/abd-ulbasit/charts/upgradescope --version 0.2.1 \
   -n upgradescope --create-namespace
 kubectl get ucr        # NAME  TARGET  SCORE  READY  BLOCKERS  LASTEVALUATED  AGE
 ```
