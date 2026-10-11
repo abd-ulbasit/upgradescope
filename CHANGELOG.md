@@ -13,6 +13,17 @@ only through a new release.
 
 ## [Unreleased]
 
+### Changed
+
+- The GitHub release notes open with a link to `CHANGELOG.md` at the release
+  tag. The CHANGELOG is the reviewed record and lists every breaking change;
+  the notes' Breaking changes group lists only commits marked `type!:`
+  (#388).
+- The `pr-lint` check (`hack/check-breaking.sh`) also refuses a PR title or
+  commit subject whose type is uppercase or mixed-case (`Feat:`, `Chore!:`,
+  `FIX(scope):`), with or without a `BREAKING CHANGE:` footer, because the
+  release notes group lowercase types only (#388).
+
 ## [0.2.1] - 2026-10-11
 
 A patch release after v0.2.0: the agent delivers its first snapshot within
