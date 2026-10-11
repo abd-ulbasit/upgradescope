@@ -240,9 +240,9 @@ func lookbackTargets(def inventory.Version) []inventory.Version {
 }
 
 // upgradeBaseline is the notification baseline of a default target with
-// no decided evaluation yet, because the cluster upgraded (1.35 → 1.36
-// makes the default target 1.37): the latest decided evaluation of the
-// nearest lower target within upgradeLookback minors, which was the
+// no baseline of its own yet (store.LatestKnownEvaluation), because the
+// cluster upgraded (1.35 → 1.36 makes the default target 1.37): the latest
+// baseline of the nearest lower target within upgradeLookback minors, which was the
 // default target before the upgrade. So a blocker the new target adds
 // (an API removed in 1.37) is announced, and blockers the cluster had
 // already been told about at the old target are not announced again.
@@ -256,7 +256,7 @@ func lookbackTargets(def inventory.Version) []inventory.Version {
 // target added to --targets is a new question, and announcing it would
 // page every cluster in the fleet on the restart. ErrNotFound when there
 // is no baseline. Each lower target it looks up is recorded in read, with
-// the id of its newest decided evaluation (0 for none).
+// the id of its newest baseline (0 for none).
 func (s *Server) upgradeBaseline(ctx context.Context, clusterID int64, cur engine.Report, read map[string]int64) (store.Evaluation, error) {
 	server, err := inventory.ParseVersion(cur.ServerVersion)
 	if err != nil || server.Next() != cur.Target {
@@ -305,7 +305,7 @@ type targetDelta struct {
 	carried []findingHead
 	// baselines are the baselines deltaFor read from the store: each
 	// target it looked up, the upgrade baseline's lower ones included, to
-	// the id of its newest decided evaluation (0 for none). The commit
+	// the id of its newest baseline (0 for none). The commit
 	// checks them (store.Expectation), so the delta is never committed
 	// against a baseline another writer replaced meanwhile.
 	baselines map[string]int64
