@@ -465,7 +465,8 @@ table.
   `feat:`, `fix:`, `perf:`, `refactor:`, `docs:`, `test:`, `ci:`, `build:`,
   `style:`, `chore:`, with an optional scope such as `fix(agent):` or
   `feat(registry):`. The type is lowercase: GoReleaser matches it
-  case-sensitively, so `Feat:` lands under Other changes.
+  case-sensitively, so `Feat:` would land under Other changes; the `pr-lint`
+  check refuses a title or commit whose type is uppercase or mixed-case.
 - Release notes are generated from the subjects. `feat` goes under Features,
   `fix` under Bug fixes, `perf` under Performance, and `refactor` (or any
   other type) under Other changes. `docs`, `chore`, `test`, `ci`, `build`
