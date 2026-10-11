@@ -12,6 +12,10 @@
 #                      of each non-merge commit in it, run from inside the repo
 # A footer is a line that starts with `BREAKING CHANGE:` or `BREAKING-CHANGE:`
 # (Conventional Commits). The subject must then be `type!:` or `type(scope)!:`.
+# Separately, with or without a footer, a subject whose type is uppercase or
+# mixed-case (`Feat:`, `Chore!:`, `FIX(scope):`) is refused: the release-notes
+# groups match lowercase types only, so it would land under Other changes
+# (#388). A subject with no type (`Update the docs`) is not judged.
 # Offline; hack/check-breaking_test.sh drives it.
 set -euo pipefail
 
@@ -26,17 +30,26 @@ fi
 fail=0
 # check <what> <subject> <body>
 check() {
-  grep -Eq '^BREAKING[ -]CHANGE:' < <(tr -d '\r' <<<"$3") || return 0
-  # The same pattern as the Breaking changes group in .goreleaser.yml. Its type
-  # is lowercase, so `Feat!:` would pass a looser check and still land under
-  # Other changes.
-  grep -Eq '^[a-z]+(\([^)]+\))?!:' <<<"$2" && return 0
-  local has="has no '!'" hint=""
-  if grep -Eq '^[A-Za-z]+(\([^)]+\))?!:' <<<"$2"; then
-    has="has '!' but an uppercase type"
-    hint=" The type must be lowercase: release notes match lowercase types only."
+  local what=$1 subject=$2 hasfooter=0
+  grep -Eq '^BREAKING[ -]CHANGE:' < <(tr -d '\r' <<<"$3") && hasfooter=1
+  # The type is the word before the optional (scope), optional ! and the colon.
+  # A type with an uppercase letter anywhere (Feat, FIX, FeAt) never reaches
+  # a release-notes group, whose patterns are in .goreleaser.yml.
+  if grep -Eq '^[A-Za-z]*[A-Z][A-Za-z]*(\([^)]+\))?!?:' <<<"$subject"; then
+    local why="has an uppercase type"
+    if [ "$hasfooter" = 1 ] && ! grep -Eq '^[A-Za-z]+(\([^)]+\))?!:' <<<"$subject"; then
+      why="$why and no '!' but its body has a BREAKING CHANGE footer (write it as type!:)"
+    elif [ "$hasfooter" = 1 ]; then
+      why="$why but its body has a BREAKING CHANGE footer"
+    fi
+    echo "::error::$what '$subject' $why. The type must be lowercase: release notes match lowercase types only, so this lands under Other changes. Write feat:, fix(scope):, or feat!: for a breaking change." >&2
+    fail=1
+    return 0
   fi
-  echo "::error::$1 '$2' $has but its body has a BREAKING CHANGE footer. Release notes read only the subject: write it as type!: (feat!:, fix(scope)!:) so the change lands under Breaking changes.$hint" >&2
+  [ "$hasfooter" = 1 ] || return 0
+  # The same pattern as the Breaking changes group in .goreleaser.yml.
+  grep -Eq '^[a-z]+(\([^)]+\))?!:' <<<"$subject" && return 0
+  echo "::error::$what '$subject' has no '!' but its body has a BREAKING CHANGE footer. Release notes read only the subject: write it as type!: (feat!:, fix(scope)!:) so the change lands under Breaking changes." >&2
   fail=1
 }
 
@@ -56,4 +69,4 @@ if [ -n "$range" ]; then
 fi
 
 [ "$fail" = 0 ] || exit 1
-echo "ok: every breaking change is marked with '!' in its subject"
+echo "ok: every breaking change is marked with '!' in its subject, and no type is uppercase"

@@ -3,9 +3,10 @@
 # renders for a stable tag and for a pre-release, and the Homebrew line is
 # only on the stable one. The tap (abd-ulbasit/homebrew-tap) pulls stable
 # releases only, so a pre-release's notes cannot offer `brew install` (#198).
-# The footer is a Go text/template over {{ .Version }} and {{ .Prerelease }}
-# (GoReleaser fills in the rest at publish), so it is rendered here with
-# text/template and those two fields. Needs Go. Offline.
+# The header (#388) links the tag's CHANGELOG.md. Header and footer are Go
+# text/templates over {{ .Tag }}, {{ .Version }} and {{ .Prerelease }}
+# (GoReleaser fills in the rest at publish), so they are rendered here with
+# text/template and those three fields. Needs Go. Offline.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -17,6 +18,10 @@ trap 'rm -rf "$work"' EXIT
 # The footer is the last key of the file: from "  footer: |" on, 4 spaces in.
 awk '/^  footer: \|/ { on = 1; next } on { sub(/^    /, ""); print }' .goreleaser.yml >"$work/footer.tmpl"
 [ -s "$work/footer.tmpl" ] || { echo "FAIL no release footer in .goreleaser.yml" >&2; exit 1; }
+# The header is the block under "  header: |" in the release: section, up to
+# the next key (a line indented 2 spaces that is not a continuation).
+awk '/^  header: \|/ { on = 1; next } on && /^  [^ ]/ { exit } on { sub(/^    /, ""); print }' .goreleaser.yml >"$work/header.tmpl"
+[ -s "$work/header.tmpl" ] || { echo "FAIL no release header in .goreleaser.yml" >&2; exit 1; }
 
 cat >"$work/render.go" <<'EOF'
 package main
@@ -28,21 +33,21 @@ import (
 
 func main() {
 	t := template.Must(template.ParseFiles(os.Args[1]))
-	if err := t.Execute(os.Stdout, map[string]string{"Version": os.Args[2], "Prerelease": os.Args[3]}); err != nil {
+	if err := t.Execute(os.Stdout, map[string]string{"Tag": "v" + os.Args[2], "Version": os.Args[2], "Prerelease": os.Args[3]}); err != nil {
 		panic(err)
 	}
 }
 EOF
 go build -o "$work/render" "$work/render.go"
 
-check() { # check <name> <version> <prerelease> <want: has|lacks> <substring>
-  local name=$1 version=$2 pre=$3 want=$4 needle=$5 got=lacks
-  "$work/render" "$work/footer.tmpl" "$version" "$pre" >"$work/out"
+check() { # check <name> <version> <prerelease> <want: has|lacks> <substring> [header]
+  local name=$1 version=$2 pre=$3 want=$4 needle=$5 part=${6:-footer} got=lacks
+  "$work/render" "$work/$part.tmpl" "$version" "$pre" >"$work/out"
   [[ "$(<"$work/out")" == *"$needle"* ]] && got=has
   if [ "$got" = "$want" ]; then
     echo "ok   $name" | tee -a "$work/results"
   else
-    echo "FAIL $name: footer $got '$needle', want $want; footer:" >&2
+    echo "FAIL $name: $part $got '$needle', want $want; $part:" >&2
     sed 's/^/     /' "$work/out" >&2
     echo "FAIL $name" >>"$work/results"
   fi
@@ -67,6 +72,16 @@ for v in "0.2.0 ''" "0.2.0-rc.2 rc.2"; do
   check "the footer ($1) says verify-blob works on older cosign" "$1" "$pre" has 'verify-blob` of `checksums.txt` works from cosign 2.4.3'
 done
 check "no template action is left unrendered" 0.2.0 "" lacks '{{'
+
+# The header (#388): the notes list only the type!: commits under Breaking
+# changes, so they link the CHANGELOG at the tag, the reviewed record.
+for v in "0.2.1 ''" "0.3.0-rc.1 rc.1"; do
+  set -- $v
+  pre=${2:-}; pre=${pre//\'/}
+  check "the header ($1) links CHANGELOG.md at the tag" "$1" "$pre" has "(https://github.com/abd-ulbasit/upgradescope/blob/v$1/CHANGELOG.md)" header
+  check "the header ($1) says the CHANGELOG lists every breaking change" "$1" "$pre" has 'reviewed record and lists every breaking change' header
+  check "the header ($1) leaves no template action unrendered" "$1" "$pre" lacks '{{' header
+done
 
 pass=$(grep -c '^ok' "$work/results" || true)
 fail=$(grep -c '^FAIL' "$work/results" || true)
