@@ -13,11 +13,9 @@ publishes a report its CI shows natively:
 | Azure Pipelines | `ci/azure/azure-pipelines.yml` | JUnit, through `PublishTestResults@2` |
 
 `--output junit` and `--output gitlab-codequality` are new in v0.2.0, and
-the templates pin `VERSION=v0.2.0`. Until v0.2.0 is on the
-[releases page](https://github.com/abd-ulbasit/upgradescope/releases),
-that download fails with a 404 and no earlier release has these formats;
-in the meantime, build from `main` with
-`go install github.com/abd-ulbasit/upgradescope/cmd/upgradescope@main`.
+the templates pin `VERSION=v0.2.0`, from the
+[releases page](https://github.com/abd-ulbasit/upgradescope/releases).
+No earlier release has these formats.
 
 ## Install a pinned release
 

@@ -491,7 +491,7 @@ cannot write the step summary, so a warning replaces it.
   verified is the build: which workflow, tag and kind of runner produced
   the archive. Not that the release's code is free of bugs.
 - **Without provenance.** Two releases predate provenance, v0.1.0 and v0.1.1
-  (GitHub's latest until v0.2.0 ships): `gh attestation verify` finds no
+  (the only two stable releases before v0.2.0): `gh attestation verify` finds no
   attestation for their archives. They are named, not found by a version
   comparison, so every other tag is verified, a prerelease suffix such as
   `-beta` included, and one without provenance fails the step. v0.2.0-rc.2
@@ -507,8 +507,7 @@ cannot write the step summary, so a warning replaces it.
   downloaded. Such a latest means someone moved GitHub's latest back to a
   release nothing can verify (what anything that can edit the releases
   would do to install a binary of its choosing), or that the action is at
-  a release candidate, which GitHub's latest skips, before a stable
-  release from v0.2.0 on is latest.
+  a release candidate, which GitHub's latest skips.
   Set `version` to the action's release, or `verify-provenance: false` to
   install it on the checksum alone. At a commit SHA, a branch or `@v0`,
   `latest` is not compared with the action's release.

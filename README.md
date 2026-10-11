@@ -36,7 +36,7 @@ every public claim, with the test that proves it: [claims ledger](docs/claims.md
 | Go | `go install github.com/abd-ulbasit/upgradescope/cmd/upgradescope@latest` |
 | Release archives | [Releases](https://github.com/abd-ulbasit/upgradescope/releases): linux, darwin (and windows from v0.2.0) on amd64/arm64, with `checksums.txt`, signed with cosign from v0.2.0 |
 | Container image (from v0.2.0) | `ghcr.io/abd-ulbasit/upgradescope:<version>`, signed |
-| Helm chart (from v0.2.0) | `oci://ghcr.io/abd-ulbasit/charts/upgradescope`, signed; before that, `deploy/chart` from a clone |
+| Helm chart (from v0.2.0) | `oci://ghcr.io/abd-ulbasit/charts/upgradescope`, signed |
 
 Verifying a download:
 

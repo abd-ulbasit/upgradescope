@@ -1391,7 +1391,7 @@ expect "an injection payload in path is scanned as a path" 0 "### upgradescope: 
 [ ! -e "$work/pwned" ] && [ ! -e "$work/pwned2" ] && ! grep -qx INJECTED-COMMAND-RAN "$work/out" &&
   ok "the injection payload did not run" || fail "the injection payload did not run" "$work/out"
 
-# A v0.1.x release (what version: latest resolves to until v0.2.0 ships):
+# A v0.1.x release (what version: latest resolves to if someone moves GitHub's latest back):
 # no --output markdown, and JSON in the v0.1.1 Report shape, without
 # verdict, filesBase or finding objects. The gate and every output still
 # work. STUB_REPORT replaces the jq filter that reshapes the JSON.

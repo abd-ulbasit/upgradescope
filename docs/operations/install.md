@@ -19,7 +19,7 @@ release workflow, with the dashboard and the knowledge base embedded.
 | krew | `kubectl krew install upgradescope` | once the plugin is in krew-index |
 | Go | `go install github.com/abd-ulbasit/upgradescope/cmd/upgradescope@<version>` | any |
 | Container image | `ghcr.io/abd-ulbasit/upgradescope:<version>` (linux/amd64, linux/arm64) | v0.2.0, signed |
-| Helm chart | `oci://ghcr.io/abd-ulbasit/charts/upgradescope` | v0.2.0, signed; before that, from a clone |
+| Helm chart | `oci://ghcr.io/abd-ulbasit/charts/upgradescope` | v0.2.0, signed |
 
 ## Release archives
 
@@ -133,11 +133,11 @@ helm install upgradescope oci://ghcr.io/abd-ulbasit/charts/upgradescope \
 The published chart pins the image of its release by digest. It is signed
 with cosign (`cosign verify ghcr.io/abd-ulbasit/charts/upgradescope:0.2.0`
 with the flags above, and the same minimum: **cosign 3.x, or 2.6.3 or
-later**; older versions fail with `no signatures found`). Before v0.2.0 is published, install from a clone of
-the repository: `helm install upgradescope deploy/chart ...`, with
-`image.repository` and `image.tag` set to an image built from the clone
-(`make docker-build`) when you run unreleased changes: a clone's chart
-defaults to the image of the release it was cut for.
+later**; older versions fail with `no signatures found`). To run unreleased
+changes, install from a clone of the repository instead:
+`helm install upgradescope deploy/chart ...`, with `image.repository` and
+`image.tag` set to an image built from the clone (`make docker-build`): a
+clone's chart defaults to the image of the release it was cut for.
 
 Upgrade it with `helm upgrade --reset-then-reuse-values` (Helm 3.14 or
 later), never `--reuse-values`, which keeps the old chart's defaults, the
