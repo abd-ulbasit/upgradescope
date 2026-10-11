@@ -23,6 +23,12 @@ only through a new release.
   commit subject whose type is uppercase or mixed-case (`Feat:`, `Chore!:`,
   `FIX(scope):`), with or without a `BREAKING CHANGE:` footer, because the
   release notes group lowercase types only (#388).
+- `main` requires the `breaking-change` check as well as `ci-ok`, so a PR
+  with a `BREAKING CHANGE:` footer but no `type!:` subject cannot merge, and
+  every release tag (`vX.Y.Z[-pre]`) is protected from deletion and moves
+  while a floating major tag such as `v1` stays movable. CI checks that the
+  rulesets applied on GitHub still equal `.github/rulesets/`
+  (`hack/rulesets-live.sh`) (#388).
 
 ## [0.2.1] - 2026-10-11
 
