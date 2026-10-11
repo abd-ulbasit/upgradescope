@@ -435,6 +435,10 @@ func TestConformRepairsNegativeUsageCounts(t *testing.T) {
 			}
 			if st := inv.Capabilities[CapCRDs]; !st.Partial || !strings.Contains(st.Reason, "dropped for a value Admit refuses") {
 				t.Errorf("crds capability = %+v, want partial with the reason", st)
+			} else if len(st.Skipped) != 0 {
+				// crds' Skipped names CRDs whose versions could not be checked (the
+				// engine reads it so); a dropped CRD is counted in the reason only.
+				t.Errorf("crds skipped = %q, want none (a dropped CRD is not named there)", st.Skipped)
 			}
 			if err := inv.Admit(); err != nil {
 				t.Errorf("Admit after Conform = %v", err)

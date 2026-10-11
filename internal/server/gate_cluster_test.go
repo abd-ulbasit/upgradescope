@@ -237,10 +237,11 @@ func TestGateClusterNumericName(t *testing.T) {
 // a saturating add, so a cluster row at math.MaxInt never wraps negative
 // (the engine skips some rows with Count <= 0, which would drop the cluster's
 // own finding from the proposed state; ingest refuses a count that is
-// negative to begin with, #373, so wrapping is the only way to get one). A
-// table over API usage and volume plugins: the Count, a namespace's count and ObjectsOmitted at MaxInt
-// stay MaxInt, and the engine at a target where the API or plugin is
-// removed still reports the cluster's blocker.
+// negative to begin with, #373, so for a row stored after that, wrapping is
+// the way to get one). A table over API usage and volume plugins: the Count,
+// a namespace's count and ObjectsOmitted at MaxInt stay MaxInt, and the
+// engine at a target where the API or plugin is removed still reports the
+// cluster's blocker.
 func TestGateCountsSaturate(t *testing.T) {
 	const maxInt = math.MaxInt
 	base := func() inventory.Inventory {
