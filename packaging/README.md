@@ -84,13 +84,17 @@ the first submission is a manual pull request:
 
 ### Artifact Hub
 
-1. Sign in at [artifacthub.io](https://artifacthub.io). Under Control Panel
-   → Repositories → Add, choose kind *Helm charts* and URL
-   `oci://ghcr.io/abd-ulbasit/charts/upgradescope`.
-2. Copy the repository ID that Artifact Hub shows into `repositoryID` in
-   [`artifacthub/artifacthub-repo.yml`](artifacthub/artifacthub-repo.yml)
-   and commit it. The next release pushes it to the `artifacthub.io` tag,
-   and Artifact Hub then shows the repository as a Verified Publisher.
+Done on 2026-10-11. The repository is registered as `upgradescope` (kind
+*Helm charts*, URL `oci://ghcr.io/abd-ulbasit/charts/upgradescope`), and its
+ID is the `repositoryID` in
+[`artifacthub/artifacthub-repo.yml`](artifacthub/artifacthub-repo.yml).
+Every release pushes that file to the chart's `artifacthub.io` tag, and with
+the ID in it Artifact Hub shows the repository as a Verified Publisher. To
+register again, for example under a new owner: sign in at
+[artifacthub.io](https://artifacthub.io), add the repository under Control
+Panel → Repositories → Add, and replace the ID in that file. Artifact Hub's
+API returns it without signing in:
+`curl -s 'https://artifacthub.io/api/v1/repositories/search?name=upgradescope' | jq -r '.[].repository_id'`.
 
 The chart's `artifacthub.io/*` annotations (`deploy/chart/Chart.yaml`) supply
 the license, links, CRD, images, prerelease flag and per-release changes.
