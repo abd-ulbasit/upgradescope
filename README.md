@@ -217,6 +217,8 @@ scheduler skew are then not checked; kubelets and kube-proxy still are).
 
 It reads with `get` and `list`, never `watch`, and writes only its own
 `ClusterReadiness` object, its status and (by default) that object's CRD.
+`create` on `clusterreadinesses` cannot be limited by name, so it can create a
+ClusterReadiness under any name; it never deletes one.
 For in-tree volume plugins it lists `persistentvolumes` and
 `storageclasses`, one paged list of each per collection.
 To read Helm releases it needs `get`/`list` on Secrets and ConfigMaps

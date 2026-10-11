@@ -115,7 +115,7 @@ fi
 # repository cannot find (DS-16 once named docs/superpowers/). Paths with a
 # glob or a placeholder are patterns, not files, and are skipped.
 untracked_paths() {
-  grep -oE '`(docs|hack|internal|deploy|\.github|cmd|web|registry|action|api|packaging|tools|examples|ci)/[^` ]*`' "$1" |
+  grep -oE '`(docs|hack|internal|collect|engine|server|deploy|\.github|cmd|web|registry|action|api|packaging|tools|examples|ci)/[^` ]*`' "$1" |
     tr -d '`' | sort -u | while IFS= read -r p; do
       case "$p" in *'*'* | *'<'* | *'{'*) continue ;; esac
       [ -n "$(git ls-files -- "${p%/}")" ] || echo "$p"

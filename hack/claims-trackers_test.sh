@@ -72,6 +72,8 @@ expect "several trackers after one marker are all checked" 1 "XX-02: #121 is CLO
 | XX-02 | Gap | a manual run, not automated, #99, #121 |"
 expect "a closed issue in a proven row's prose is history" 0 "0 trackers" "$head
 | XX-02 | Fixed in #121 and #126, see (#82) | \`TestScore\` |"
+expect "only the Proven-by cell is read for markers" 0 "1 trackers" "$head
+| XX-02 | not true yet: #121 is how this once read | not automated: #99 |"
 expect "a tracker marker without an issue is not checked" 0 "0 trackers" "$head
 | XX-02 | Gap | not audited |"
 expect "an unknown issue fails" 1 "XX-02: #4040: could not read its state" "$head

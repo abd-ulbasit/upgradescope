@@ -223,7 +223,11 @@ func TestReadmeVerifyBlockIsSelfContained(t *testing.T) {
 		t.Fatal("README.md: no sh block after \"Verifying a download\"")
 	}
 	block := rest[open+len("```sh\n"):]
-	block = block[:strings.Index(block, "```")]
+	end := strings.Index(block, "```")
+	if end < 0 {
+		t.Fatal("README.md: the sh block after \"Verifying a download\" has no closing fence")
+	}
+	block = block[:end]
 
 	assigned := map[string]bool{}
 	for _, m := range regexp.MustCompile(`(?m)^([A-Za-z_][A-Za-z0-9_]*)=`).FindAllStringSubmatch(block, -1) {

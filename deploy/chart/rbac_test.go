@@ -574,18 +574,21 @@ func TestRBACDocsNameTheUnrestrictedCreate(t *testing.T) {
 	flatten := func(s string) string {
 		return strings.ToLower(strings.Join(strings.Fields(strings.NewReplacer("`", "", "\n  # ", " ", "\n# ", " ").Replace(s)), " "))
 	}
+	createCaveat := regexp.MustCompile(`create( on clusterreadinesses)? cannot be limited by name|cannot limit create by name`)
 	for _, page := range []string{
 		"deploy/chart/values.yaml",
 		"deploy/chart/README.md",
 		"docs/reference/helm-values.md",
 		"docs/operations/security-model-and-rbac.md",
+		"README.md",
+		"SECURITY.md",
 	} {
 		b, err := os.ReadFile(filepath.Join("..", "..", page))
 		if err != nil {
 			t.Fatal(err)
 		}
 		flat := flatten(string(b))
-		if !strings.Contains(flat, "create cannot be limited by name") && !strings.Contains(flat, "cannot limit create by name") {
+		if !createCaveat.MatchString(flat) {
 			t.Errorf("%s does not say that `create` on clusterreadinesses cannot be limited by name", page)
 		}
 		if strings.Contains(flat, "writes only to the clusterreadiness cr named agent.crname") {
