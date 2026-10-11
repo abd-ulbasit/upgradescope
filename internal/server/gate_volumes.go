@@ -14,7 +14,8 @@ import (
 // to inventory.MaxObjectRefs. A manifest that updates a workload the
 // cluster already runs is counted twice; the count is evidence, and the
 // severity of a plugin's finding does not depend on it. Neither input is
-// modified.
+// modified. Every sum saturates at math.MaxInt (satAdd), so a cluster's
+// count there is never wrapped negative and its finding kept (#361).
 func mergeVolumePlugins(cluster, manifests []inventory.VolumePluginUse) []inventory.VolumePluginUse {
 	if len(manifests) == 0 {
 		return cluster
@@ -25,13 +26,13 @@ func mergeVolumePlugins(cluster, manifests []inventory.VolumePluginUse) []invent
 		if !ok {
 			m = inventory.VolumePluginUse{Plugin: u.Plugin, Namespaces: map[string]int{}}
 		}
-		m.Count += u.Count
+		m.Count = satAdd(m.Count, u.Count)
 		for ns, n := range u.Namespaces {
-			m.Namespaces[ns] += n
+			m.Namespaces[ns] = satAdd(m.Namespaces[ns], n)
 		}
 		room := max(0, inventory.MaxObjectRefs-len(m.Objects))
 		m.Objects = append(slices.Clip(m.Objects), u.Objects[:min(room, len(u.Objects))]...)
-		m.ObjectsOmitted += u.ObjectsOmitted + max(0, len(u.Objects)-room)
+		m.ObjectsOmitted = satAdd(m.ObjectsOmitted, satAdd(u.ObjectsOmitted, max(0, len(u.Objects)-room)))
 		byPlugin[u.Plugin] = m
 	}
 	return slices.SortedFunc(maps.Values(byPlugin), func(a, b inventory.VolumePluginUse) int { return cmp.Compare(a.Plugin, b.Plugin) })

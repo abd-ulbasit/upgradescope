@@ -38,6 +38,15 @@ const SkippedNewerKB = "knowledge base differs from the agent's"
 // installed it, so the engine keeps that gap required.
 const SkippedPods = "v1 pods"
 
+// SkippedPersistentVolumes and SkippedStorageClasses are the volumes
+// capability's Skipped entries for a PersistentVolume or StorageClass list
+// that was refused or failed (#362): the in-tree plugins of the objects
+// not read were not checked.
+const (
+	SkippedPersistentVolumes = "v1 persistentvolumes"
+	SkippedStorageClasses    = "storage.k8s.io/v1 storageclasses"
+)
+
 type CapabilityStatus struct {
 	Available bool   `json:"available"`
 	Reason    string `json:"reason,omitempty"` // e.g. `nodes list forbidden`

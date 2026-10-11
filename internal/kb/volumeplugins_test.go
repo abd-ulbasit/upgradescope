@@ -1,6 +1,7 @@
 package kb
 
 import (
+	"maps"
 	"slices"
 	"strings"
 	"testing"
@@ -77,9 +78,51 @@ func TestParseVolumePluginsRefuses(t *testing.T) {
 		"http citation":    `{"plugins": [{"plugin": "x", "classification": "removed", "removed": "1.27", "replacement": "r", "citations": ["http://a.b/c"]}]}`,
 		"twice":            `{"plugins": [{"plugin": "x", "classification": "deprecated", "deprecated": "1.2", "replacement": "r", "citations": ["https://a.b/c"]}, {"plugin": "x", "classification": "deprecated", "deprecated": "1.2", "replacement": "r", "citations": ["https://a.b/c"]}]}`,
 		"deprecated late":  `{"plugins": [{"plugin": "x", "classification": "removed", "deprecated": "1.30", "removed": "1.27", "replacement": "r", "citations": ["https://a.b/c"]}]}`,
+		// #362: a StorageClass provisioner is in-tree, cited, and maps to
+		// one plugin.
+		"provisioner, uncited":     `{"plugins": [{"plugin": "x", "classification": "removed", "removed": "1.27", "provisioner": "kubernetes.io/x", "replacement": "r", "citations": ["https://a.b/c"]}]}`,
+		"provisioner, http":        `{"plugins": [{"plugin": "x", "classification": "removed", "removed": "1.27", "provisioner": "kubernetes.io/x", "provisionerCitation": "http://a.b/c", "replacement": "r", "citations": ["https://a.b/c"]}]}`,
+		"provisioner, not in-tree": `{"plugins": [{"plugin": "x", "classification": "removed", "removed": "1.27", "provisioner": "x.csi.example.com", "provisionerCitation": "https://a.b/c", "replacement": "r", "citations": ["https://a.b/c"]}]}`,
+		"citation, no provisioner": `{"plugins": [{"plugin": "x", "classification": "removed", "removed": "1.27", "provisionerCitation": "https://a.b/c", "replacement": "r", "citations": ["https://a.b/c"]}]}`,
+		"provisioner twice":        `{"plugins": [{"plugin": "x", "classification": "removed", "removed": "1.27", "provisioner": "kubernetes.io/x", "provisionerCitation": "https://a.b/c", "replacement": "r", "citations": ["https://a.b/c"]}, {"plugin": "y", "classification": "removed", "removed": "1.27", "provisioner": "kubernetes.io/x", "provisionerCitation": "https://a.b/c", "replacement": "r", "citations": ["https://a.b/c"]}]}`,
 	} {
 		if _, err := parseVolumePlugins([]byte(raw)); err == nil {
 			t.Errorf("%s: parsed, want an error", name)
 		}
+	}
+}
+
+// TestVolumePluginProvisioners (#362): the in-tree provisioners a
+// StorageClass names map to their plugins as upstream names them, each
+// cited to the upstream source that names it; cephfs, which never had an
+// in-tree provisioner, has none.
+func TestVolumePluginProvisioners(t *testing.T) {
+	want := map[string]string{
+		"kubernetes.io/rbd":             "rbd",
+		"kubernetes.io/glusterfs":       "glusterfs",
+		"kubernetes.io/scaleio":         "scaleIO",
+		"kubernetes.io/storageos":       "storageos",
+		"kubernetes.io/quobyte":         "quobyte",
+		"kubernetes.io/flocker":         "flocker",
+		"kubernetes.io/aws-ebs":         "awsElasticBlockStore",
+		"kubernetes.io/gce-pd":          "gcePersistentDisk",
+		"kubernetes.io/azure-disk":      "azureDisk",
+		"kubernetes.io/azure-file":      "azureFile",
+		"kubernetes.io/cinder":          "cinder",
+		"kubernetes.io/vsphere-volume":  "vsphereVolume",
+		"kubernetes.io/portworx-volume": "portworxVolume",
+	}
+	if got := VolumePluginProvisioners(); !maps.Equal(got, want) {
+		t.Errorf("VolumePluginProvisioners() = %v, want %v", got, want)
+	}
+	for _, p := range VolumePlugins() {
+		if p.Provisioner != "" && !strings.HasPrefix(p.ProvisionerCitation, "https://github.com/kubernetes/kubernetes/blob/") {
+			t.Errorf("%s: provisioner %s cited %q, want the upstream source that names it", p.Plugin, p.Provisioner, p.ProvisionerCitation)
+		}
+	}
+	// A copy, not the dataset: a caller cannot change what the collector maps.
+	VolumePluginProvisioners()["kubernetes.io/rbd"] = "x"
+	if VolumePluginProvisioners()["kubernetes.io/rbd"] != "rbd" {
+		t.Error("VolumePluginProvisioners returns the shared map")
 	}
 }

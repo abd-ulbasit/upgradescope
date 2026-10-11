@@ -323,7 +323,8 @@ jobs:
   # or a script can fail them and cannot skip them. That costs a
   # documentation or CI-only pull request the weight of its slowest shard
   # (computed by hack/shard.sh from hack/test-durations.txt: 338 s of -race
-  # package weight, a relative figure, not measured wall time) instead of
+  # package weight, a relative figure, not measured wall time; no
+  # readers-scope run has been timed) instead of
   # nothing: the price of never
   # passing ci-ok with a needed test not run. A failed changes job runs
   # everything.
@@ -1295,19 +1296,29 @@ jobs:
   #     36 s, build 12 m 17 s, release-check 11 m 22 s.
   #   before, run 38031481959 (docs and a Go test file): 22 m 11 s wall;
   #     test-heap 22 m 1 s, test 8 m 34 s, build 12 m 14 s.
-  #   after: computed by hack/shard.sh from the duration tables, NOT
-  #     measured. A code PR: test-heap shards of 307 to 308 s of tests each,
-  #     test shards of 560 s and 559 s of -race package weight, so about 7 to
-  #     10 minutes. A PR that changes no Go code (documentation, CI, scripts):
-  #     the test job in readers scope, whose slowest shard carries 338 s of
-  #     -race package weight (a relative
-  #     figure: the packages ran in parallel on one runner), plus checkout,
-  #     setup and compile, so the 4 to 6 minutes first hoped for is unproven
-  #     and may be exceeded. The unit tests of those packages are not skipped
-  #     on any PR because two of them read every file of the checkout. The
-  #     measured figures of this change's own pull request runs go here and in
-  #     its description; they need a docs-only run and a small code run apart
-  #     (a PR that edits ci.yml runs everything).
+  #   after, a code PR: measured on PR #360's run 38088400406, 2026-10-10
+  #     (commit c4b0bd64, full scope, go=true; every job ran): 9 m 36 s
+  #     wall, from the first job start at 21:38:36Z to the last job end at
+  #     21:48:12Z. The longest job was release-check at 546 s; the test
+  #     shards took 484 s and 424 s (hack/shard.sh computes 560 s and 559 s
+  #     of -race package weight for them, a relative figure). The test-heap
+  #     shards took 307 s, 450 s, 533 s and 319 s: hack/shard.sh balanced
+  #     them at 307 to 308 s of tests each from the duration table (308 to
+  #     309 s since its #329 rows are that run's), so on the hosted runner
+  #     they are uneven, the slowest 226 s behind the fastest. Measured on
+  #     the same run: kind e2e 393 s on 1.31 and 347 s
+  #     on 1.37, envtest 113 s on 1.24 and 111 s on 1.28, lint 186 s, images
+  #     194 s and 170 s, cross-build 255 s at the most.
+  #   after, a PR that changes no Go code (documentation, CI, scripts):
+  #     computed by hack/shard.sh, NOT measured (no such run has been
+  #     timed; PR #360's run was full scope). The test job runs in readers
+  #     scope, whose slowest shard carries 338 s of -race package weight (a
+  #     relative figure: the packages ran in parallel on one runner), plus
+  #     checkout, setup and compile, so the 4 to 6 minutes first hoped for is
+  #     unproven and may be exceeded. The unit tests of those packages are
+  #     not skipped on any PR because two of them read every file of the
+  #     checkout. Measuring it needs a docs-only run (a PR that edits ci.yml
+  #     runs everything).
   ci-ok:
     if: always()
     needs: [changes, lint, test, repo-checks, test-heap, build, cross-build, notices, vuln, web, helm, examples, images, registry, pg-matrix, pg-conformance, release-check, action, kube-matrix, kube, envtest, kb-freshness]

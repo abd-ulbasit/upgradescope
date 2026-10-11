@@ -48,7 +48,7 @@
     }
   },
   {
-    "description": "extensions/v1beta1 Ingress removed in 1.22 (3 objects): 1 more affected object(s) are not listed with a file and line (at most 100 objects are recorded per finding).",
+    "description": "extensions/v1beta1 Ingress removed in 1.22 (3 objects): 1 more affected object(s) are not listed with a file and line.",
     "check_name": "removed-api/extensions/v1beta1/Ingress",
     "fingerprint": "960a1836421b3b95a10595b04dc72133b84d3d46f371fc758f1cdc4caf66b040",
     "severity": "critical",

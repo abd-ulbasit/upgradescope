@@ -18,6 +18,16 @@ rules:
   - apiGroups: [""]
     resources: ["namespaces", "nodes", "pods"]
     verbs: ["get", "list"]
+  # volumes (#362): the in-tree volume plugin of each PersistentVolume and
+  # the in-tree provisioner of each StorageClass, one paged list of each a
+  # collection. The KB rules also grant storageclasses (storage.k8s.io
+  # v1beta1 is in the KB); this rule keeps the read if the KB drops it.
+  - apiGroups: [""]
+    resources: ["persistentvolumes"]
+    verbs: ["get", "list"]
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["storageclasses"]
+    verbs: ["get", "list"]
   # /version (server version) and /metrics (apiserver_requested_deprecated_apis:
   # whether any client still calls deprecated APIs, not which).
   - nonResourceURLs: ["/version", "/metrics"]

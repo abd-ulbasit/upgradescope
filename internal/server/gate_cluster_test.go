@@ -2,12 +2,15 @@ package server
 
 import (
 	"encoding/json"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/abd-ulbasit/upgradescope/internal/engine"
 	"github.com/abd-ulbasit/upgradescope/internal/inventory"
@@ -227,5 +230,110 @@ func TestGateClusterNumericName(t *testing.T) {
 		if err := json.Unmarshal(raw, &b); err != nil || resp.StatusCode != http.StatusOK || b.ClusterID != want {
 			t.Errorf("cluster=%s: status %d clusterId %q (%v), want %s", ref, resp.StatusCode, b.ClusterID, err, want)
 		}
+	}
+}
+
+// #361: the gate adds the posted manifests' counts to the cluster's with
+// a saturating add, so a cluster row at math.MaxInt never wraps negative
+// (the engine skips rows with Count <= 0, which would drop the cluster's
+// own finding from the proposed state). A table over API usage and volume
+// plugins: the Count, a namespace's count and ObjectsOmitted at MaxInt
+// stay MaxInt, and the engine at a target where the API or plugin is
+// removed still reports the cluster's blocker.
+func TestGateCountsSaturate(t *testing.T) {
+	const maxInt = math.MaxInt
+	base := func() inventory.Inventory {
+		inv := testInventory()
+		inv.Source = inventory.SourceCluster
+		inv.ServerVersion = "v1.24.3"
+		return inv
+	}
+	k := callersKB()
+	k.VolumePlugins = kb.VolumePlugins()
+
+	type usageRow struct{ count, ns, omitted int }
+	for _, tc := range []struct {
+		name            string
+		cluster         usageRow
+		manifest        usageRow
+		wantNS, wantOmt int
+	}{
+		{"count", usageRow{maxInt, 1, 0}, usageRow{1, 1, 0}, 2, 0},
+		{"namespace", usageRow{1, maxInt, 0}, usageRow{1, 1, 0}, maxInt, 0},
+		{"objects omitted", usageRow{1, 1, maxInt}, usageRow{1, 1, 1}, 2, maxInt},
+		{"all three", usageRow{maxInt, maxInt, maxInt}, usageRow{maxInt, maxInt, maxInt}, maxInt, maxInt},
+	} {
+		wantCount := maxInt
+		if tc.cluster.count != maxInt {
+			wantCount = tc.cluster.count + tc.manifest.count
+		}
+		check := func(t *testing.T, count int, ns map[string]int, omitted int, nsKey string) {
+			t.Helper()
+			if count != wantCount || count <= 0 {
+				t.Errorf("count = %d, want %d (positive)", count, wantCount)
+			}
+			if ns[nsKey] != tc.wantNS || omitted != tc.wantOmt {
+				t.Errorf("namespace count %d, omitted %d, want %d and %d", ns[nsKey], omitted, tc.wantNS, tc.wantOmt)
+			}
+		}
+
+		t.Run("api usage/"+tc.name, func(t *testing.T) {
+			cluster := inventory.APIUsage{Group: "batch", Version: "v1beta1", Kind: "CronJob", Count: tc.cluster.count,
+				Namespaces: map[string]int{"shop": tc.cluster.ns}, ObjectsOmitted: tc.cluster.omitted}
+			manifest := inventory.APIUsage{Group: "batch", Version: "v1beta1", Kind: "CronJob", Count: tc.manifest.count,
+				Namespaces: map[string]int{"shop": tc.manifest.ns}, ObjectsOmitted: tc.manifest.omitted,
+				Objects: []inventory.ObjectRef{{Namespace: "shop", Name: "new", Line: 1}}}
+			got := upsertUsage([]inventory.APIUsage{cluster}, []inventory.APIUsage{manifest})
+			if len(got) != 1 {
+				t.Fatalf("rows = %+v, want one", got)
+			}
+			check(t, got[0].Count, got[0].Namespaces, got[0].ObjectsOmitted, "shop")
+			inv := base()
+			inv.APIUsage = got
+			r := engine.Evaluate(inv, k, inventory.Version{Major: 1, Minor: 25}, time.Now())
+			if r.Verdict != engine.VerdictBlocked || !slices.ContainsFunc(r.Findings, func(f engine.Finding) bool {
+				return f.Category == engine.CatRemovedAPI && f.Severity == engine.SevBlocker
+			}) {
+				t.Errorf("verdict %s, findings %+v: want the cluster's removed-API blocker kept", r.Verdict, r.Findings)
+			}
+		})
+
+		t.Run("volume plugin/"+tc.name, func(t *testing.T) {
+			cluster := inventory.VolumePluginUse{Plugin: "rbd", Count: tc.cluster.count,
+				Namespaces: map[string]int{"shop": tc.cluster.ns}, ObjectsOmitted: tc.cluster.omitted}
+			manifest := inventory.VolumePluginUse{Plugin: "rbd", Count: tc.manifest.count,
+				Namespaces: map[string]int{"shop": tc.manifest.ns}, ObjectsOmitted: tc.manifest.omitted,
+				Objects: []inventory.ObjectRef{{Namespace: "shop", Name: "new", Line: 1}}}
+			got := mergeVolumePlugins([]inventory.VolumePluginUse{cluster}, []inventory.VolumePluginUse{manifest})
+			if len(got) != 1 {
+				t.Fatalf("rows = %+v, want one", got)
+			}
+			check(t, got[0].Count, got[0].Namespaces, got[0].ObjectsOmitted, "shop")
+			inv := base()
+			inv.VolumePlugins = got
+			r := engine.Evaluate(inv, k, inventory.Version{Major: 1, Minor: 31}, time.Now())
+			if !slices.ContainsFunc(r.Findings, func(f engine.Finding) bool {
+				return f.Category == engine.CatVolumePlugin && f.Key == "volume-plugin/rbd" && f.Severity == engine.SevBlocker
+			}) {
+				t.Errorf("verdict %s, findings %+v: want the cluster's rbd blocker kept", r.Verdict, r.Findings)
+			}
+		})
+	}
+}
+
+// #361: the decrement of a replaced cluster object never takes a count
+// below zero, even when the stored row's counts are lower than the refs
+// it lists, and a namespace at zero is dropped as before.
+func TestUpsertUsageDecrementFloorsAtZero(t *testing.T) {
+	cluster := inventory.APIUsage{Group: "batch", Version: "v1beta1", Kind: "CronJob", Count: 0,
+		Namespaces: map[string]int{"shop": 0}, Objects: []inventory.ObjectRef{{Namespace: "shop", Name: "a"}}}
+	manifest := inventory.APIUsage{Group: "batch", Version: "v1beta1", Kind: "CronJob", Count: 0,
+		Objects: []inventory.ObjectRef{{Namespace: "shop", Name: "a", Line: 1}}}
+	got := upsertUsage([]inventory.APIUsage{cluster}, []inventory.APIUsage{manifest})
+	if got[0].Count != 0 {
+		t.Errorf("count = %d, want 0, never negative", got[0].Count)
+	}
+	if _, ok := got[0].Namespaces["shop"]; ok {
+		t.Errorf("namespaces = %v, want the emptied namespace dropped", got[0].Namespaces)
 	}
 }

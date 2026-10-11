@@ -251,8 +251,14 @@ func findingText(f engine.Finding) string {
 		for _, o := range f.Objects {
 			b.WriteString("\n- " + objectText(o))
 		}
-		if f.ObjectsOmitted > 0 {
+		// The cap is the reason only when the finding reached it; below
+		// it the omitted objects are ones it never names (a cluster's
+		// pods beside its PersistentVolumes, #362).
+		switch {
+		case f.ObjectsOmitted > 0 && len(f.Objects) >= inventory.MaxObjectRefs:
 			fmt.Fprintf(&b, "\n- and %d more (at most %d objects are recorded per finding)", f.ObjectsOmitted, inventory.MaxObjectRefs)
+		case f.ObjectsOmitted > 0:
+			fmt.Fprintf(&b, "\n- and %d more", f.ObjectsOmitted)
 		}
 	}
 	if len(f.Teams) > 0 {

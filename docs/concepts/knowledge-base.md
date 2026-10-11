@@ -23,7 +23,7 @@ $ upgradescope version
   registry date: 2026-10-01
 ```
 
-The KB version names the `k8s.io/api` release and a digest of each dataset (the lifecycle digest covers the migration notes and the in-tree volume plugins too, so editing a note or a plugin changes it; the registry digest covers the add-ons and the provider calendars),
+The KB version names the `k8s.io/api` release and a digest of each dataset (the lifecycle digest covers the migration notes and the in-tree volume plugins too, their StorageClass provisioners included, so editing a note or a plugin changes it; the registry digest covers the add-ons and the provider calendars),
 so two binaries with the same KB version judge identically. The digests
 shown in this documentation's examples are illustrative: a digest changes
 with any edit to its dataset, so run `upgradescope version` for your
@@ -191,4 +191,4 @@ the horizon minor, until you upgrade to a release with a newer KB.
   in-tree volume plugins ([Volume plugins](volume-plugins.md)): the seccomp
   alpha annotations, `Service.spec.externalIPs`, `beta.kubernetes.io/os`.
   Only the `apiVersion` and `kind` of an object, and the volume plugins its
-  pods name, are judged. The reports say so ([Verdict and score](verdict-and-score.md#what-a-verdict-does-not-cover)).
+  pods, PersistentVolumes and StorageClasses name, are judged. The reports say so ([Verdict and score](verdict-and-score.md#what-a-verdict-does-not-cover)).

@@ -182,7 +182,7 @@ covers. A target past that is `unknown`, by design.
 
 **Not checked by this version**: field-level removals other than in-tree
 volume plugins. The engine judges the `apiVersion` and `kind` of an object,
-and the in-tree volume plugins its pods and PersistentVolumes name; another
+and the in-tree volume plugins its pods, PersistentVolumes and StorageClasses name; another
 removed field or annotation inside a served API (the seccomp alpha
 annotations, `Service.spec.externalIPs`, `beta.kubernetes.io/os`) is not
 flagged, and a `READY` with a score of 100 does not cover it. The table and
@@ -207,6 +207,8 @@ scheduler skew are then not checked; kubelets and kube-proxy still are).
 
 It reads with `get` and `list`, never `watch`, and writes only its own
 `ClusterReadiness` object, its status and (by default) that object's CRD.
+For in-tree volume plugins it lists `persistentvolumes` and
+`storageclasses`, one paged list of each per collection.
 To read Helm releases it needs `get`/`list` on Secrets and ConfigMaps
 cluster-wide, which RBAC cannot narrow by label. `rbac.helmSecretsNamespaces`
 narrows it to a Role in each namespace that holds releases (still every

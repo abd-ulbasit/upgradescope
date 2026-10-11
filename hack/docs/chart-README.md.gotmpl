@@ -177,6 +177,7 @@ watches.
 | Rule | Why |
 |---|---|
 | `get`/`list` namespaces, nodes, pods | Cluster ID (kube-system UID), team labels, kubelet versions, control-plane pods, add-on images |
+| `get`/`list` persistentvolumes, storageclasses (`storage.k8s.io`) | In-tree volume plugins: each PersistentVolume's in-tree source and each StorageClass's in-tree provisioner (`kubernetes.io/rbd`), one paged list of each per collection. The KB rules also grant storageclasses; this rule keeps the read if the KB drops it |
 | `get` `/version`, `/metrics` | Server version; `apiserver_requested_deprecated_apis` (whether any client still calls deprecated APIs, not which) |
 | `get`/`list` on each group/resource the KB flags as deprecated or removed | Counting objects still stored at deprecated APIs. Generated into `files/kb-rbac-rules.yaml`; `rbac_test.go` fails when it drifts from the embedded KB |
 | `get`/`list` Secrets and ConfigMaps (only with `rbac.helmSecrets=true`, the default, and an empty `rbac.helmSecretsNamespaces`, the default) | Helm release detection lists the objects labelled `owner=helm` (Helm's secrets and configmaps storage drivers) metadata-only, then reads one per release. RBAC cannot filter by label or type, so **this lets the agent read every Secret and ConfigMap in the cluster** |

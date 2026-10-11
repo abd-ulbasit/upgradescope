@@ -3,9 +3,11 @@ package collect
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -177,25 +179,41 @@ func wantLiveVolumes() []inventory.VolumePluginUse {
 	}
 }
 
-// Live, the volume plugins come from the pod lists the versions and add-ons
-// steps make anyway: the same requests as a cluster without them, each pod
-// sent once.
-func TestCollectLiveVolumesNoExtraRequest(t *testing.T) {
+// Live, the volume plugins of pods come from the pod lists the versions
+// and add-ons steps make anyway: the same pod requests as a cluster without
+// them, each pod sent once. The capability's own requests are exactly two:
+// one list of PersistentVolumes and one of StorageClasses, each one page
+// here (#362).
+func TestCollectLiveVolumesTwoExtraRequests(t *testing.T) {
 	for _, perPage := range []int{0, 1} {
-		requests := func(pods []*corev1.Pod) (inventory.Inventory, *podServer, int) {
+		requests := func(pods []*corev1.Pod) (inventory.Inventory, *podServer, map[string]int) {
 			cs, disc := podFixture()
 			srv := servePods(cs, pods...)
 			srv.perPage = perPage
 			inv := Collect(context.Background(), Clients{Kube: cs, Discovery: disc}, loadKB(t), Options{})
-			return inv, srv, len(cs.Actions())
+			byResource := map[string]int{}
+			for _, a := range cs.Actions() {
+				byResource[a.GetVerb()+" "+a.GetResource().Resource]++
+			}
+			return inv, srv, byResource
 		}
 		plain := append(tickPods(), volumePod("shop", "web-1"), volumePod("shop", "web-2"), volumePod("shop", "clean"), volumePod("kube-system", "legacy-sync"))
 		_, plainSrv, plainActions := requests(plain)
 		inv, srv, actions := requests(volumeTickPods())
 
-		if actions != plainActions || !reflect.DeepEqual(srv.calls, plainSrv.calls) {
-			t.Errorf("perPage %d: %d requests (pod lists %+v), want the %d of the same pods without in-tree volumes (%+v)",
+		if !reflect.DeepEqual(actions, plainActions) || !reflect.DeepEqual(srv.calls, plainSrv.calls) {
+			t.Errorf("perPage %d: requests %v (pod lists %+v), want the %v of the same pods without in-tree volumes (%+v)",
 				perPage, actions, srv.calls, plainActions, plainSrv.calls)
+		}
+		var own []string
+		for r, n := range actions {
+			if strings.HasSuffix(r, " persistentvolumes") || strings.HasSuffix(r, " storageclasses") {
+				own = append(own, fmt.Sprintf("%s x%d", r, n))
+			}
+		}
+		slices.Sort(own)
+		if want := []string{"list persistentvolumes x1", "list storageclasses x1"}; !slices.Equal(own, want) {
+			t.Errorf("perPage %d: the capability's own requests = %v, want exactly %v", perPage, own, want)
 		}
 		for pod, n := range srv.served {
 			if n != 1 {

@@ -16,6 +16,7 @@ there are no wildcard groups, resources or verbs, so no subresource
 | Rule | Why | Removed by |
 |---|---|---|
 | `get`, `list` on `namespaces`, `nodes`, `pods` | the cluster ID (kube-system UID), team labels, kubelet versions and container runtimes, control-plane pod versions, add-on images and labels | — |
+| `get`, `list` on `persistentvolumes`; `get`, `list` on `storageclasses` (`storage.k8s.io`) | in-tree volume plugins (#362): each PersistentVolume's in-tree source, counted under its bound claim's namespace, and each StorageClass whose provisioner is an in-tree one (`kubernetes.io/rbd`), one paged list of each per collection. The `storage.k8s.io` rule of the knowledge base also grants `storageclasses`; this one keeps the read if the knowledge base drops it. A refused list makes `volumes` partial, naming what was not read | — |
 | `get` on non-resource URLs `/version`, `/metrics` | the server version; `apiserver_requested_deprecated_apis` | — |
 | `get`, `list` on `secrets` | Helm releases (Helm's default storage driver): a metadata-only list of `owner=helm` Secrets, then one `get` per release | `rbac.helmSecrets=false`; moved into a Role per namespace by `rbac.helmSecretsNamespaces` |
 | `get`, `list` on `configmaps` | Helm releases stored by the configmaps driver, read the same way | `rbac.helmSecrets=false`; moved into a Role per namespace by `rbac.helmSecretsNamespaces` |

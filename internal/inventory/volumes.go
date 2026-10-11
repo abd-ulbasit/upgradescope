@@ -7,18 +7,22 @@ import (
 	"strings"
 )
 
-// VolumePluginUse is one in-tree volume plugin in use (#351): the pods
-// (live) or the pod templates, pods and PersistentVolumes (manifests)
-// whose volumes name it, by its field name in corev1.VolumeSource or
-// corev1.PersistentVolumeSource ("glusterfs", "awsElasticBlockStore").
+// VolumePluginUse is one in-tree volume plugin in use (#351): the pods,
+// PersistentVolumes and StorageClasses (live, #362) or the pod templates,
+// pods, PersistentVolumes and StorageClasses (manifests) that name it, by
+// its field name in corev1.VolumeSource or corev1.PersistentVolumeSource
+// ("glusterfs", "awsElasticBlockStore"); a StorageClass names it by its
+// in-tree provisioner ("kubernetes.io/rbd").
 //
 // Count is how many name it, each once whatever the number of its volumes
-// that do. Namespaces counts them per namespace ("" for a PersistentVolume,
-// which is cluster-scoped, and for a manifest object without
-// metadata.namespace). Objects locates them in manifests only (File, Line,
-// and the workload's or PersistentVolume's Namespace and Name), at most
-// MaxObjectRefs, ObjectsOmitted counting the rest; a live collection
-// names no pod, so its size does not grow with the pods. Between full pod
+// that do. Namespaces counts them per namespace (live, a bound
+// PersistentVolume under its claim's; "" for an unbound one and a
+// StorageClass, which are cluster-scoped, and for a manifest object
+// without metadata.namespace). Objects names them, at most MaxObjectRefs,
+// ObjectsOmitted counting the rest: in manifests located (File, Line, and
+// the object's Namespace and Name); live, the PersistentVolumes and
+// StorageClasses by Name only. A live collection names no pod, so its size
+// does not grow with the pods. Between full pod
 // passes, the agent reports the pods outside kube-system as the last full
 // pass read them, for at most Inventory.AddOnEvidenceAgeSeconds.
 type VolumePluginUse struct {

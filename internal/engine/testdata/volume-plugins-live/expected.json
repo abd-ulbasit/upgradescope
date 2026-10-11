@@ -8,7 +8,7 @@
         "https://github.com/kubernetes/kubernetes/pull/112015",
         "https://github.com/kubernetes/kubernetes/pull/111485"
       ],
-      "detail": "4 pods name it, in: shop (4). From 1.26 a pod that names it does not start.",
+      "detail": "4 pods name it, in: shop (4). From 1.26 a pod that names it, or that mounts a claim bound to a PersistentVolume that does, does not start.",
       "key": "volume-plugin/glusterfs",
       "namespaces": [
         "shop"
@@ -46,7 +46,7 @@
         "https://github.com/kubernetes/kubernetes/pull/136400",
         "https://github.com/kubernetes/kubernetes/pull/63445"
       ],
-      "detail": "2 pods name it, in: ci (1), kube-system (1). From 1.33 a pod that names it does not start. Upstream: disabled by default in 1.33, where the GitRepoVolumeDriver feature gate can still turn it back on, and locked off in 1.36.",
+      "detail": "2 pods name it, in: ci (1), kube-system (1). From 1.33 a pod that names it, or that mounts a claim bound to a PersistentVolume that does, does not start. Upstream: disabled by default in 1.33, where the GitRepoVolumeDriver feature gate can still turn it back on, and locked off in 1.36.",
       "key": "volume-plugin/gitRepo",
       "namespaces": [
         "ci",

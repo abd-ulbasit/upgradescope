@@ -39,8 +39,8 @@ serviceAccount:
 rbac:
   # -- Create the agent ClusterRole/ClusterRoleBinding. Every rule is listed
   # and explained in templates/rbac.yaml and the chart README: get/list on
-  # namespaces, nodes, pods and the API group/resources the embedded KB
-  # flags as deprecated; get on /version and /metrics; writes only to the
+  # namespaces, nodes, pods, persistentvolumes, storageclasses and the API
+  # group/resources the embedded KB flags as deprecated; get on /version and /metrics; writes only to the
   # ClusterReadiness CR named agent.crName (and, with agent.manageCRD, to the
   # clusterreadinesses.upgradescope.basit.engineer CRD; get/list on CRDs comes from the
   # KB rules either way). No wildcards, no watch, no

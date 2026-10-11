@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="upgradescope" tests="2" failures="1" errors="0" time="0">
+  <testsuite name="volume-plugin" tests="2" failures="1" errors="0" skipped="0" time="0">
+    <testcase name="volume-plugin/rbd" classname="upgradescope.volume-plugin" time="0">
+      <failure message="In-tree volume plugin rbd removed in 1.31 (3 objects)" type="blocker">In-tree volume plugin rbd removed in 1.31 (3 objects).&#xA;3 PersistentVolumes or StorageClasses name it, in: cluster-scoped (2), data (1). From 1.31 a pod that names it, or that mounts a claim bound to a PersistentVolume that does, does not start. A StorageClass with provisioner kubernetes.io/rbd has its new claims provisioned by the in-tree plugin, so from 1.31 they are not provisioned.&#xA;Objects:&#xA;- pv-rbd&#xA;- pv-unbound&#xA;- sc-rbd&#xA;Teams: storage&#xA;Fix: redeploy the workload on a volume of the RBD CSI driver (ceph-csi); its CSI migration support was removed with the plugin.&#xA;References:&#xA;- https://github.com/kubernetes/kubernetes/blob/master/CHANGELOG/CHANGELOG-1.31.md&#xA;- https://github.com/kubernetes/kubernetes/pull/124546&#xA;- https://github.com/kubernetes/kubernetes/pull/118552</failure>
+    </testcase>
+    <testcase name="volume-plugin/awsElasticBlockStore" classname="upgradescope.volume-plugin" time="0">
+      <system-out>warning: In-tree volume plugin awsElasticBlockStore needs CSI driver ebs.csi.aws.com from 1.27 (2 objects).&#xA;1 pod and 1 PersistentVolume or StorageClass name it, in: shop (2). From 1.27 the ebs.csi.aws.com CSI driver serves every operation on these volumes: a cluster without it installed cannot mount them, one with it is fine. A StorageClass with provisioner kubernetes.io/aws-ebs has its new claims provisioned by the in-tree plugin, so from 1.27 by that CSI driver.&#xA;Objects:&#xA;- pv-ebs&#xA;- and 1 more&#xA;Teams: payments&#xA;Fix: install the ebs.csi.aws.com CSI driver (aws-ebs-csi-driver) before the upgrade.&#xA;References:&#xA;- https://github.com/kubernetes/kubernetes/blob/master/CHANGELOG/CHANGELOG-1.27.md&#xA;- https://github.com/kubernetes/kubernetes/pull/115838</system-out>
+    </testcase>
+  </testsuite>
+</testsuites>

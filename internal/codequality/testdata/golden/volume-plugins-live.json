@@ -1,6 +1,6 @@
 [
   {
-    "description": "In-tree volume plugin glusterfs removed in 1.26 (4 pods). 4 pods name it, in: shop (4). From 1.26 a pod that names it does not start. Fix: migrate the volumes to another storage solution before the upgrade; there is no CSI migration for GlusterFS.",
+    "description": "In-tree volume plugin glusterfs removed in 1.26 (4 pods). 4 pods name it, in: shop (4). From 1.26 a pod that names it, or that mounts a claim bound to a PersistentVolume that does, does not start. Fix: migrate the volumes to another storage solution before the upgrade; there is no CSI migration for GlusterFS.",
     "check_name": "volume-plugin/glusterfs",
     "fingerprint": "acdd6ab9a27f57ca050fde9c7de0b365477dfb3faaeff438e79d81965f1eab9e",
     "severity": "critical",
@@ -24,7 +24,7 @@
     }
   },
   {
-    "description": "In-tree volume plugin gitRepo removed in 1.33 (2 pods). 2 pods name it, in: ci (1), kube-system (1). From 1.33 a pod that names it does not start. Upstream: disabled by default in 1.33, where the GitRepoVolumeDriver feature gate can still turn it back on, and locked off in 1.36. Fix: clone the repository into an emptyDir volume from an init container, and mount that emptyDir.",
+    "description": "In-tree volume plugin gitRepo removed in 1.33 (2 pods). 2 pods name it, in: ci (1), kube-system (1). From 1.33 a pod that names it, or that mounts a claim bound to a PersistentVolume that does, does not start. Upstream: disabled by default in 1.33, where the GitRepoVolumeDriver feature gate can still turn it back on, and locked off in 1.36. Fix: clone the repository into an emptyDir volume from an init container, and mount that emptyDir.",
     "check_name": "volume-plugin/gitRepo",
     "fingerprint": "fdb89f9ac6c52d8ecf224c3fba41d68da6f8d3134935ceb50cde717ed12ddf83",
     "severity": "minor",
