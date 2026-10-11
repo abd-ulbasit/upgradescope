@@ -154,6 +154,9 @@ inert=(
   'hack/check-*.sh'
   'hack/claims-check.sh'
   'hack/claims-trackers.sh'
+  # the claims suite's server checks (SV-24, SE-02): built and run by the
+  # repo-checks job, which is not gated, never by a gated one
+  'hack/claims-server.sh'
   'hack/docs-cosign-minimum.sh'
   'hack/docs-live-check.sh'
   'hack/flags-diff.sh'
@@ -522,10 +525,10 @@ grep -qF 'CROSS_BUILD_PLATFORMS: ${{ matrix.platforms }}' <<<"$block" && grep -q
   ok "each leg compiles its matrix.platforms" || bad "the cross-build step does not pass matrix.platforms as CROSS_BUILD_PLATFORMS"
 
 # ---- every job is still in ci-ok's needs; the new ones exist ----------------
-grep -qE '^  repo-checks:$' "$ci" && ok "the repo-checks job (check-toolchain, hack-test, claims-check) is not gated" || bad "no repo-checks job"
+grep -qE '^  repo-checks:$' "$ci" && ok "the repo-checks job (check-toolchain, hack-test, claims-check, claims-server) is not gated" || bad "no repo-checks job"
 block=$(job_block repo-checks)
 if grep -qF 'needs.changes' <<<"$block"; then bad "repo-checks reads the changes job: it must run on every pull request"; else ok "repo-checks does not depend on the changes job"; fi
-for step in 'make check-toolchain' 'make hack-test' 'make claims-check'; do
+for step in 'make check-toolchain' 'make hack-test' 'make claims-check' 'make claims-server'; do
   grep -qF "run: $step" <<<"$block" && ok "repo-checks runs $step" || bad "repo-checks does not run $step"
 done
 

@@ -353,6 +353,15 @@ claims-check:
 	./hack/claims-check.sh
 	./hack/docs-cosign-minimum.sh
 
+# The claims suite's server checks, on the built binary with no cluster and
+# no Docker (CI's repo-checks job): serve on loopback with a temporary SQLite
+# database, then the reverse-order cluster-UID adoption (SV-24) and a push
+# racing a rename or delete mid-upload, for both token kinds (SE-02). Needs
+# curl and jq.
+.PHONY: claims-server
+claims-server: build
+	./hack/claims-server.sh bin/upgradescope
+
 # Offline self-tests of the hack/ scripts CI is built from (stubs and
 # fixtures only: no network, cluster or Docker).
 .PHONY: hack-test
