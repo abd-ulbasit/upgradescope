@@ -635,10 +635,14 @@ func clusterTeams(inv inventory.Inventory, rep engine.Report) []string {
 // details a finding the PR's objects join from the scope's evidence and
 // the PR's alone, never another team's (#72). Left out: every other
 // namespace (so the PR's objects there are attributed to no team), the
-// API usage, custom resources, Helm releases, GitOps charts and add-on
-// installs in them, cluster-scoped usage and add-ons detected without a
-// namespace (no team's), the apiserver's deprecated-call rows (cluster
-// wide, of any client) and the unrecognized images (any workload's).
+// API usage, custom resources, Helm releases, GitOps charts, add-on
+// installs and in-tree volume plugin counts in them (volumeShare),
+// cluster-scoped usage, add-ons detected without a namespace and
+// cluster-scoped volume plugin counts (unbound PersistentVolumes and
+// StorageClasses: no team's), the cluster's PersistentVolume and
+// StorageClass refs (which carry no namespace), the apiserver's
+// deprecated-call rows (cluster wide, of any client) and the unrecognized
+// images (any workload's).
 // What describes the cluster as a whole stays: its version, nodes,
 // control plane, CRD definitions and capabilities. inv is not modified.
 // The fleet-wide scope's share is inv.
@@ -679,6 +683,7 @@ func (sc readScope) clusterShare(inv inventory.Inventory) inventory.Inventory {
 			out.AddOns = append(out.AddOns, a)
 		}
 	}
+	out.VolumePlugins = volumeShare(inv.VolumePlugins, in)
 	out.DeprecatedCalls = nil
 	out.UnrecognizedImages, out.UnrecognizedImagesOmitted = nil, 0
 	return out
@@ -704,6 +709,37 @@ func usageShare(us []inventory.APIUsage, in func(string) bool) []inventory.APIUs
 		u.Objects = slices.DeleteFunc(slices.Clone(u.Objects), func(o inventory.ObjectRef) bool { return !in(o.Namespace) })
 		u.Count, u.Namespaces, u.ObjectsOmitted = count, namespaces, max(0, count-len(u.Objects))
 		out = append(out, u)
+	}
+	return out
+}
+
+// volumeShare is the in-tree volume plugin rows of vs (#351) in the
+// namespaces in keeps, as usageShare is of API usage: each row's
+// per-namespace counts of those namespaces only, its count their sum
+// (saturating at math.MaxInt, satAdd: a cluster's counts can be that
+// large, #361), and its refs in them, the rest of the count omitted. A
+// cluster counts in a namespace its pods and the PersistentVolumes bound
+// to claims there, and names its PersistentVolumes and StorageClasses in
+// refs without a namespace, so a share keeps none of a cluster's live
+// refs and counts all of the scope's evidence omitted. A row without
+// per-namespace counts cannot be divided, so it is left out, as are the
+// cluster-scoped counts (the "" namespace: unbound PersistentVolumes and
+// StorageClasses), which are no team's.
+func volumeShare(vs []inventory.VolumePluginUse, in func(string) bool) []inventory.VolumePluginUse {
+	var out []inventory.VolumePluginUse
+	for _, v := range vs {
+		namespaces, count := map[string]int{}, 0
+		for ns, n := range v.Namespaces {
+			if in(ns) && n > 0 {
+				namespaces[ns], count = n, satAdd(count, n)
+			}
+		}
+		if count == 0 {
+			continue
+		}
+		v.Objects = slices.DeleteFunc(slices.Clone(v.Objects), func(o inventory.ObjectRef) bool { return !in(o.Namespace) })
+		v.Count, v.Namespaces, v.ObjectsOmitted = count, namespaces, max(0, count-len(v.Objects))
+		out = append(out, v)
 	}
 	return out
 }
