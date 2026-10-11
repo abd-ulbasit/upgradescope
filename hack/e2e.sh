@@ -619,7 +619,7 @@ server_ingested() {
   grep -q '"ok"' <<<"$(curl -fsS "$SERVER_URL/healthz")" || { echo "/healthz is not ok" >&2; return 1; }
 }
 
-# #386 (AG-XFPUSH1): in the combined install the first snapshot is not left
+# #386 (AG-33): in the combined install the first snapshot is not left
 # for the next tick. The agent's first tick runs as its pod starts, often
 # before the server listens; that push fails and stays buffered, and a
 # retry between ticks must deliver it: a `buffered snapshot pushed` line

@@ -35,6 +35,18 @@ only through a new release.
 
 ### Fixed
 
+- Agent: a snapshot whose push failed at a tick is retried between ticks,
+  after 10 s, then 20 s, 40 s and 80 s, then every 2 minutes, each within
+  20%. It stops when the snapshot is delivered, refused for good, or replaced
+  by the next tick's. On a combined install (`server.enabled=true`), whose
+  server is not yet listening at the agent's first tick, the first snapshot
+  now arrives within about a minute instead of one interval (10 minutes)
+  later. Each retry logs `buffered snapshot pushed` (INFO) or `buffered
+  snapshot push failed` (WARN), and a failed retry counts in
+  `upgradescope_agent_push_errors_total`. The tick log's
+  `consecutiveFailures` counts the failure the line reports: it is 1 after
+  the first failed push, where it used to read 0. The kind e2e requires the
+  first snapshot before the agent's second tick (#386).
 - The Homebrew tap's test job installs the formula as the tap's default
   branch holds it. Before, it tested the run's own commit, which on the
   first run predates the formula the update job pushes (#75).
