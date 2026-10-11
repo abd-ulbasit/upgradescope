@@ -1,0 +1,74 @@
+# registry/data/longhorn.yaml
+# Release lines are synced from endoflife.date (make eol-sync); the project's
+# own policy is the wiki page "Release Schedule & Support": from 1.8 each minor
+# gets 6 months of active support from its first stable patch (x.y.1), before 1.8
+# twelve months.
+#
+# compat rows: only minimums, which a forward upgrade cannot trip (a target
+# below the minimum can). Longhorn's documentation publishes no maximum, and the
+# "tested with" Kubernetes lists on its Best Practices pages (for 1.13.0: 1.33 to
+# 1.36) are neither a maximum nor a minimum, so they are left out. Read on
+# 2026-10-12:
+#   >=1.13.0: Important Notes of 1.13.0, "Kubernetes Version Requirement": "Because
+#     the CSI external provisioner is upgraded to v6.3.0, all clusters must be
+#     running Kubernetes v1.34 or later before upgrading to Longhorn v1.13.0."
+#     (https://longhorn.io/docs/1.13.0/important-notes/). The 1.13.0 Best Practices
+#     page still says "at least v1.21 ... the minimum version Longhorn v1.13.0
+#     supports"; the Important Notes is the specific, newer statement and the
+#     stricter one, so it is the one encoded; the v1.13.0 chart agrees
+#     (chart/Chart.yaml: kubeVersion ">=1.34.0-0").
+#   >=1.8.0 <1.13.0: Important Notes, "all clusters must be running Kubernetes v1.25
+#     or later before upgrading to Longhorn v1.8.0 or any newer version" (CSI external
+#     snapshotter v8.2.0). Read in the 1.11.0 notes (https://longhorn.io/docs/1.11.0/important-notes/)
+#     and in the 1.8.0, 1.9.0 and 1.10.0 notes in the docs repository; the charts of
+#     v1.8.0 and v1.12.0 carry kubeVersion ">=1.25.0-0".
+#   >=1.5.0 <1.8.0: "Kubernetes >= v1.21" in the 1.5.0 install requirements (the
+#     docs repository's archived page for 1.5.0), kubeVersion ">=1.21.0-0" in the
+#     v1.5.0 chart, and "at least v1.21 ... the minimum version Longhorn v1.6.0 /
+#     v1.7.0 supports" in their Best Practices pages.
+#   Lines before 1.5 are left out: no page was read that states a minimum for them.
+#
+# Matched are the images that carry Longhorn's own release version
+# (longhorn-manager, longhorn-ui, longhorn-engine), from Docker Hub and Rancher's
+# verbatim mirrors (rancher/mirrored-longhornio-*, used by RKE2 and k3s;
+# checked 2026-10-12). instance-manager, share-manager and backing-image-manager
+# are left out: before 1.6 their tags were date-stamped (v1_20230617), which would
+# read as a bogus version. The CSI sidecars (csi-attacher, csi-provisioner, ...)
+# and support-bundle-kit have their own versions (see deploy/longhorn-images.txt).
+schema_version: 2
+id: longhorn
+display_name: Longhorn
+endoflife_product: longhorn
+matchers:
+  images:
+    - longhornio/longhorn-manager
+    - longhornio/longhorn-ui
+    - longhornio/longhorn-engine
+    - rancher/mirrored-longhornio-longhorn-manager
+    - rancher/mirrored-longhornio-longhorn-ui
+    - rancher/mirrored-longhornio-longhorn-engine
+  charts:
+    - longhorn
+support:
+  status: supported
+  citations:
+    - https://endoflife.date/longhorn
+    - https://github.com/longhorn/longhorn/wiki/Release-Schedule-%26-Support
+compat:
+  - {range: ">=1.13.0", k8s_min: "1.34", citations: ["https://longhorn.io/docs/1.13.0/important-notes/", "https://github.com/longhorn/longhorn/blob/v1.13.0/chart/Chart.yaml"]}
+  - {range: ">=1.8.0 <1.13.0", k8s_min: "1.25", citations: ["https://longhorn.io/docs/1.11.0/important-notes/", "https://github.com/longhorn/website/blob/6f1c5dd3768ba12b047d582108858d693cc37fe9/content/docs/archives/1.8.0/important-notes/_index.md", "https://github.com/longhorn/longhorn/blob/v1.8.0/chart/Chart.yaml"]}
+  - {range: ">=1.5.0 <1.8.0", k8s_min: "1.21", citations: ["https://github.com/longhorn/website/blob/6f1c5dd3768ba12b047d582108858d693cc37fe9/content/docs/archives/1.5.0/deploy/install/_index.md", "https://github.com/longhorn/longhorn/blob/v1.5.0/chart/Chart.yaml", "https://longhorn.io/docs/1.7.0/best-practices/"]}
+cycles:
+  - {cycle: "1.13", eol: "2027-11-29", citations: ["https://endoflife.date/longhorn"]}
+  - {cycle: "1.12", eol: "2027-08-14", citations: ["https://endoflife.date/longhorn"]}
+  - {cycle: "1.11", eol: "2027-07-29", citations: ["https://endoflife.date/longhorn"]}
+  - {cycle: "1.10", eol: "2027-03-25", citations: ["https://endoflife.date/longhorn"]}
+  - {cycle: "1.9", eol: "2026-11-27", citations: ["https://endoflife.date/longhorn"]}
+  - {cycle: "1.8", eol: "2026-07-22", citations: ["https://endoflife.date/longhorn"]}
+  - {cycle: "1.7", eol: "2025-09-04", citations: ["https://endoflife.date/longhorn"]}
+  - {cycle: "1.6", eol: "2025-03-29", citations: ["https://endoflife.date/longhorn"]}
+  - {cycle: "1.5", eol: "2024-07-19", citations: ["https://endoflife.date/longhorn"]}
+  - {cycle: "1.4", eol: "2024-03-13", citations: ["https://endoflife.date/longhorn"]}
+  - {cycle: "1.3", eol: "2023-08-11", citations: ["https://endoflife.date/longhorn"]}
+  - {cycle: "1.2", eol: "2022-10-06", citations: ["https://endoflife.date/longhorn"]}
+  - {cycle: "1.1", eol: "2022-04-23", citations: ["https://endoflife.date/longhorn"]}
