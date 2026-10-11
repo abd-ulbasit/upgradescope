@@ -30,7 +30,11 @@ of `upgradescope scan --files`. **helm** means `helm pull` or
 - **No chart uses a removed or deprecated Kubernetes API (upgradescope).**
   42 of the 50 charts rendered at `--kube-version 1.37.0` and were scanned.
   None had a `removed-api` finding or a `deprecated-api` finding. At default
-  values, API removals are not what blocks these charts from 1.37.
+  values, API removals are not what blocks these charts from 1.37. Custom
+  resource definitions are another matter: kyverno 3.9.1 (17) and metallb
+  0.16.1 (1) have `crd-version` info findings for CRD versions their own
+  CRDs mark deprecated. Those are the projects' APIs, not Kubernetes', and
+  are not blockers.
 - **4 of the 42 are blocked at 1.37 (upgradescope).** Every one of these
   blockers comes from add-on lifecycle data, and none comes from an API:
     - cert-manager 1.21.2 supports Kubernetes up to 1.36;
@@ -65,11 +69,12 @@ Some things were not what we expected:
   upper bound. The other 16 set a minimum only, and a minimum of
   `>= 1.22.0-0` lets helm install cert-manager 1.21.2 on Kubernetes 1.37,
   even though upstream supports that release only up to 1.36.
-- **Bitnami charts default to `:latest` (from the rendered `image:` lines).**
-  At default values, redis 28.3.1, postgresql 18.12.4, mongodb 20.0.0, nginx
-  25.2.1 and wordpress 34.1.3 (with its mariadb) render
-  `registry-1.docker.io/bitnami/<app>:latest`. Other Bitnami charts in the
-  sample render dated tags, for example keycloak 25.2.0 with
+- **5 of the 12 Bitnami charts render `:latest` at default values (from the
+  rendered `image:` lines).** They are redis 28.3.1, postgresql 18.12.4,
+  mongodb 20.0.0, nginx 25.2.1 and wordpress 34.1.3 (with its mariadb), each
+  rendering `registry-1.docker.io/bitnami/<app>:latest`. The other 7 Bitnami
+  charts in the sample (keycloak, rabbitmq, kafka, external-dns, mysql, minio
+  and thanos) render dated tags, for example keycloak 25.2.0 with
   `docker.io/bitnami/keycloak:26.3.3-debian-12-r0`. Two charts from other
   publishers pull Bitnami images from `docker.io/bitnamilegacy/` through
   their dependencies: airflow 1.22.0 (`postgresql:16.1.0-debian-11-r15`) and
@@ -102,9 +107,10 @@ survey day's run used:
 | helm | v4.1.4 (`GitCommit 05fa37973dc9e42b76e1d2883494c87174b6074f`, `KubeClientVersion v1.35`) |
 | jq | 1.8.1 |
 
-The run started at 2026-10-11T23:09:24Z and took 6 min 42 s on one machine.
-`results.json` → `meta` holds the same facts, the complete `upgradescope
-version` output among them.
+The run started at 2026-10-11T23:09:24Z, on one machine. `results.json` →
+`meta` holds the same facts, the complete `upgradescope version` output
+among them. (That run's `meta` has no end time; the harness records
+`finishedAt` from the next run on.)
 
 1. **Select.** Read
    `https://artifacthub.io/api/v1/packages/search?kind=0&sort=stars&limit=60&offset=0`
@@ -395,7 +401,8 @@ We also checked Rancher by hand. Its `Chart.yaml` reads
   object or file. The add-on table therefore counts findings, not matches.
   An add-on that was matched and found fine, such as argo-cd, traefik,
   cilium 1.20.2 or fluent-bit, does not appear in it.
-- **Registry coverage.** The registry used here had 27 add-on entries. An
+- **Registry coverage.** The registry used here had 27 add-on entries (the
+  `.yaml` files in `registry/data/` at commit `2e524c93`). An
   add-on outside it, or a release it has no row for, is not judged. The
   `addon-no-data` rows and the unrecognised images show where it ran out.
 - **Image tags come from a grep.** The `images` lists and the `:latest`
@@ -422,20 +429,26 @@ directory: `charts/<rank>-<repository>-<name>/`. That is the material for
 checking a row by hand. Artifact Hub's order and the charts' latest versions
 move, so a later run selects and renders what is current then.
 
-Every number on this page can be recomputed from the committed
-`results.json` with jq. For example:
+Every count and table in "What we found" and "Results" can be recomputed
+from the committed `results.json` with jq. The other numbers have other
+sources: the tool versions and the start time are in `results.json` →
+`meta`, the registry entry count is in `registry/data/` at commit
+`2e524c93`, and the line numbers under "Checked by hand" are in the run
+directory's renders, which are not committed. For example:
 
 ```sh
 jq '.summary.classes' results.json                      # the class counts
 jq -r '.summary.blockerList[] | "\(.chart) \(.version): \(.title)"' results.json
 jq -r '.charts[] | select(.render.ok == false) | "\(.name): \(.render.error)"' results.json
 jq '[.charts[] | select((.chart.kubeVersion // "") | test("<")) | .name]' results.json
+jq '[.charts[] | select(.repository == "bitnami") | any(.images[]?; endswith(":latest"))] | group_by(.) | map({latest: .[0], charts: length})' results.json
 ```
 
 ## Files
 
 - [`results.json`](results.json) has these keys:
-    - `meta`: the date, the tool versions and the commands;
+    - `meta`: the date, the start time, the tool versions and the
+      commands (runs after this one also record `finishedAt`);
     - `dropped`: the selection's drop log;
     - `summary`: every count and table above;
     - `charts`: one record per chart. A record holds its Artifact Hub
