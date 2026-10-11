@@ -1947,7 +1947,8 @@ func evalUpgradePath(inv inventory.Inventory, target inventory.Version) []Findin
 // versions is already unavailable), a kb-coverage gap when the target is
 // beyond the KB horizon, and a target gap when the target is not an
 // upgrade of the cluster (see upgradeFrom). Required is set per the
-// verdict rules on CapabilityGap. Collectors report every capability they
+// verdict rules on CapabilityGap (a partial volumes capability per
+// volumesPartialRequired, in a cluster inventory). Collectors report every capability they
 // have, so one absent from inv.Capabilities was not collected at all.
 // A required one (api-usage; in a cluster inventory versions and addons
 // too) is a required gap: every collector since v0.1.0 reports them, and
@@ -2006,6 +2007,11 @@ func assessmentGaps(inv inventory.Inventory, k kb.KB, target inventory.Version) 
 				// The same for add-ons the server's registry knows and the
 				// agent's did not (inventory.SkippedNewerKB).
 				g.Required = required[c] && (slices.Contains(st.Skipped, inventory.SkippedPods) || slices.Contains(st.Skipped, inventory.SkippedNewerKB))
+			case inventory.CapVolumes:
+				// An unread PersistentVolume or StorageClass list (#374)
+				// may hide a removed plugin's blocker: required when the
+				// KB has one that list could reveal, removed by target.
+				g.Required = cluster && volumesPartialRequired(k, st.Skipped, target)
 			}
 			gaps = append(gaps, g)
 		}
