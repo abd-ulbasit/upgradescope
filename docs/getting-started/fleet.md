@@ -66,19 +66,30 @@ that cluster:
 ```sh
 kubectl create namespace upgradescope
 kubectl -n upgradescope create secret generic push-token --from-literal=serverToken=<token>
-helm install upgradescope deploy/chart -n upgradescope \
+helm install upgradescope oci://ghcr.io/abd-ulbasit/charts/upgradescope --version 0.2.1 \
+  -n upgradescope \
   --set agent.clusterName=prod-eu-1 \
   --set agent.serverUrl=https://upgradescope.example.com \
   --set agent.existingSecret=push-token
 ```
 
-A chart from a clone defaults to the image of the release it was cut for.
-To run unreleased changes, add `--set image.repository=... --set image.tag=...`
-naming an image you build and push yourself ([In-cluster](in-cluster.md)
+The published chart defaults to its release's image, pinned by digest. A
+chart from a clone (`deploy/chart`) defaults to the image of the release it
+was cut for. To run unreleased changes, install from a clone and add
+`--set image.repository=... --set image.tag=...` naming an image you build
+and push yourself ([In-cluster](in-cluster.md)
 shows how).
 
 The agent pushes its inventory when it changes and at least hourly
-(`--force-sync-every`), retrying transient failures. The server evaluates
+(`--force-sync-every`), retrying transient failures. A push that still
+fails keeps the snapshot, and the agent retries it between ticks: 10
+seconds later, then 20, 40 and 80, then every 2 minutes (each ±20%),
+until it is delivered or the next tick pushes a newer one. So when the
+server is not listening yet at the agent's first tick, as when the chart
+installs both (`--set server.enabled=true`), the first snapshot usually
+reaches the server within seconds of it starting to listen, and at most
+about 2.5 minutes after (the 2-minute wait plus its jitter), not one
+`agent.interval` (10 minutes) later. The server evaluates
 each new snapshot against the cluster's next minor and every
 `serve --targets` minor, and stores the result. The first push from a
 cluster registers it and binds its name to the cluster's UID (the

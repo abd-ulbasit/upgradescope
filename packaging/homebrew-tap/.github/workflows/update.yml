@@ -78,8 +78,17 @@ jobs:
       - name: brew install and test the tap's formula
         env:
           TAP: ${{ github.repository }}
+        # setup-homebrew taps this repository at the run's own commit, which
+        # predates a formula the update job has just pushed (the first run
+        # creates Formula/upgradescope.rb). Move the tap's checkout to the
+        # branch as it now stands, so the test is of that formula. The
+        # checkout stays where setup-homebrew put it: its post step removes it.
         run: |
-          brew tap "${TAP%%/homebrew-*}/${TAP##*/homebrew-}" "https://github.com/${TAP}"
-          brew install "${TAP%%/homebrew-*}/${TAP##*/homebrew-}/upgradescope"
-          brew test "${TAP%%/homebrew-*}/${TAP##*/homebrew-}/upgradescope"
+          tap="${TAP%%/homebrew-*}/${TAP##*/homebrew-}"
+          brew tap "$tap" "https://github.com/${TAP}"
+          repo="$(brew --repository "$tap")"
+          git -C "$repo" fetch --quiet "https://github.com/${TAP}" "$GITHUB_REF_NAME"
+          git -C "$repo" checkout --quiet --force FETCH_HEAD
+          brew install "$tap/upgradescope"
+          brew test "$tap/upgradescope"
           upgradescope version

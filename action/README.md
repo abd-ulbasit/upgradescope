@@ -93,12 +93,11 @@ Pick how the gate moves:
   candidate. If you set `version: latest` at a release tag that is newer
   than the latest release (a release candidate, say), the step logs a
   `::warning` that the binary is older than the action, since an older
-  engine can pass what the newer one blocks. If that latest is v0.1.0 or
-  v0.1.1, which predate provenance, and the action's release is v0.2.0-rc.2
-  or later, the step fails instead ([Latest moved
-  back](#install-and-integrity)). With `version: latest` the action does
-  not look up a commit SHA's release, so at a SHA or a branch it gives no
-  such warning and no such failure.
+  engine can pass what the newer one blocks. With `version: latest`, the
+  action does not look up a commit SHA's release, so at a SHA or a branch it
+  gives no such warning. A latest that is v0.1.0 or v0.1.1, which predate
+  provenance, fails the step from every ref ([Latest moved
+  back](#install-and-integrity)).
 
 The examples below pin v0.2.0, the first release that ships this action
 (root `action.yml`, outputs, step summary). Put the release you pin in its
@@ -501,16 +500,15 @@ cannot write the step summary, so a warning replaces it.
   checked against `checksums.txt` only, with a `::warning` that says so.
   `verify-provenance: false` does the same for any release, also with a
   `::warning`. Neither detects a tampered release.
-- **Latest moved back.** With `version: latest` and the action at a
-  release tag from v0.2.0-rc.2 on (`@vX.Y.Z` or `@vX.Y.Z-rc.N`), a latest
-  that resolves to v0.1.0 or v0.1.1 fails the step before anything is
-  downloaded. Such a latest means someone moved GitHub's latest back to a
-  release nothing can verify (what anything that can edit the releases
-  would do to install a binary of its choosing), or that the action is at
-  a release candidate, which GitHub's latest skips.
-  Set `version` to the action's release, or `verify-provenance: false` to
-  install it on the checksum alone. At a commit SHA, a branch or `@v0`,
-  `latest` is not compared with the action's release.
+- **Latest moved back.** GitHub's latest is v0.2.0 or newer, so a `latest`
+  (`version: latest`, or the default at `@v0`, a branch or a commit SHA with
+  no release tag) that resolves to v0.1.0 or v0.1.1 means someone moved it
+  back to a release nothing can verify, by tampering or by accident. The step
+  fails from every ref, naming the tag, before anything is downloaded and
+  without a `go install` fallback. Set `version` to a release such as
+  v0.2.0, or `verify-provenance: false` to install it on the checksum alone.
+  An explicit `version: v0.1.1` keeps the behavior under *Without
+  provenance* above.
 - **No archive, no install.** When the archive cannot be downloaded (the
   release has none for the runner, the asset is gone, the download fails)
   or `latest` does not resolve to a tag, the step fails with curl's final

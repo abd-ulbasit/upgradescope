@@ -114,7 +114,8 @@ Quality reports (`--output junit|gitlab-codequality`): see
 **Run it in the cluster**:
 
 ```sh
-helm install upgradescope deploy/chart -n upgradescope --create-namespace
+helm install upgradescope oci://ghcr.io/abd-ulbasit/charts/upgradescope --version 0.2.1 \
+  -n upgradescope --create-namespace
 kubectl get ucr        # NAME  TARGET  SCORE  READY  BLOCKERS  LASTEVALUATED  AGE
 ```
 
@@ -235,7 +236,7 @@ Secret and ConfigMap there, and releases elsewhere go unassessed);
 |---|---|---|
 | `scan` against a live kind cluster (Kubernetes 1.37) | median 0.49 s, p90 0.52 s | 30 runs on a ThinkPad (Linux, amd64), October 2026 audit at main `8a951dd` (#130) |
 | `scan --files` on the demo's four rendered objects (`hack/demo/rendered`) | median 0.022 s, p90 0.022 s | 30 runs, Apple M1 Pro, main `9d0b161`, 2026-10-02 |
-| Binary and archive, linux/amd64 (stripped binary, `.tar.gz` download) | 61.0 MiB binary, 18.6 MiB archive | GoReleaser v2.17.1 snapshot (`make release-check`) in CI's release-check job on GitHub's linux/amd64 runner, Go 1.26.9, main `f121698a` with #291, 2026-10-10; cross-compiled with `CGO_ENABLED=0`, so the build host does not change the size; the release check fails beyond 2% |
+| Binary and archive, linux/amd64 (stripped binary, `.tar.gz` download) | 61.5 MiB binary, 18.7 MiB archive | the published v0.2.0 assets (commit `62603159`, GoReleaser v2.17.1, Go 1.26.9), 2026-10-11; cross-compiled with `CGO_ENABLED=0`, so the build host does not change the size; the release check fails beyond 2% |
 
 More, with sizes per platform: [Install](https://abd-ulbasit.github.io/upgradescope/operations/install/#sizes).
 

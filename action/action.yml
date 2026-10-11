@@ -68,9 +68,9 @@ inputs:
       is no fallback to an unverified source build. v0.1.0 and v0.1.1, the
       releases from before provenance (by name, not by version: every
       other release is verified), are checked against checksums.txt only,
-      with a warning; a "latest" that is one of them fails the step when
-      the action is at a release tag from v0.2.0-rc.2 on (GitHub's latest
-      was moved back). "false" checks the archive against checksums.txt
+      with a warning; a "latest" that is one of them fails the step from
+      any ref, since GitHub's latest is v0.2.0 or newer and was moved
+      back. "false" checks the archive against checksums.txt
       only, with a warning, and when no archive downloads falls back to
       `go install` (Go set up), also with a warning. Not used for
       version: preinstalled.

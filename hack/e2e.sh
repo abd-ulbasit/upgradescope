@@ -37,7 +37,9 @@
 #      Ready Unknown/NotAssessed (the rules are removed again);
 #      the install added no admission webhook, and the CR carries no
 #      finalizer or owner reference;
-#   6. the server ingested the agent's snapshot (GET /api/v1/clusters); then
+#   6. the server ingested the agent's snapshot (GET /api/v1/clusters),
+#      before the agent's second tick: a first push that failed (the server
+#      not listening yet) was delivered by a retry between ticks (#386); then
 #      the server-gate command documented on the CI gate page
 #      (docs/getting-started/ci-gate.md, #120), run as written against the
 #      same port-forward with ?cluster= naming the agent's cluster: a clean
@@ -617,6 +619,43 @@ server_ingested() {
   grep -q '"ok"' <<<"$(curl -fsS "$SERVER_URL/healthz")" || { echo "/healthz is not ok" >&2; return 1; }
 }
 
+# #386 (AG-33): in the combined install the first snapshot is not left
+# for the next tick. The agent's first tick runs as its pod starts, often
+# before the server listens; that push fails and stays buffered, and a
+# retry between ticks must deliver it: a `buffered snapshot pushed` line
+# before the second tick's line. server_ingested alone cannot tell, as the
+# second tick (agent.interval=1m) would deliver it within its 120s. A first
+# push that succeeded passes too (the server listened first); the step
+# prints the lines it judged, so the summary's PASS says which case ran.
+# The agent's text log (the chart's default logFormat) is read whole.
+first_snapshot_before_second_tick() {
+  k -n "$NS" logs "deploy/$RELEASE-agent" >"$work/agent.log" || return 1
+  local judged
+  judged=$(awk '
+    /msg="tick (complete|failed)"/ {
+      ticks++
+      if (ticks == 1) {
+        print
+        if ($0 ~ / push=ok( |$)/) { ok = 1; exit }
+        if ($0 !~ / push=failed( |$)/) { exit }
+        next
+      }
+      print
+      exit
+    }
+    ticks == 1 && /msg="buffered snapshot push(ed| failed)"/ {
+      print
+      if ($0 ~ /msg="buffered snapshot pushed"/) { ok = 1; exit }
+    }
+    END { exit ok ? 0 : 1 }' "$work/agent.log") && {
+    echo "$judged"
+    return 0
+  }
+  echo "the agent's first snapshot did not reach the server before its second tick: want the first tick's push=ok, or push=failed then a 'buffered snapshot pushed' line before the next tick line; the lines judged:" >&2
+  echo "${judged:-(no tick line in the agent log)}" >&2
+  return 1
+}
+
 # The server-gate command as the CI gate page documents it: the sh block
 # that POSTs to /api/v1/gate, which TestGateDocsExample runs too, so the
 # page, that test and this step cannot drift apart. Only its example target
@@ -927,6 +966,7 @@ else
 fi
 gate "the install added no webhook configuration; ClusterReadiness/$CR has no finalizer or owner reference" no_webhooks_or_finalizers
 gate "server ingested the agent's snapshot" server_ingested
+gate "the agent's first snapshot reached the server before its second tick: a failed first push is retried between ticks (#386)" first_snapshot_before_second_tick
 gate "the server-gate command documented in $GATE_DOC is found and aimed at this cluster" documented_gate_command
 gate "the documented server-gate command passes a clean manifest: the cluster's own blockers are not the pull request's" gate_passes_clean_manifest
 gate "the documented server-gate command fails a removed-API manifest and still writes a SARIF with a result for it" gate_fails_removed_api

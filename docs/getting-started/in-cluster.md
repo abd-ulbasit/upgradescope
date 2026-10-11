@@ -11,7 +11,7 @@ From v0.2.0 the chart is published as a signed OCI artifact:
 
 ```sh
 helm install upgradescope oci://ghcr.io/abd-ulbasit/charts/upgradescope \
-  --version 0.2.0 -n upgradescope --create-namespace
+  --version 0.2.1 -n upgradescope --create-namespace
 ```
 
 To run unreleased changes, install from a clone: `helm install upgradescope
@@ -59,7 +59,12 @@ The agent ticks once at startup and then every `agent.interval` (10m by
 default, 1m at least) with ±10% jitter on the later ticks; the first is
 immediate, so the status appears as soon as possible. Its pod is Ready once the first
 tick has written the status, so `helm install --wait` waits for a first
-answer. To block a script or pipeline on readiness:
+answer. A push to a server does not hold that back: with the in-chart
+server (`server.enabled=true`), which may not be listening yet at the
+first tick, the agent retries the snapshot between ticks (after 10s,
+doubling to every 2 minutes), so the first snapshot usually reaches the
+server within seconds of it starting to listen, at most about 2.5 minutes
+after, not at the next tick ([Fleet server](fleet.md#connect-agents)). To block a script or pipeline on readiness:
 
 ```sh
 kubectl wait clusterreadiness/cluster --for=condition=Ready --timeout=15m
