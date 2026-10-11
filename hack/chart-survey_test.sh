@@ -161,7 +161,8 @@ crd=$(f crd-version blocker crd-version/unserved/x.io/v1alpha1/Thing 'x.io/v1alp
 inc=$(f chart-incompat blocker chart-incompat/istio 'istio 1.20 does not support Kubernetes 1.37')
 inc=$(jq -c 'del(.objects[]) | .objectsTotal = 0' <<<"$inc") # add-on findings list no object
 rec 01-r-c1 "$(mk 1 c1 "$(scan blocked "[$psp,$dep]")")"
-rec 02-r-c2 "$(mk 2 c2 "$(scan blocked "[$nginx,$nodata]" | jq -c '.unrecognizedImages = ["docker.io/bitnami/redis", "quay.io/x/y"]')")"
+rec 02-r-c2 "$(mk 2 c2 "$(scan blocked "[$nginx,$nodata]" | jq -c '.unrecognizedImages = ["docker.io/bitnami/redis", "quay.io/x/y"]')" \
+  '{"images": ["busybox", "docker.io/bitnami/redis:latest", "quay.io/x/y:v1@sha256:abc", "localhost:5000/z"]}')"
 rec 03-r-c3 "$(mk 3 c3 "$(scan ready "[$dep]")")"
 rec 04-r-c4 "$(mk 4 c4 "$(scan ready '[]' | jq -c '.unrecognizedImages = ["quay.io/x/y"]')")"
 rec 05-r-c5 "$(mk 5 c5 null '{"chart":{"type":"application","kubeVersion":">=1.20.0-0 <1.37.0-0"},
@@ -208,6 +209,9 @@ check "aggregate: the blocker list names chart, finding and file" \
 check "aggregate: image repositories no add-on matcher recognised" \
   '.summary.unrecognizedImages == {charts: 2, distinct: 2,
      top: [{image: "quay.io/x/y", charts: 2}, {image: "docker.io/bitnami/redis", charts: 1}]}' "$r"
+check "aggregate: charts that render an image by a latest tag or by no tag" \
+  '.summary.latestOrUntaggedImages == [{chart: "c2", repository: "r", version: "1.2.0",
+     images: ["busybox", "docker.io/bitnami/redis:latest", "localhost:5000/z"]}]' "$r"
 check "aggregate: the minor before, from the same charts" '.summary.prevVerdicts == {"ready": 6}' "$r"
 
 csv=$out/results.csv
@@ -228,6 +232,26 @@ for want in '| Removed API (blocker) | 1 |' '| `kubeVersion` excludes 1.37 | 1 |
     sed 's/^/     /' "$out/tables.md" >&2
   fi
 done
+
+# --- images ------------------------------------------------------------------
+mkdir -p "$work/r/c/templates"
+cat >"$work/r/c/templates/d.yaml" <<'EOF'
+spec:
+  containers:
+    - name: a
+      image: "registry-1.docker.io/bitnami/redis:latest"
+    - image: quay.io/x/y:v1@sha256:abc
+  initContainers:
+  - name: b
+    image: busybox
+data:
+  tpl: |
+    image: {{ .ProxyImage }}
+EOF
+printf 'image: quay.io/x/y:v1@sha256:abc\n' >"$work/r/c/templates/e.yml"
+hack/chart-survey.sh images "$work/r" >"$work/img.json"
+check "images lists each image reference once, sorted, skipping template text" \
+  '. == ["busybox", "quay.io/x/y:v1@sha256:abc", "registry-1.docker.io/bitnami/redis:latest"]' "$work/img.json"
 
 # --- yaml2json ---------------------------------------------------------------
 if command -v helm >/dev/null; then

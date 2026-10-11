@@ -19,6 +19,8 @@
 #       records in <out-dir>/charts/*/record.json.
 #   hack/chart-survey.sh yaml2json <file>
 #       YAML to JSON with helm's own fromYaml (no yq needed).
+#   hack/chart-survey.sh images <dir>
+#       The image references on the image: lines of a render, as JSON.
 #
 # Method, for each selected chart:
 #   1. select: Artifact Hub's search API, sorted by stars (Artifact Hub has
@@ -51,7 +53,7 @@ PAGE=60 # the search API's largest page
 
 usage() {
   echo "usage: $0 run|select|classify|aggregate|yaml2json ..." >&2
-  sed -n '3,21p' "$self" | sed 's/^# \{0,1\}//' >&2
+  sed -n '3,23p' "$self" | sed 's/^# \{0,1\}//' >&2
   exit 2
 }
 die() { echo "chart-survey: $*" >&2; exit 1; }
@@ -143,6 +145,19 @@ cmd_yaml2json() {
   rm -rf "$d"
 }
 
+# --- images ------------------------------------------------------------------
+# The image references on the image: lines of a render, as a JSON array. A
+# grep, not a parse: it reads every image: line of every YAML file (a
+# ConfigMap holding YAML text counts too) and skips values that are still
+# template text. The scan reads images properly, but reports only the ones no
+# add-on matcher recognised.
+cmd_images() {
+  [ $# -eq 1 ] || usage
+  { grep -rhE '^[[:space:]]*(- )?image:[[:space:]]*[^[:space:]]' --include='*.yaml' --include='*.yml' "$1" || true; } |
+    sed -E "s/^[[:space:]]*(- )?image:[[:space:]]*//; s/^[\"']//; s/[\"']?[[:space:]]*\$//" |
+    { grep -vE '\{\{|^[|>]' || true; } | sort -u | jq -R . | jq -cs .
+}
+
 # --- aggregate ---------------------------------------------------------------
 cmd_aggregate() {
   [ $# -eq 1 ] || usage
@@ -201,6 +216,10 @@ cmd_aggregate() {
             | {charts: ([.[] | select(scanned and ((.scan.unrecognizedImages // []) | length) > 0)] | length),
                distinct: ($u | unique | length),
                top: ($u | group_by(.) | map({image: .[0], charts: length}) | sort_by(-.charts, .image) | .[:25])}),
+          latestOrUntaggedImages: [.[] | select(.images) | {chart: .name, repository, version,
+              images: ([.images[] | select(test("@") | not)
+                | select((split("/")[-1] | test(":") | not) or endswith(":latest"))] | sort)}
+            | select(.images | length > 0)],
           refused: [.[] | select(.render.class == "kubeVersion")
             | {rank, chart: .name, repository, version, kubeVersion: .chart.kubeVersion,
                acceptsPrev: (.render.prev.ok == true),
@@ -277,6 +296,11 @@ cmd_aggregate() {
       "| Add-on | Finding category | Charts |", "|---|---|---|",
       ($s.addons[] | row([.id, .category, .charts])),
       "",
+      "### Charts that render an image by a `latest` tag or by no tag", "",
+      "From the `image:` lines of the render at \($t).0 (a grep, see `images` in the record); digest-pinned references are left out.", "",
+      "| Chart | Version | Images |", "|---|---|---|",
+      ($s.latestOrUntaggedImages[] | row([.chart, .version, (.images | map("`\(.)`") | join(", "))])),
+      "",
       "### Images no add-on matcher recognised", "",
       "\($s.unrecognizedImages.distinct) distinct image repositories in \($s.unrecognizedImages.charts) charts. The most common:", "",
       "| Image repository | Charts |", "|---|---|",
@@ -350,7 +374,7 @@ survey_chart() {
   if [ -z "$tgz" ]; then
     fetch=$(jq -cn --arg e "$(trim "$dir/pull.err")" '{ok: false, error: $e}')
     jq -n --argjson c "$c" --argjson f "$fetch" \
-      '$c + {chart: null, fetch: $f, render: null, renderPrev: null, scan: null, scanPrev: null, scanOfPrevRender: null}' \
+      '$c + {chart: null, fetch: $f, render: null, scan: null, scanPrev: null, scanOfPrevRender: null, images: null}' \
       >"$dir/record.json"
     return 0
   fi
@@ -366,12 +390,15 @@ survey_chart() {
   if render "$tgz" "$prev.0" "$dir/rendered-$prev" "$dir/render-$prev.err"; then ok_p=true; else
     class_p=$("$self" classify "$dir/render-$prev.err")
   fi
-  local rprev rtarget s=null sp=null sop=null
+  local rprev rtarget s=null sp=null sop=null images=null
   rprev=$(jq -cn --arg kv "$prev.0" --argjson ok "$ok_p" --arg cl "$class_p" --arg e "$(trim "$dir/render-$prev.err")" \
     '{kubeVersion: $kv, ok: $ok, class: (if $ok then null else $cl end), error: (if $ok then null else $e end)}')
   rtarget=$(jq -cn --argjson ok "$ok_t" --arg cl "$class_t" --arg e "$(trim "$dir/render-$target.err")" --argjson p "$rprev" \
     '{ok: $ok, class: (if $ok then null else $cl end), error: (if $ok then null else $e end), prev: $p}')
-  if [ "$ok_t" = true ]; then s=$(scan "$dir/rendered-$target" "$target" "$dir/scan-$target.json" "$dir/scan-$target.err"); fi
+  if [ "$ok_t" = true ]; then
+    s=$(scan "$dir/rendered-$target" "$target" "$dir/scan-$target.json" "$dir/scan-$target.err")
+    images=$("$self" images "$dir/rendered-$target")
+  fi
   if [ "$ok_p" = true ]; then
     sp=$(scan "$dir/rendered-$prev" "$prev" "$dir/scan-$prev.json" "$dir/scan-$prev.err" |
       jq -c --arg t "$prev" '{target: $t, ok, error, verdict, score,
@@ -383,8 +410,8 @@ survey_chart() {
     fi
   fi
   jq -n --argjson c "$c" --argjson ch "$chart" --argjson f "$fetch" --argjson r "$rtarget" \
-    --argjson s "$s" --argjson sp "$sp" --argjson sop "$sop" \
-    '$c + {chart: $ch, fetch: $f, render: $r, scan: $s, scanPrev: $sp, scanOfPrevRender: $sop}' >"$dir/record.json"
+    --argjson s "$s" --argjson sp "$sp" --argjson sop "$sop" --argjson im "$images" \
+    '$c + {chart: $ch, fetch: $f, render: $r, scan: $s, scanPrev: $sp, scanOfPrevRender: $sop, images: $im}' >"$dir/record.json"
 }
 
 cmd_run() {
@@ -458,7 +485,7 @@ cmd_run() {
 }
 
 case "${1:-}" in
-  run | select | classify | aggregate | yaml2json)
+  run | select | classify | aggregate | yaml2json | images)
     cmd=$1
     shift
     "cmd_$cmd" "$@"
