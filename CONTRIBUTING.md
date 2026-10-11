@@ -31,7 +31,9 @@ and never in a public issue.
 | Docker | any, with buildx | only `make pg-test`, `make images`, `make docker-build` and `make e2e` |
 
 Unit tests, golden tests, lint and the build need **only Go**. No Docker, no
-cluster and no network beyond the Go module proxy.
+cluster and no network beyond the Go module proxy. The tests that render the
+chart skip when helm is not installed (`make hack-test` proves it with helm
+hidden from `PATH`); `make chart-test` runs them for real.
 
 ```sh
 git clone https://github.com/abd-ulbasit/upgradescope
