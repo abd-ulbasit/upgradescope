@@ -1,14 +1,50 @@
 package cli
 
-// Tests that keep the project's governance files present and linked:
-// MAINTAINERS.md has the columns the CNCF Sandbox form checks, CONTRIBUTING
-// points at the governance, and the roadmap links its milestones.
+// Tests that keep the README a short summary and the project's governance
+// files present and linked: the README links every project file a visitor
+// or the CNCF Sandbox form looks for, MAINTAINERS.md has the columns that
+// form checks, and the roadmap links its milestones.
 
 import (
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
 )
+
+// readmeWordBudget caps the README's length, counted as wc -w counts it
+// (white-space separated fields, code blocks and badges included). The long
+// material lives on the docs site; the README links it.
+const readmeWordBudget = 1500
+
+// TestReadmeStaysASummary: the README fits its word budget.
+func TestReadmeStaysASummary(t *testing.T) {
+	if n := len(strings.Fields(readDoc(t, "README.md"))); n > readmeWordBudget {
+		t.Errorf("README.md has %d words, over the budget of %d: move the detail to a docs page and link it", n, readmeWordBudget)
+	}
+}
+
+// projectFiles are the files the README's Project section links, each one
+// at the repository root (docs/claims.md under docs/).
+var projectFiles = []string{
+	"CONTRIBUTING.md", "GOVERNANCE.md", "MAINTAINERS.md", "ADOPTERS.md",
+	"ROADMAP.md", "SECURITY.md", "docs/claims.md", "CODE_OF_CONDUCT.md",
+}
+
+// TestReadmeLinksTheProjectFiles: the README links each project file, and
+// each exists.
+func TestReadmeLinksTheProjectFiles(t *testing.T) {
+	readme := readDoc(t, "README.md")
+	for _, f := range projectFiles {
+		if _, err := os.Stat(filepath.Join(repoRoot, f)); err != nil {
+			t.Errorf("%s: %v", f, err)
+		}
+		if !strings.Contains(readme, "]("+f+")") {
+			t.Errorf("README.md does not link %s", f)
+		}
+	}
+}
 
 // TestContributingLinksGovernance: CONTRIBUTING.md's opening, before its
 // first section, points at GOVERNANCE.md and MAINTAINERS.md.
