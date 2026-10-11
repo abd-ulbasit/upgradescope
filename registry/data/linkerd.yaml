@@ -1,0 +1,57 @@
+# registry/data/linkerd.yaml
+# Hand-curated: endoflife.date does not track Linkerd, and linkerd.io
+# publishes no end-of-support dates for its release lines, so there are no
+# cycles (read 2026-10-12: https://linkerd.io/releases/ lists 2.15 to 2.20 as
+# recent versions without a support policy, and says that since February 2024
+# the open-source project publishes edge releases only, stable ones coming
+# from vendors such as Buoyant).
+#
+# Images: the open-source images on ghcr.io/linkerd (also served as
+# cr.l5d.io/linkerd) are tagged "edge-YY.M.N", and "stable-2.N.P" up to 2.14
+# (tag lists read 2026-10-12). The control plane, proxy, policy-controller
+# and debug images carry the release's tag; proxy-init (v2.4.x) and
+# cni-plugin (v1.x) version themselves and are left out. The pre-2.9
+# gcr.io/linkerd-io repositories could not be listed anonymously and are not
+# claimed.
+schema_version: 2
+id: linkerd
+display_name: Linkerd
+matchers:
+  images:
+    - linkerd/controller
+    - linkerd/proxy
+    - linkerd/policy-controller
+    - linkerd/debug
+  charts:
+    - linkerd-control-plane
+    - linkerd2 # the chart before 2.12
+support:
+  status: supported
+  citations:
+    - https://linkerd.io/releases/
+    - https://linkerd.io/docs/reference/k8s-versions/
+# Kubernetes ranges, read on 2026-10-12 from the table of
+# https://linkerd.io/docs/reference/k8s-versions/ ("Minimum Kubernetes
+# Version" and "Maximum Kubernetes Version" per Linkerd release, 2.10 to
+# 2.20). The page says Linkerd supports the Kubernetes versions that were
+# supported when a release shipped, that later Kubernetes changes can break
+# older releases and that the maintainers then update the table, so both
+# columns are bounds. Minor releases almost never change them; the one
+# exception the page names is 2.11.0 (Kubernetes 1.16) against 2.11.1 and
+# later (1.17), which has its own row. Edge releases (edge-YY.M.N) are not in
+# the table: the page says they support the Kubernetes versions readily
+# available at release time, which is not a bound, so they have no row. A
+# release line the page gains (2.21) needs its row added from that table.
+compat:
+  - {range: ">=2.20.0 <2.21.0", k8s_min: "1.31", k8s_max: "1.35", citations: ["https://linkerd.io/docs/reference/k8s-versions/"]}
+  - {range: ">=2.19.0 <2.20.0", k8s_min: "1.22", k8s_max: "1.35", citations: ["https://linkerd.io/docs/reference/k8s-versions/"]}
+  - {range: ">=2.18.0 <2.19.0", k8s_min: "1.22", k8s_max: "1.32", citations: ["https://linkerd.io/docs/reference/k8s-versions/"]}
+  - {range: ">=2.17.0 <2.18.0", k8s_min: "1.22", k8s_max: "1.31", citations: ["https://linkerd.io/docs/reference/k8s-versions/"]}
+  - {range: ">=2.16.0 <2.17.0", k8s_min: "1.22", k8s_max: "1.29", citations: ["https://linkerd.io/docs/reference/k8s-versions/"]}
+  - {range: ">=2.15.0 <2.16.0", k8s_min: "1.22", k8s_max: "1.29", citations: ["https://linkerd.io/docs/reference/k8s-versions/"]}
+  - {range: ">=2.14.0 <2.15.0", k8s_min: "1.21", k8s_max: "1.28", citations: ["https://linkerd.io/docs/reference/k8s-versions/"]}
+  - {range: ">=2.13.0 <2.14.0", k8s_min: "1.21", k8s_max: "1.28", citations: ["https://linkerd.io/docs/reference/k8s-versions/"]}
+  - {range: ">=2.12.0 <2.13.0", k8s_min: "1.21", k8s_max: "1.24", citations: ["https://linkerd.io/docs/reference/k8s-versions/"]}
+  - {range: ">=2.11.1 <2.12.0", k8s_min: "1.17", k8s_max: "1.23", citations: ["https://linkerd.io/docs/reference/k8s-versions/"]}
+  - {range: ">=2.11.0 <2.11.1", k8s_min: "1.16", k8s_max: "1.23", citations: ["https://linkerd.io/docs/reference/k8s-versions/"]}
+  - {range: ">=2.10.0 <2.11.0", k8s_min: "1.16", k8s_max: "1.23", citations: ["https://linkerd.io/docs/reference/k8s-versions/"]}
