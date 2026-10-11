@@ -7,9 +7,7 @@
 name: upgradescope gate
 description: >-
   Gate rendered Kubernetes manifests on upgrade readiness: removed and
-  deprecated APIs for a target version, as SARIF, outputs and a step summary.
-  Exit code 2 (findings at/above fail-on, or an unknown verdict unless
-  allow-incomplete) fails the step.
+  deprecated APIs for a target version, with SARIF.
 author: abd-ulbasit
 
 inputs:
