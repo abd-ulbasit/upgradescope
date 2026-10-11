@@ -26,6 +26,8 @@ bad() { echo "FAIL $1" >&2; fail=$((fail + 1)); }
 gobin=$(command -v go) || { echo "FAIL go not found" >&2; exit 1; }
 mkdir "$work/bin"
 ln -s "$gobin" "$work/bin/go"
+# A helm installed in /usr/bin or /bin (apt) cannot be hidden from this PATH, so
+# the check refuses to run there; GitHub's runners keep it in /usr/local/bin.
 nohelm="$work/bin:/usr/bin:/bin"
 if PATH=$nohelm command -v helm >/dev/null 2>&1; then
   echo "FAIL helm is in /usr/bin or /bin; this check cannot hide it" >&2

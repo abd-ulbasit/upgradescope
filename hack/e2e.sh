@@ -103,6 +103,7 @@ NS=upgradescope
 RELEASE=upgradescope
 IMAGE=ghcr.io/abd-ulbasit/upgradescope
 TAG=e2e
+IT_VERSION=e2e-it # the in-process ITs' stamped version (integration_tests), so the audit log tells them from the binary
 TOKEN=e2e-token
 # The server needs a read credential (the chart closes the read API without
 # one, and a bearer nothing knows is 401 even on an open one): a read token.
@@ -453,7 +454,11 @@ istio_lines_judged_per_install() {
 }
 
 integration_tests() {
-  UPGRADESCOPE_IT=1 UPGRADESCOPE_IT_CONTEXT="$CTX" go test ./internal/cli/ -run Integration -count=1 -v | tee "$work/it.log" ||
+  # The ITs run in-process and send the release-stamped user agent too; stamping
+  # their version as $IT_VERSION tells their requests apart from the binary's
+  # in the audit log (go test stamps no VCS info, so they would be "dev").
+  UPGRADESCOPE_IT=1 UPGRADESCOPE_IT_CONTEXT="$CTX" go test ./internal/cli/ -run Integration -count=1 -v \
+    -ldflags "-X github.com/abd-ulbasit/upgradescope/internal/cli.version=$IT_VERSION" | tee "$work/it.log" ||
     return 1
   local t ok=0
   for t in $ITS; do
@@ -751,11 +756,13 @@ uninstall_leaves_nothing() {
 # Who is who in the log: `scan` runs as the kind admin with the release-stamped
 # user agent "upgradescope/<version> (<os>/<arch>)" (internal/cli/useragent.go;
 # <version> is the binary's, the agent's is the image's build arg); the agent
-# is the chart's ServiceAccount, with the same format. The ITs run in-process as cli.test and are
+# is the chart's ServiceAccount, with the same format. The ITs run in-process as kubernetes-admin
+# too, with the user agent upgradescope/$IT_VERSION (integration_tests stamps it), and are
 # neither (the agent IT creates and deletes its own CRD and CR).
 JQ_ACTORS='
   def actor:
     if .user.username == $sa then "agent"
+    elif (.userAgent // "") | startswith("upgradescope/" + $itv + " (") then empty
     elif ((.userAgent // "") | startswith("upgradescope/"))
       and ((.user.username // "") | startswith("system:serviceaccount:") | not) then "scan"
     else empty end;
@@ -764,14 +771,14 @@ JQ_ACTORS='
   def show: "\(actor) \(.verb) \(.requestURI) -> \(.responseStatus.code // "?")";
 '
 # audit <jq filter>: the filter over every event of this run's audit log,
-# with JQ_ACTORS and $sa, $cr, $crd, $dep and $obj bound.
+# with JQ_ACTORS and $sa, $itv, $cr, $crd, $dep and $obj bound.
 audit() {
   if [ ! -s "$work/audit.log" ]; then
     docker exec "$CLUSTER-control-plane" sh -c "cat $AUDIT_LOGS/audit*.log" >"$work/audit.log" || return 1
     [ -s "$work/audit.log" ] || { echo "the API server's audit log is empty (hack/e2e/kind-config.yaml not applied?)" >&2; return 1; }
     echo "audit log: $(wc -l <"$work/audit.log" | tr -d ' ') events" >&2
   fi
-  jq -r --arg sa "$AGENT_SA" --arg cr "$CR" --arg crd "$CRD" --arg dep "$DEP_GV" --arg obj "$DEP_OBJ" \
+  jq -r --arg sa "$AGENT_SA" --arg itv "$IT_VERSION" --arg cr "$CR" --arg crd "$CRD" --arg dep "$DEP_GV" --arg obj "$DEP_OBJ" \
     "$JQ_ACTORS $1" "$work/audit.log"
 }
 

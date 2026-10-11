@@ -248,6 +248,7 @@ stub install-tool 'echo "'"$stubs"'/$1"'
 # stub reports 0.0.0), the agent's is the image's build arg (TAG=e2e).
 SCAN_UA="upgradescope/0.0.0 (linux/amd64)"
 AGENT_UA="upgradescope/e2e (linux/amd64)"
+IT_UA="upgradescope/e2e-it (linux/amd64)"
 AGENT=system:serviceaccount:upgradescope:upgradescope
 KUBECTL_UA="kubectl/v1.37.1 (linux/amd64) kubernetes/abc"
 ev() {
@@ -277,6 +278,10 @@ ev() {
   ev kubernetes-admin "$KUBECTL_UA" patch flowcontrol.apiserver.k8s.io v1beta3 flowschemas upgradescope-e2e-deprecated "/apis/flowcontrol.apiserver.k8s.io/v1beta3/flowschemas/upgradescope-e2e-deprecated?fieldManager=upgradescope-e2e" deprecated
   ev kubernetes-admin "$KUBECTL_UA" patch resource.k8s.io v1beta1 deviceclasses upgradescope-e2e-deprecated "/apis/resource.k8s.io/v1beta1/deviceclasses/upgradescope-e2e-deprecated?fieldManager=upgradescope-e2e" deprecated
   ev kubernetes-admin "cli.test/v0.0.0 (linux/amd64) kubernetes/\$Format" create upgradescope.basit.engineer v1alpha1 clusterreadinesses it-agent "/apis/upgradescope.basit.engineer/v1alpha1/clusterreadinesses"
+  # The same ITs since #379: in-process, as the kind admin, with the version
+  # integration_tests stamps (IT_VERSION), not the binary's or the image's.
+  ev kubernetes-admin "$IT_UA" list "" v1 namespaces "" "/api/v1/namespaces?limit=500"
+  ev kubernetes-admin "$IT_UA" create upgradescope.basit.engineer v1alpha1 clusterreadinesses it-agent "/apis/upgradescope.basit.engineer/v1alpha1/clusterreadinesses"
   ev system:serviceaccount:kube-system:token-cleaner kube-controller-manager update "" v1 secrets bootstrap-token-abcdef "/api/v1/namespaces/kube-system/secrets/bootstrap-token-abcdef"
 } >"$work/audit.jsonl"
 # audit_with <name> <event...>: the good log plus these events, in $work/<name>.
@@ -340,6 +345,7 @@ has "the deprecated-object gate passes" "$work/summary" "- PASS — an object wr
 has "the EOL add-on gate passes" "$work/summary" "- PASS — scan reports the EOL ingress-nginx installed from the upstream chart as a blocker and exits 2"
 has "the keep-history gate passes" "$work/summary" "- PASS — a Helm release uninstalled with --keep-history yields no EOL finding"
 has "the Istio release-line gate passes" "$work/summary" "- PASS — Istio on three release lines in three teams' namespaces: each finding names only its own line's; 1.28 blocks"
+has "the ITs are stamped with the version the audit gates expect" "$work/log" "-ldflags -X github.com/abd-ulbasit/upgradescope/internal/cli.version=e2e-it"
 has "the Istio pods are applied from hack/e2e/istio-teams.yaml" "$work/log" "kubectl --context kind-upgradescope-demo apply -f hack/e2e/istio-teams.yaml"
 has "the Istio pods are deleted once judged" "$work/log" "kubectl --context kind-upgradescope-demo delete -f hack/e2e/istio-teams.yaml --ignore-not-found --wait --timeout 2m"
 # Gone before the integration tests and the agent: their eol-addon checks
@@ -495,6 +501,12 @@ has "the user-agent gate is a FAIL in the summary" "$work/summary" "- **FAIL** �
 audit_with ua-agent.jsonl "$(ev "$AGENT" "upgradescope/9.9.9 (linux/amd64)" list "" v1 namespaces "" "/api/v1/namespaces?limit=500")"
 run "an agent request naming another release fails the run" 1 STUB_AUDIT="$work/ua-agent.jsonl"
 has "the stale agent user agent is named" "$work/out" "agent requests whose user agent is not upgradescope/e2e (...)"
+
+# An IT whose version was not stamped sends go test's "dev" and would count as
+# scan (the real kind run's failure mode before integration_tests stamped it).
+audit_with ua-it.jsonl "$(ev kubernetes-admin "upgradescope/dev (linux/amd64)" list "" v1 namespaces "" "/api/v1/namespaces?limit=500")"
+run "an in-process IT request with the unstamped dev user agent fails the run" 1 STUB_AUDIT="$work/ua-it.jsonl"
+has "the unstamped IT request is named" "$work/out" "scan requests whose user agent is not upgradescope/0.0.0 (...)"
 
 grep -v "$AGENT" "$work/audit.jsonl" >"$work/noagent.jsonl"
 run "a log without the agent's requests fails the run, not passes vacuously" 1 STUB_AUDIT="$work/noagent.jsonl"
