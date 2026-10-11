@@ -162,7 +162,7 @@ on every finding to paste into a ticket.
   which client, and only for the replica that answered. Managed control
   planes often forbid it; the report then says so.
 - **Add-ons past end of life** and their Kubernetes compatibility, from a
-  registry of 27 add-ons in which every claim carries a citation (Ingress
+  registry of 34 add-ons in which every claim carries a citation (Ingress
   NGINX, retired in March 2026, Kubernetes Dashboard, Promtail, Grafana Agent
   and Weave Net are blockers). An add-on is found by its
   container images, its Helm release, its `helm.sh/chart` or
