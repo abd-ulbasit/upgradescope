@@ -13,6 +13,8 @@ only through a new release.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-11
+
 The first release built, signed and published by CI. It changes a lot
 of scanning behaviour and gating, so read **Changed** before you upgrade
 a CI gate.
@@ -2502,6 +2504,7 @@ First release.
   deprecated-callers signal is then reported as not assessed.
 - `kind: List` items are not expanded in `--files` mode.
 
-[Unreleased]: https://github.com/abd-ulbasit/upgradescope/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/abd-ulbasit/upgradescope/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/abd-ulbasit/upgradescope/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/abd-ulbasit/upgradescope/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/abd-ulbasit/upgradescope/releases/tag/v0.1.0
