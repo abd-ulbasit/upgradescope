@@ -150,6 +150,12 @@ type Store interface {
 	ListTokens(ctx context.Context, clusterName string) ([]Token, error)       // active and revoked, ascending id; "" = every cluster
 	RevokeTokenID(ctx context.Context, clusterName string, id int64) error     // revokes one active token of clusterName; ErrNotFound otherwise
 	RevokeToken(ctx context.Context, clusterName string) error                 // revokes ALL active tokens; ErrNotFound when none are active
+	// IngestTokenCluster is ValidToken plus, in the same read, the id of
+	// the cluster registered under the token's name: 0 when none is yet
+	// (a token minted before the first push). Ingest authenticates with
+	// it, so a push knows from the start which cluster it may write to,
+	// and a rename or delete after that is a conflict, not a revoke.
+	IngestTokenCluster(ctx context.Context, token string) (clusterName string, clusterID int64, ok bool, err error)
 
 	// Read tokens: bearer tokens for the read API, each scoped to a set of
 	// team names, or to ReadScopeFleet ("*") for the whole fleet. Like

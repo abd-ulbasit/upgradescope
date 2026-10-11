@@ -110,3 +110,84 @@ func testCommitRefusesChangedCluster(t *testing.T, s store.Store) {
 		t.Errorf("first push after the delete: %v", err)
 	}
 }
+
+// testIngestTokenCluster: a per-cluster token resolves, in one read, to
+// its cluster's name and the id of the cluster registered under it (0
+// before the first push registers one), so a push holds the identity it
+// was authenticated for from the start (#369). The token follows a
+// rename; a revoke or a delete leaves nothing to resolve.
+func testIngestTokenCluster(t *testing.T, s store.Store) {
+	ctx := context.Background()
+	const tok = "prod-token-0123456789abcdef0123456789"
+	if _, err := s.CreateToken(ctx, "prod", tok); err != nil {
+		t.Fatal(err)
+	}
+	if name, id, ok, err := s.IngestTokenCluster(ctx, tok); err != nil || !ok || name != "prod" || id != 0 {
+		t.Errorf("before the first push = (%q, %d, %v, %v), want (prod, 0, true, nil)", name, id, ok, err)
+	}
+	cid := mustCluster(t, s, "prod")
+	if name, id, ok, err := s.IngestTokenCluster(ctx, tok); err != nil || !ok || name != "prod" || id != cid {
+		t.Errorf("registered = (%q, %d, %v, %v), want (prod, %d, true, nil)", name, id, ok, err, cid)
+	}
+	if err := s.RenameCluster(ctx, "prod", "prod-eu"); err != nil {
+		t.Fatal(err)
+	}
+	if name, id, ok, err := s.IngestTokenCluster(ctx, tok); err != nil || !ok || name != "prod-eu" || id != cid {
+		t.Errorf("after a rename = (%q, %d, %v, %v), want (prod-eu, %d, true, nil)", name, id, ok, err, cid)
+	}
+	if _, _, ok, err := s.IngestTokenCluster(ctx, "no-such-token"); err != nil || ok {
+		t.Errorf("unknown token: ok %v err %v, want (false, nil)", ok, err)
+	}
+	if err := s.RevokeToken(ctx, "prod-eu"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, ok, err := s.IngestTokenCluster(ctx, tok); err != nil || ok {
+		t.Errorf("revoked token: ok %v err %v, want (false, nil)", ok, err)
+	}
+	const dev = "dev-token-0123456789abcdef0123456789ab"
+	if _, err := s.CreateToken(ctx, "dev", dev); err != nil {
+		t.Fatal(err)
+	}
+	mustCluster(t, s, "dev")
+	if err := s.DeleteCluster(ctx, "dev"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, ok, err := s.IngestTokenCluster(ctx, dev); err != nil || ok {
+		t.Errorf("token of a deleted cluster: ok %v err %v, want (false, nil)", ok, err)
+	}
+}
+
+// testCommitAdoptsUIDOfNameRegisteredWithoutUID: a name first registered
+// by a push with no clusterId is bound by the first clusterId pushed
+// afterwards, which continues its history; from then on another
+// clusterId, or none, is refused (#368). The server's adoption log line
+// and its silence on became-ready rest on this order.
+func testCommitAdoptsUIDOfNameRegisteredWithoutUID(t *testing.T, s store.Store) {
+	ctx := context.Background()
+	c := store.Cluster{Name: "shared-name", LastSeen: at(1)}
+	if _, _, err := s.CommitEvaluations(ctx, recheckPush(c, "", "aaa")); err != nil {
+		t.Fatalf("UID-less first push: %v", err)
+	}
+	registered, err := s.ClusterByName(ctx, "shared-name")
+	if err != nil || registered.ClusterUID != "" {
+		t.Fatalf("after the UID-less push = (%+v, %v), want a cluster with no UID", registered, err)
+	}
+	c.ID, c.ClusterUID, c.LastSeen = registered.ID, "uid-a", at(3)
+	if _, _, err := s.CommitEvaluations(ctx, recheckPush(c, "", "bbb")); err != nil {
+		t.Fatalf("first push with a UID: %v", err)
+	}
+	if got, err := s.GetCluster(ctx, registered.ID); err != nil || got.ClusterUID != "uid-a" {
+		t.Errorf("after the adopting push = (%+v, %v), want uid-a bound to the same cluster", got, err)
+	}
+	if points, err := s.ScoreHistory(ctx, registered.ID, "1.37", 10); err != nil || len(points) != 2 {
+		t.Errorf("history = (%+v, %v), want both pushes in one history", points, err)
+	}
+	var conflict *store.ClusterUIDConflictError
+	for _, uid := range []string{"uid-b", ""} {
+		c.ClusterUID = uid
+		_, _, err := s.CommitEvaluations(ctx, recheckPush(c, "", "ccc-"+uid))
+		if !errors.As(err, &conflict) || conflict.StoredUID != "uid-a" || conflict.PushedUID != uid {
+			t.Errorf("push with clusterId %q after the adoption: err = %v, want a conflict with uid-a", uid, err)
+		}
+	}
+}

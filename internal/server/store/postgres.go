@@ -730,6 +730,26 @@ func (p *Postgres) ValidToken(ctx context.Context, token string) (string, bool, 
 	return name, true, nil
 }
 
+// IngestTokenCluster resolves a presented plaintext token to its cluster
+// name and the id registered under that name (0 for none yet), in one
+// statement, so one snapshot sees both: a rename moves them together.
+func (p *Postgres) IngestTokenCluster(ctx context.Context, token string) (string, int64, bool, error) {
+	var name string
+	var id int64
+	err := p.db.QueryRowContext(ctx, `
+		SELECT t.cluster_name, COALESCE(c.id, 0) FROM tokens t
+		LEFT JOIN clusters c ON c.name = t.cluster_name
+		WHERE t.token_hash = $1 AND t.revoked_at IS NULL`,
+		HashToken(token)).Scan(&name, &id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", 0, false, nil
+	}
+	if err != nil {
+		return "", 0, false, fmt.Errorf("validate token: %w", err)
+	}
+	return name, id, true, nil
+}
+
 // RevokeToken revokes every active token of clusterName, or ErrNotFound
 // when the cluster has none.
 func (p *Postgres) RevokeToken(ctx context.Context, clusterName string) error {

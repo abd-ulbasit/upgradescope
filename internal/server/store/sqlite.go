@@ -845,6 +845,26 @@ func (s *SQLite) ValidToken(ctx context.Context, token string) (string, bool, er
 	return name, true, nil
 }
 
+// IngestTokenCluster resolves a presented plaintext token to its cluster
+// name and the id registered under that name (0 for none yet), in one
+// read: a rename moves the token and the name together.
+func (s *SQLite) IngestTokenCluster(ctx context.Context, token string) (string, int64, bool, error) {
+	var name string
+	var id int64
+	err := s.db.QueryRowContext(ctx, `
+		SELECT t.cluster_name, COALESCE(c.id, 0) FROM tokens t
+		LEFT JOIN clusters c ON c.name = t.cluster_name
+		WHERE t.token_hash = ? AND t.revoked_at IS NULL`,
+		HashToken(token)).Scan(&name, &id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", 0, false, nil
+	}
+	if err != nil {
+		return "", 0, false, fmt.Errorf("validate token: %w", err)
+	}
+	return name, id, true, nil
+}
+
 // RevokeToken revokes every active token of clusterName, or ErrNotFound
 // when the cluster has none.
 func (s *SQLite) RevokeToken(ctx context.Context, clusterName string) error {
