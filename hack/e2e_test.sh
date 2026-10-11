@@ -244,7 +244,10 @@ stub install-tool 'echo "'"$stubs"'/$1"'
 # The API server's audit log (one JSON event per line, Metadata level) as
 # the e2e reads it with docker exec. ev <user> <userAgent> <verb> <apiGroup>
 # <apiVersion> <resource> <name> <requestURI> [deprecated] [subresource].
-SCAN_UA="upgradescope/v0.0.0 (linux/amd64) kubernetes/\$Format"
+# The release-stamped user agents (#379): scan's is the binary's version (the
+# stub reports 0.0.0), the agent's is the image's build arg (TAG=e2e).
+SCAN_UA="upgradescope/0.0.0 (linux/amd64)"
+AGENT_UA="upgradescope/e2e (linux/amd64)"
 AGENT=system:serviceaccount:upgradescope:upgradescope
 KUBECTL_UA="kubectl/v1.37.1 (linux/amd64) kubernetes/abc"
 ev() {
@@ -263,11 +266,11 @@ ev() {
   ev kubernetes-admin "$SCAN_UA" list flowcontrol.apiserver.k8s.io v1 flowschemas "" "/apis/flowcontrol.apiserver.k8s.io/v1/flowschemas?limit=500"
   ev kubernetes-admin "$SCAN_UA" list "" v1 secrets "" "/api/v1/secrets?labelSelector=owner%3Dhelm&limit=500"
   ev kubernetes-admin "$SCAN_UA" get "" v1 secrets sh.helm.release.v1.ingress-nginx.v1 "/api/v1/namespaces/ingress-nginx/secrets/sh.helm.release.v1.ingress-nginx.v1"
-  ev "$AGENT" "$SCAN_UA" list "" v1 secrets "" "/api/v1/secrets?labelSelector=owner%3Dhelm&limit=500"
-  ev "$AGENT" "$SCAN_UA" get "" v1 secrets sh.helm.release.v1.ingress-nginx.v1 "/api/v1/namespaces/ingress-nginx/secrets/sh.helm.release.v1.ingress-nginx.v1"
-  ev "$AGENT" "$SCAN_UA" patch apiextensions.k8s.io v1 customresourcedefinitions clusterreadinesses.upgradescope.basit.engineer "/apis/apiextensions.k8s.io/v1/customresourcedefinitions/clusterreadinesses.upgradescope.basit.engineer?fieldManager=upgradescope-agent"
-  ev "$AGENT" "$SCAN_UA" create upgradescope.basit.engineer v1alpha1 clusterreadinesses cluster "/apis/upgradescope.basit.engineer/v1alpha1/clusterreadinesses"
-  ev "$AGENT" "$SCAN_UA" update upgradescope.basit.engineer v1alpha1 clusterreadinesses cluster "/apis/upgradescope.basit.engineer/v1alpha1/clusterreadinesses/cluster/status" "" status
+  ev "$AGENT" "$AGENT_UA" list "" v1 secrets "" "/api/v1/secrets?labelSelector=owner%3Dhelm&limit=500"
+  ev "$AGENT" "$AGENT_UA" get "" v1 secrets sh.helm.release.v1.ingress-nginx.v1 "/api/v1/namespaces/ingress-nginx/secrets/sh.helm.release.v1.ingress-nginx.v1"
+  ev "$AGENT" "$AGENT_UA" patch apiextensions.k8s.io v1 customresourcedefinitions clusterreadinesses.upgradescope.basit.engineer "/apis/apiextensions.k8s.io/v1/customresourcedefinitions/clusterreadinesses.upgradescope.basit.engineer?fieldManager=upgradescope-agent"
+  ev "$AGENT" "$AGENT_UA" create upgradescope.basit.engineer v1alpha1 clusterreadinesses cluster "/apis/upgradescope.basit.engineer/v1alpha1/clusterreadinesses"
+  ev "$AGENT" "$AGENT_UA" update upgradescope.basit.engineer v1alpha1 clusterreadinesses cluster "/apis/upgradescope.basit.engineer/v1alpha1/clusterreadinesses/cluster/status" "" status
   # Not upgradescope: kubectl applying the deprecated-API fixture (1.31's and
   # 1.37's row; the audit gates' positive control), the in-process ITs
   # writing their own CRD and CR, a controller writing a Secret.
@@ -329,6 +332,7 @@ has "the deprecated-request audit gate passes" "$work/summary" "- PASS — audit
 has "the agent write-set audit gate passes" "$work/summary" "- PASS — audit: the agent wrote only ClusterReadiness/cluster (+ status) and the clusterreadinesses.upgradescope.basit.engineer CRD"
 has "the Secrets audit gate passes" "$work/summary" "- PASS — audit: Secrets were read only through Helm's owner=helm list and release GETs"
 has "the scan-writes audit gate passes" "$work/summary" "- PASS — audit: scan wrote nothing"
+has "the user-agent audit gate passes" "$work/summary" "- PASS — audit: scan and the agent name the release in their user agent"
 has "the positive control is reported" "$work/out" "positive control: 1 request(s) through flowcontrol.apiserver.k8s.io/v1beta3 annotated k8s.io/deprecated"
 has "the webhook/finalizer gate passes" "$work/summary" "- PASS — the install added no webhook configuration; ClusterReadiness/cluster has no finalizer or owner reference"
 has "the unreachable-server gate passes" "$work/summary" "- PASS — scan against an unreachable API server exits 1"
@@ -458,16 +462,16 @@ printf 'v1 componentstatuses no issue number here\n' >"$work/bad-allowlist.txt"
 run "a malformed allowlist line fails before anything runs" 1 E2E_DEPRECATED_ALLOWLIST="$work/bad-allowlist.txt"
 has "the bad line is quoted" "$work/out" "is not '<apiVersion> <resource> #<issue> <reason>'"
 
-audit_with cm.jsonl "$(ev "$AGENT" "$SCAN_UA" patch "" v1 configmaps kube-root-ca.crt "/api/v1/namespaces/default/configmaps/kube-root-ca.crt")"
+audit_with cm.jsonl "$(ev "$AGENT" "$AGENT_UA" patch "" v1 configmaps kube-root-ca.crt "/api/v1/namespaces/default/configmaps/kube-root-ca.crt")"
 run "an agent write outside its CR fails the run" 1 STUB_AUDIT="$work/cm.jsonl"
 has "the write is named" "$work/out" "agent patch /api/v1/namespaces/default/configmaps/kube-root-ca.crt"
 has "the write-set gate is a FAIL in the summary" "$work/summary" "- **FAIL** — audit: the agent wrote only ClusterReadiness/cluster"
 
-audit_with othercr.jsonl "$(ev "$AGENT" "$SCAN_UA" update upgradescope.basit.engineer v1alpha1 clusterreadinesses someone-elses "/apis/upgradescope.basit.engineer/v1alpha1/clusterreadinesses/someone-elses/status" "" status)"
+audit_with othercr.jsonl "$(ev "$AGENT" "$AGENT_UA" update upgradescope.basit.engineer v1alpha1 clusterreadinesses someone-elses "/apis/upgradescope.basit.engineer/v1alpha1/clusterreadinesses/someone-elses/status" "" status)"
 run "an agent write to another ClusterReadiness fails the run" 1 STUB_AUDIT="$work/othercr.jsonl"
 has "the other CR is named" "$work/out" "clusterreadinesses/someone-elses/status"
 
-audit_with secret.jsonl "$(ev "$AGENT" "$SCAN_UA" get "" v1 secrets db-password "/api/v1/namespaces/default/secrets/db-password")"
+audit_with secret.jsonl "$(ev "$AGENT" "$AGENT_UA" get "" v1 secrets db-password "/api/v1/namespaces/default/secrets/db-password")"
 run "an agent GET of a non-Helm Secret fails the run" 1 STUB_AUDIT="$work/secret.jsonl"
 has "the Secret is named" "$work/out" "agent get /api/v1/namespaces/default/secrets/db-password"
 has "the Secrets gate is a FAIL in the summary" "$work/summary" "- **FAIL** — audit: Secrets were read only through Helm's"
@@ -480,6 +484,17 @@ audit_with write.jsonl "$(ev kubernetes-admin "$SCAN_UA" create "" v1 events "" 
 run "a write by scan fails the run" 1 STUB_AUDIT="$work/write.jsonl"
 has "the scan write is named" "$work/out" "scan create /api/v1/namespaces/default/events"
 has "the scan-writes gate is a FAIL in the summary" "$work/summary" "- **FAIL** — audit: scan wrote nothing"
+
+# #379: a request still carrying client-go's unstamped user agent is neither
+# the binary's release nor the image's, and fails the run; the agent's and
+# scan's are checked against their own versions.
+audit_with ua-scan.jsonl "$(ev kubernetes-admin "upgradescope/v0.0.0 (linux/amd64) kubernetes/\$Format" list "" v1 namespaces "" "/api/v1/namespaces?limit=500")"
+run "a scan request with client-go's default user agent fails the run" 1 STUB_AUDIT="$work/ua-scan.jsonl"
+has "the stale scan user agent is named" "$work/out" "scan requests whose user agent is not upgradescope/0.0.0 (...)"
+has "the user-agent gate is a FAIL in the summary" "$work/summary" "- **FAIL** — audit: scan and the agent name the release in their user agent"
+audit_with ua-agent.jsonl "$(ev "$AGENT" "upgradescope/9.9.9 (linux/amd64)" list "" v1 namespaces "" "/api/v1/namespaces?limit=500")"
+run "an agent request naming another release fails the run" 1 STUB_AUDIT="$work/ua-agent.jsonl"
+has "the stale agent user agent is named" "$work/out" "agent requests whose user agent is not upgradescope/e2e (...)"
 
 grep -v "$AGENT" "$work/audit.jsonl" >"$work/noagent.jsonl"
 run "a log without the agent's requests fails the run, not passes vacuously" 1 STUB_AUDIT="$work/noagent.jsonl"

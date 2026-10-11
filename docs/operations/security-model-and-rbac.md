@@ -202,6 +202,11 @@ A `scan` from a laptop needs the same reads (and makes no writes at all,
 which the end-to-end audit log check also verifies); what your identity
 cannot read is reported as not assessed.
 
+In the API server's audit log, `scan` and the agent send the user agent
+`upgradescope/<version> (<os>/<arch>)`, with the release version, and the
+agent also runs as its ServiceAccount, so the two together tell the callers
+and the releases apart.
+
 ## The server
 
 - **No Kubernetes access.** The server runs under its own ServiceAccount

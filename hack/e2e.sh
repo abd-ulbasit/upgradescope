@@ -748,9 +748,10 @@ uninstall_leaves_nothing() {
 }
 
 # --- audit log (step 9) ---------------------------------------------------
-# Who is who in the log: `scan` runs as the kind admin with client-go's
-# default user agent, "upgradescope/<version> (...)"; the agent is the
-# chart's ServiceAccount. The ITs run in-process as cli.test and are
+# Who is who in the log: `scan` runs as the kind admin with the release-stamped
+# user agent "upgradescope/<version> (<os>/<arch>)" (internal/cli/useragent.go;
+# <version> is the binary's, the agent's is the image's build arg); the agent
+# is the chart's ServiceAccount, with the same format. The ITs run in-process as cli.test and are
 # neither (the agent IT creates and deletes its own CRD and CR).
 JQ_ACTORS='
   def actor:
@@ -857,6 +858,23 @@ audit_scan_writes_nothing() {
   [ -z "$bad" ] || { echo "upgradescope scan wrote to the cluster:" >&2; echo "$bad" | sed 's/^/  /' >&2; return 1; }
 }
 
+# #379: every request of scan and the agent names the release it came from,
+# not client-go's "v0.0.0 ... kubernetes/$Format". Scan is the binary under
+# test; the agent runs the image load_image built with VERSION=$TAG.
+audit_user_agent_names_release() {
+  audit_saw_both || return 1
+  local scan_version bad
+  scan_version=$("$UPGRADESCOPE" version --output json | jq -r .version) || return 1
+  [ -n "$scan_version" ] && [ "$scan_version" != null ] || { echo "upgradescope version --output json has no version" >&2; return 1; }
+  bad=$(audit "select(actor == \"scan\" and ((.userAgent // \"\") | startswith(\"upgradescope/$scan_version (\") | not)) | \"\\(actor) \\(.userAgent) \\(.requestURI)\"" |
+    sort -u | head -5) || return 1
+  [ -z "$bad" ] || { echo "scan requests whose user agent is not upgradescope/$scan_version (...):" >&2; echo "$bad" | sed 's/^/  /' >&2; return 1; }
+  bad=$(audit "select(actor == \"agent\" and ((.userAgent // \"\") | startswith(\"upgradescope/$TAG (\") | not)) | \"\\(actor) \\(.userAgent) \\(.requestURI)\"" |
+    sort -u | head -5) || return 1
+  [ -z "$bad" ] || { echo "agent requests whose user agent is not upgradescope/$TAG (...):" >&2; echo "$bad" | sed 's/^/  /' >&2; return 1; }
+  echo "user agents: scan upgradescope/$scan_version, agent upgradescope/$TAG"
+}
+
 gate "kind cluster on Kubernetes $MINOR" create_cluster
 gate "build bin/upgradescope" make build
 gate "the binary under test reports its knowledge base horizon" read_kb_horizon
@@ -914,6 +932,7 @@ audit_checks=(
   "audit: the agent wrote only ClusterReadiness/$CR (+ status) and the $CRD CRD|audit_agent_writes_only_its_cr"
   "audit: Secrets were read only through Helm's owner=helm list and release GETs|audit_secrets_helm_only"
   "audit: scan wrote nothing|audit_scan_writes_nothing"
+  "audit: scan and the agent name the release in their user agent|audit_user_agent_names_release"
 )
 for c in "${audit_checks[@]}"; do
   if [ -n "$reused" ]; then
