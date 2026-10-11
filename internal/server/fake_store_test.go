@@ -721,6 +721,24 @@ func (f *fakeStore) ValidToken(_ context.Context, token string) (string, bool, e
 	return tk.cluster, true, nil
 }
 
+func (f *fakeStore) IngestTokenCluster(_ context.Context, token string) (string, int64, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := f.errs["IngestTokenCluster"]; err != nil {
+		return "", 0, false, err
+	}
+	tk, ok := f.tokens[token]
+	if !ok || tk.revoked {
+		return "", 0, false, nil
+	}
+	for id, c := range f.clusters {
+		if c.Name == tk.cluster {
+			return tk.cluster, id, true, nil
+		}
+	}
+	return tk.cluster, 0, true, nil
+}
+
 func (f *fakeStore) RevokeToken(_ context.Context, clusterName string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()

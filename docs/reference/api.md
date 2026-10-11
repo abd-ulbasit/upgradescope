@@ -130,8 +130,13 @@ the cluster's next minor plus `serve --targets`, in one
 transaction. A push whose inventory equals the latest stored one
 (ignoring `collectedAt` and fields this server does not know) is a
 duplicate: 200, nothing new stored. A cluster name is bound to the
-`clusterId` (kube-system namespace UID) it first pushed; a push
-under that name from another UID, or with none, is a 409.
+first non-empty `clusterId` (kube-system namespace UID) pushed under
+it; from then on a push under that name from another UID, or with
+none, is a 409. A name registered without one is bound by the first
+`clusterId` pushed afterwards, from whichever cluster sends it, and
+that push continues the name's history: the server logs the adoption
+and sends no `became-ready` for it. Two pushers that both send no
+`clusterId` always share the name.
 
 A per-cluster token may push only as its own cluster (403 before
 anything is written). `clusterName` is an RFC 1123 subdomain of at

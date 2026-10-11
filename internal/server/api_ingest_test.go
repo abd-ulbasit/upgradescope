@@ -263,7 +263,7 @@ func TestIngestMismatchedTokenWritesNothing(t *testing.T) {
 
 func TestIngestTokenLookupStoreError(t *testing.T) {
 	st := newFakeStore()
-	st.errs["ValidToken"] = context.DeadlineExceeded
+	st.errs["IngestTokenCluster"] = context.DeadlineExceeded
 	ts := httptest.NewServer(newTestServer(t, st).Handler())
 	defer ts.Close()
 	resp, out := postSnapshot(t, ts, "any-non-shared", pushReqBody(t, testInventory()), true)

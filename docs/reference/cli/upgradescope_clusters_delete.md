@@ -7,7 +7,9 @@ Delete a cluster with its history, queued notifications and ingest tokens
 Delete a cluster record with its snapshot and evaluation history, its queued
 notifications and the per-cluster ingest tokens minted for its name. Use it to
 decommission a cluster, or when a cluster was rebuilt: a cluster name is bound to the
-cluster UID it first pushed, and the server answers 409 to a push from another UID.
+first non-empty cluster UID pushed under it (a name registered without one is bound
+by the first UID pushed afterwards, from whichever cluster sends it), and the server
+then answers 409 to a push from another UID, or with none.
 Delete the old record and the next push registers the new one; an agent that used a
 per-cluster token needs a new one ('upgradescope tokens create').
 An agent that keeps pushing under the name registers it again.

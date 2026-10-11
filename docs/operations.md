@@ -551,13 +551,31 @@ least one core.
 ## Cluster lifecycle
 
 A cluster is registered by its first push, under the agent's
-`--cluster-name`, and bound to the cluster UID (the `kube-system`
-namespace UID) it pushed. A cluster name is an RFC 1123 subdomain of at
+`--cluster-name`. A cluster name is an RFC 1123 subdomain of at
 most 253 bytes (lowercase letters, digits, `-` and `.`): a push under
 any other is `422` and registers nothing, and `tokens create`, a rename
-and the agent (at startup) refuse one too (#37). A push under that name from another UID, or with
-no UID at all, is refused with 409, so two clusters never interleave in one
-history.
+and the agent (at startup) refuse one too (#37).
+
+The name is bound to the first non-empty cluster UID (the `kube-system`
+namespace UID) pushed under it. Once it is bound, a push under that name
+from another UID, or with no UID at all, is refused with 409, so a second
+cluster never joins the bound one's history. Before that, the order
+matters:
+
+- A name registered without a UID (its first agent could not read the
+  `kube-system` namespace: narrowed RBAC, or a transient read failure) is
+  bound by the first UID pushed afterwards, from whichever cluster sends
+  it, and that push continues the name's history. This is the recovery
+  path the 409 suggests ("Fix the agent's access"). The server logs one
+  line when it happens, `server: cluster name adopted its first clusterId:
+  cluster="<name>" clusterId="<uid>" snapshotId=<id>`, and the adopting
+  push sends no `became-ready` notification, since the history it
+  continues may be another cluster's. If the line names a cluster you did
+  not expect, the UID-less agent was another cluster: its pushes now get
+  409; give it its own `--cluster-name`, and delete the record if its
+  history should not be kept.
+- Two pushers that both send no UID always share the name: nothing tells
+  them apart. Give each agent a distinct `--cluster-name`.
 
 Deleting and renaming need the admin token: `serve --admin-token`
 (`$UPGRADESCOPE_ADMIN_TOKEN`, `--admin-token-file`; chart
@@ -596,9 +614,19 @@ serve the server over https.
   uses a per-cluster token, or register the old name again when it uses
   the shared ingest token.
 - A push already in flight when a delete, rename or token revoke lands
-  (it was authenticated before it) stores nothing: the commit checks the
-  token and the cluster again in its transaction, and answers `401` for a
-  revoked token and `409` for a cluster renamed or deleted meanwhile.
+  (it was authenticated before it) stores nothing, with one exception
+  below: the commit checks the token and the cluster again in its
+  transaction, and answers `401` for a revoked token and `409` for a
+  cluster renamed or deleted meanwhile. A per-cluster token's cluster is
+  resolved when the push is authenticated, so for it this holds from
+  then on, while the body is still uploading or the push waits for its
+  ingest slot. A shared-token push names its cluster only in its body, so
+  for it the guarantee starts when the server looks the cluster up, after
+  the body is read: a delete or rename that lands before that lets the
+  push register the name like a fresh push (after a rename, a second
+  cluster with the same UID), as an agent that keeps pushing under the old
+  name would. Stop or re-point shared-token agents before a delete or
+  rename, or use per-cluster tokens.
 
 Every delete and rename is logged by the server.
 

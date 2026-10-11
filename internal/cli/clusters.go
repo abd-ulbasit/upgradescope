@@ -206,7 +206,9 @@ func newClustersDeleteCmd() *cobra.Command {
 		Long: "Delete a cluster record with its snapshot and evaluation history, its queued\n" +
 			"notifications and the per-cluster ingest tokens minted for its name. Use it to\n" +
 			"decommission a cluster, or when a cluster was rebuilt: a cluster name is bound to the\n" +
-			"cluster UID it first pushed, and the server answers 409 to a push from another UID.\n" +
+			"first non-empty cluster UID pushed under it (a name registered without one is bound\n" +
+			"by the first UID pushed afterwards, from whichever cluster sends it), and the server\n" +
+			"then answers 409 to a push from another UID, or with none.\n" +
 			"Delete the old record and the next push registers the new one; an agent that used a\n" +
 			"per-cluster token needs a new one ('upgradescope tokens create').\n" +
 			"An agent that keeps pushing under the name registers it again.",
