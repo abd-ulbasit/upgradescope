@@ -61,6 +61,7 @@ case "$*" in
     [ -z "${STUB_UNPATCH_FAIL:-}" ] || exit 1
     rm -f "$STUB_STATE/ignore.json" ;;
   *"port-forward"*) exec sleep 30 ;;
+  *" logs deploy/upgradescope-agent"*) cat "$STUB_AGENT_LOG" ;;
   *"get validatingwebhookconfigurations,mutatingwebhookconfigurations -o name"*)
     echo validatingwebhookconfiguration.admissionregistration.k8s.io/ingress-nginx-admission
     [ -z "${STUB_NEW_WEBHOOK:-}" ] || [ ! -f "$STUB_STATE/installed" ] ||
@@ -284,6 +285,24 @@ ev() {
   ev kubernetes-admin "$IT_UA" create upgradescope.basit.engineer v1alpha1 clusterreadinesses it-agent "/apis/upgradescope.basit.engineer/v1alpha1/clusterreadinesses"
   ev system:serviceaccount:kube-system:token-cleaner kube-controller-manager update "" v1 secrets bootstrap-token-abcdef "/api/v1/namespaces/kube-system/secrets/bootstrap-token-abcdef"
 } >"$work/audit.jsonl"
+
+# The agent's log (kubectl logs, text format), for the first-snapshot step
+# (#386). By default the combined install's usual start: the first tick's
+# push is refused (the server is not listening yet) and stays buffered, the
+# first retry between ticks delivers it, and the second tick's inventory is
+# unchanged. agent_log <name> <line...> writes another one to $work/<name>.
+tick_failed_push='time=2026-10-11T10:00:01.000Z level=WARN msg="tick complete" duration=1.9s push=failed consecutiveFailures=1 capabilities.helm=true targets.1.32.verdict=blocked targets.1.32.score=40 targets.1.32.blockers=2 pushError="push: Post \"http://upgradescope-server:8080/api/v1/snapshots\": dial tcp 10.96.0.12:8080: connect: connection refused"'
+retry_failed='time=2026-10-11T10:00:11.000Z level=WARN msg="buffered snapshot push failed" retry=1 pushError="push: Post \"http://upgradescope-server:8080/api/v1/snapshots\": dial tcp 10.96.0.12:8080: connect: connection refused" retrying=true'
+retry_ok='time=2026-10-11T10:00:31.000Z level=INFO msg="buffered snapshot pushed" retry=2 after=21.3s'
+tick_ok='time=2026-10-11T10:00:01.000Z level=INFO msg="tick complete" duration=1.9s push=ok consecutiveFailures=0 capabilities.helm=true targets.1.32.verdict=blocked targets.1.32.score=40 targets.1.32.blockers=2'
+tick2_ok='time=2026-10-11T10:01:02.000Z level=INFO msg="tick complete" duration=1.2s push=ok consecutiveFailures=0 capabilities.helm=true targets.1.32.verdict=blocked targets.1.32.score=40 targets.1.32.blockers=2'
+tick2_unchanged='time=2026-10-11T10:01:02.000Z level=INFO msg="tick complete" duration=1.2s push=unchanged consecutiveFailures=0 capabilities.helm=true targets.1.32.verdict=blocked targets.1.32.score=40 targets.1.32.blockers=2'
+agent_log() {
+  local f="$work/$1"
+  shift
+  printf '%s\n' 'time=2026-10-11T10:00:00.000Z level=INFO msg="agent starting" interval=1m0s' "$@" >"$f"
+}
+agent_log agent.log "$tick_failed_push" "$retry_failed" "$retry_ok" "$tick2_unchanged"
 # audit_with <name> <event...>: the good log plus these events, in $work/<name>.
 audit_with() {
   local f="$work/$1"
@@ -303,7 +322,7 @@ run() {
   mkdir -p "$work/state"
   env PATH="$stubs:$PATH" KUBECONFIG="$work/no-kubeconfig" STUB_LOG="$work/log" STUB_STATE="$work/state" \
     GITHUB_STEP_SUMMARY="$work/summary" E2E_MINOR=1.31 E2E_NAP=0 \
-    STUB_AUDIT="$work/audit.jsonl" STUB_KIND_CONFIG="$work/kind-config.yaml" \
+    STUB_AUDIT="$work/audit.jsonl" STUB_KIND_CONFIG="$work/kind-config.yaml" STUB_AGENT_LOG="$work/agent.log" \
     E2E_INSTALL_TOOL="$stubs/install-tool" E2E_UPGRADESCOPE="$stubs/upgradescope" \
     "$@" hack/e2e.sh >"$work/out" 2>&1 || got=$?
   if [ "$got" = "$want" ]; then
@@ -400,6 +419,38 @@ if grep -E '^helm ' "$work/log" | grep -v '^helm repo ' |
 else
   echo "ok   every helm call outside helm repo names the kind context" | tee -a "$work/results"
 fi
+
+# #386: the first snapshot reaches the server before the second tick.
+first_push="the agent's first snapshot reached the server before its second tick: a failed first push is retried between ticks (#386)"
+has "the first-snapshot step gates and passes on a failed first push delivered by a retry" "$work/summary" "- PASS — $first_push"
+has "the first-snapshot step reads the agent's log in the release namespace" "$work/log" \
+  "kubectl --context kind-upgradescope-demo -n upgradescope logs deploy/upgradescope-agent"
+has "the first-snapshot step prints the delivering retry it judged" "$work/out" 'msg="buffered snapshot pushed" retry=2'
+fs_at=$(grep -n -- 'logs deploy/upgradescope-agent' "$work/log" | head -1 | cut -d: -f1 || true)
+pf_at=$(grep -n -- 'port-forward' "$work/log" | head -1 | cut -d: -f1 || true)
+if [ -n "$fs_at" ] && [ -n "$pf_at" ] && [ "$pf_at" -lt "$fs_at" ]; then
+  echo "ok   the first-snapshot step reads the log once the server lists the cluster" | tee -a "$work/results"
+else
+  echo "FAIL the first-snapshot step does not follow the ingestion step (port-forward at ${pf_at:-none}, logs ${fs_at:-none})" >&2
+  echo "FAIL first-snapshot step order" >>"$work/results"
+fi
+agent_log agent-first-ok.log "$tick_ok" "$tick2_unchanged"
+run "a first push that succeeded passes the first-snapshot step" 0 STUB_AGENT_LOG="$work/agent-first-ok.log"
+has "the first-snapshot step passes on a first push=ok" "$work/summary" "- PASS — $first_push"
+# The mutation the step exists for: no retry between ticks, so the second
+# tick delivers the snapshot (server_ingested alone passes on this).
+agent_log agent-next-tick.log "$tick_failed_push" "$tick2_ok"
+run "a failed first push left for the second tick fails the run" 1 STUB_AGENT_LOG="$work/agent-next-tick.log"
+has "the first-snapshot step is a FAIL when the second tick delivers" "$work/summary" "- **FAIL** — $first_push"
+has "the failure names the lines it judged" "$work/out" 'msg="tick complete" duration=1.2s push=ok'
+agent_log agent-retry-failed.log "$tick_failed_push" "$retry_failed" "$tick2_ok" "$retry_ok"
+run "retries that all fail before the second tick fail the run, though one delivers later" 1 STUB_AGENT_LOG="$work/agent-retry-failed.log"
+has "the first-snapshot step is a FAIL when no retry delivers before the second tick" "$work/summary" "- **FAIL** — $first_push"
+agent_log agent-no-tick.log
+run "an agent log without a tick line fails the run, not passes vacuously" 1 STUB_AGENT_LOG="$work/agent-no-tick.log"
+has "the empty case is explained" "$work/out" "(no tick line in the agent log)"
+agent_log agent-push-off.log "${tick_ok/push=ok/push=off}" "$retry_ok"
+run "a first tick that did not push fails the run" 1 STUB_AGENT_LOG="$work/agent-push-off.log"
 
 run "a removed-api blocker on a vanilla cluster fails the run (#3 is fixed; the check gates)" 1 STUB_REMOVED=1
 has "the #3 regression is a FAIL in the summary" "$work/summary" "- **FAIL** — vanilla 1.31 cluster scanned at 1.32 has zero removed-api blockers"
