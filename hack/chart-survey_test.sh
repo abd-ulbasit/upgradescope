@@ -122,10 +122,14 @@ classify_is "a fail() asking to define a value" required-value \
   'Error: execution error at (loki/templates/write/statefulset-write.yaml:50:28): Please define loki.storage.bucketNames.chunks'
 classify_is "a fail() refusing to install without a value" required-value \
   'Error: execution error at (aws-load-balancer-controller/templates/deployment.yaml:67:28): Chart cannot be installed without a valid clusterName!'
-classify_is "a schema type error is not a missing value" other \
+classify_is "a schema null where a value is wanted (external-dns 1.23.0 policy)" required-value \
   "Error: values don't meet the specifications of the schema(s) in the following chart(s):
 external-dns:
 - at '/policy': got null, want string"
+classify_is "a schema type error is not a missing value" other \
+  "Error: values don't meet the specifications of the schema(s) in the following chart(s):
+x:
+- at '/replicas': got string, want integer"
 classify_is "anything else" other 'Error: template: x/templates/a.yaml:3:9: executing "x" at <.Values.a.b>: nil pointer'
 
 # --- error -------------------------------------------------------------------

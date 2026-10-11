@@ -123,7 +123,7 @@ cmd_classify() {
   [ $# -eq 1 ] || usage
   if grep -qE 'incompatible with Kubernetes' "$1"; then
     echo kubeVersion
-  elif grep -qiE 'is required|are required|must be (set|provided|specified|defined)|must (provide|set|specify|define)|missing propert|required value|please (set|provide|specify|define)|without a valid' "$1"; then
+  elif grep -qiE 'is required|are required|must be (set|provided|specified|defined)|must (provide|set|specify|define)|missing propert|required value|please (set|provide|specify|define)|without a valid|got null, want' "$1"; then
     echo required-value
   else
     echo other
