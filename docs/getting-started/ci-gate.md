@@ -141,7 +141,8 @@ suppress its own findings, and the gate then passes.** This is how any
 linter with an in-repository config or inline disable comments behaves, and
 it is not hidden: a suppressed finding is listed with its reason in the
 `SUPPRESSED` section and the `N suppressed` line of the table, in the step
-summary, and as a SARIF suppression, and the file that did it is in the
+summary, the JSON report and JUnit (the SARIF leaves it out, because code
+scanning would open an alert for it), and the file that did it is in the
 diff. But the gate is a control against a careless change, not against an
 author who wants to get past it, until you pin the inputs below.
 

@@ -396,7 +396,7 @@ commit worked there; now it must be a release tag, `latest` or
 
 | Output | |
 |---|---|
-| `sarif-file` | Path to the SARIF report. It is complete when the gate fails, so upload it with the `if:` in the example above (`!cancelled() && steps.gate.outputs.sarif-file != ''`, plus the fork guard). It is set only when the gate exits 0 or 2, and not when the scan itself failed (exit 1) or was killed, so that condition skips the upload instead of failing on an empty file. |
+| `sarif-file` | Path to the SARIF report. Findings accepted by an ignore rule or annotation are not results in it (code scanning ignores SARIF suppressions and would open an alert for them); one note counts them, and the JSON report lists them. Findings the baseline already had stay results, marked `unchanged`. It is complete when the gate fails, so upload it with the `if:` in the example above (`!cancelled() && steps.gate.outputs.sarif-file != ''`, plus the fork guard). It is set only when the gate exits 0 or 2, and not when the scan itself failed (exit 1) or was killed, so that condition skips the upload instead of failing on an empty file. |
 | `report-json` | Path to the JSON report, the same as `upgradescope scan --output json`. |
 | `verdict` | `ready`, `blocked` or `unknown`. `unknown` means no blocker was found but a required check could not run. |
 | `ready` | `true` when the verdict is `ready`, otherwise `false`. |
