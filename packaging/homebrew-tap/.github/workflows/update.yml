@@ -78,8 +78,14 @@ jobs:
       - name: brew install and test the tap's formula
         env:
           TAP: ${{ github.repository }}
+        # setup-homebrew taps this repository at the run's own commit, which
+        # predates a formula the update job has just pushed (the first run
+        # creates Formula/upgradescope.rb). Tap the default branch afresh, so
+        # the test is of the formula as it now stands.
         run: |
-          brew tap "${TAP%%/homebrew-*}/${TAP##*/homebrew-}" "https://github.com/${TAP}"
-          brew install "${TAP%%/homebrew-*}/${TAP##*/homebrew-}/upgradescope"
-          brew test "${TAP%%/homebrew-*}/${TAP##*/homebrew-}/upgradescope"
+          tap="${TAP%%/homebrew-*}/${TAP##*/homebrew-}"
+          brew untap --force "$tap" 2>/dev/null || true
+          brew tap "$tap" "https://github.com/${TAP}"
+          brew install "$tap/upgradescope"
+          brew test "$tap/upgradescope"
           upgradescope version
