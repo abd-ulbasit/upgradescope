@@ -19,6 +19,7 @@ import (
 	kubefake "k8s.io/client-go/kubernetes/fake"
 	k8stesting "k8s.io/client-go/testing"
 
+	"github.com/abd-ulbasit/upgradescope/internal/crd"
 	"github.com/abd-ulbasit/upgradescope/internal/engine"
 	"github.com/abd-ulbasit/upgradescope/internal/inventory"
 )
@@ -95,5 +96,124 @@ func TestCollectNarrowRoleIsNeverReady(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("narrow role gaps = %+v\nwant                %+v\n(%+v)", got, want, rep.NotAssessed)
+	}
+
+	// #374: a role without the PersistentVolume and StorageClass reads
+	// (#362) hides an rbd PV, which blocks 1.31. Lists allowed, the scan
+	// says blocked; refused, unknown, with volumes partial and required,
+	// and the agent's Ready condition is not True.
+	t.Run("persistentvolumes and storageclasses refused", func(t *testing.T) {
+		objs := []runtime.Object{testPV("pv-rbd", "data", rbdSource())}
+		full := evaluateRBDCluster(t, objs, 0, nil)
+		if full.Verdict != engine.VerdictBlocked || !hasBlocker(full, "volume-plugin/rbd") {
+			t.Fatalf("lists allowed: verdict %s (findings %+v, gaps %+v), want blocked by volume-plugin/rbd", full.Verdict, full.Findings, full.NotAssessed)
+		}
+		rep := evaluateRBDCluster(t, objs, 0, func(r string, _ metav1.ListOptions) error { return volumeListForbidden(r) })
+		wantVolumesRequired(t, rep, []string{inventory.SkippedStorageClasses, inventory.SkippedPersistentVolumes})
+		if rep.Ready || rep.Verdict != engine.VerdictUnknown {
+			t.Errorf("lists refused: verdict %s, ready %v, want unknown (findings %+v, gaps %+v)", rep.Verdict, rep.Ready, rep.Findings, rep.NotAssessed)
+		}
+		st := crd.StatusFromReports([]engine.Report{rep}, rbdServer, "test", time.Now())
+		if c := crd.ReadyCondition(st); c.Status != metav1.ConditionUnknown {
+			t.Errorf("lists refused: Ready condition = %s %q, want Unknown", c.Status, c.Message)
+		}
+	})
+}
+
+// rbdServer is the kube-apiserver and kubelet version of
+// evaluateRBDCluster: one minor before rbd's removal.
+const rbdServer = "v1.30.4"
+
+// evaluateRBDCluster collects a 1.30 cluster with every capability's
+// clients, a PersistentVolume and StorageClass list serving objs perPage a
+// page (0: one page), each list call answered by fail first when it is not
+// nil, and evaluates it at 1.31.
+func evaluateRBDCluster(t *testing.T, objs []runtime.Object, perPage int, fail func(resource string, o metav1.ListOptions) error) engine.Report {
+	t.Helper()
+	cs := kubefake.NewClientset(
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "kube-system", UID: types.UID("uid-rbd")}},
+		&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "n"}, Status: corev1.NodeStatus{NodeInfo: corev1.NodeSystemInfo{KubeletVersion: rbdServer}}},
+	)
+	disc := cs.Discovery().(*discoveryfake.FakeDiscovery)
+	disc.FakedServerVersion = &version.Info{GitVersion: rbdServer}
+	disc.Resources = []*metav1.APIResourceList{
+		resources("v1", metav1.APIResource{Name: "pods", Kind: "Pod", Namespaced: true, Verbs: metav1.Verbs{"list"}}),
+	}
+	srv := serveVolumeLists(cs, perPage, objs...)
+	srv.fail = fail
+	k := loadKB(t)
+	clients := Clients{Kube: cs, Metadata: metaClient(), Discovery: disc, RESTClient: metricsRESTClient(t, ""), APIExtensions: apiextensionsfake.NewClientset()}
+	return engine.Evaluate(Collect(context.Background(), clients, k, Options{}), k, inventory.Version{Major: 1, Minor: 31},
+		time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC))
+}
+
+// volumeListForbidden is the 403 of a PersistentVolume or StorageClass
+// list.
+func volumeListForbidden(resource string) error {
+	g := ""
+	if resource == "storageclasses" {
+		g = "storage.k8s.io"
+	}
+	return apierrors.NewForbidden(schema.GroupResource{Group: g, Resource: resource}, "", errors.New("RBAC"))
+}
+
+func hasBlocker(r engine.Report, id string) bool {
+	for _, f := range r.Findings {
+		if f.Key == id && f.Severity == engine.SevBlocker {
+			return true
+		}
+	}
+	return false
+}
+
+// wantVolumesRequired fails unless r's volumes gap is partial and
+// required, skipping skipped.
+func wantVolumesRequired(t *testing.T, r engine.Report, skipped []string) {
+	t.Helper()
+	for _, g := range r.NotAssessed {
+		if g.Capability == inventory.CapVolumes {
+			if !g.Partial || !g.Required || !reflect.DeepEqual(g.Skipped, skipped) {
+				t.Errorf("volumes gap = %+v, want partial and required, skipping %q", g, skipped)
+			}
+			return
+		}
+	}
+	t.Errorf("no volumes gap in %+v, want one partial and required", r.NotAssessed)
+}
+
+// #374: a PersistentVolume list that fails, transiently and not for want
+// of a rule, hides the rbd PV the same way: on its first page, or on a
+// later one (the PVs listed before the failure are read).
+func TestCollectLiveVolumesListFailedIsRequired(t *testing.T) {
+	timeout := errors.New("etcdserver: request timed out")
+	csi := testPV("pv-csi", "shop", corev1.PersistentVolumeSource{CSI: &corev1.CSIPersistentVolumeSource{Driver: "ebs.csi.aws.com", VolumeHandle: "vol-1"}})
+	objs := []runtime.Object{csi, testPV("pv-rbd", "data", rbdSource())}
+	for _, tc := range []struct {
+		name string
+		fail func(resource string, o metav1.ListOptions) error
+	}{
+		{"timeout on the first page", func(r string, _ metav1.ListOptions) error {
+			if r == "persistentvolumes" {
+				return timeout
+			}
+			return nil
+		}},
+		{"timeout on a later page", func(r string, o metav1.ListOptions) error {
+			if r == "persistentvolumes" && o.Continue != "" {
+				return timeout
+			}
+			return nil
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if full := evaluateRBDCluster(t, objs, 1, nil); full.Verdict != engine.VerdictBlocked {
+				t.Fatalf("no failure: verdict %s, want blocked (findings %+v)", full.Verdict, full.Findings)
+			}
+			rep := evaluateRBDCluster(t, objs, 1, tc.fail)
+			wantVolumesRequired(t, rep, []string{inventory.SkippedPersistentVolumes})
+			if rep.Verdict != engine.VerdictUnknown {
+				t.Errorf("verdict %s, want unknown (findings %+v, gaps %+v)", rep.Verdict, rep.Findings, rep.NotAssessed)
+			}
+		})
 	}
 }
