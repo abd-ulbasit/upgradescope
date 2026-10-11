@@ -2,6 +2,18 @@
 # cycles are generated from the endoflife.date API by tools/eol-sync; do not
 # edit them by hand. support is hand-curated: status eol is only for a
 # product upstream retired as a whole.
+#
+# Kubernetes ranges: the k8s_min/k8s_max on each cycle are those of KEDA's
+# "Kubernetes Compatibility" table (https://keda.sh/docs/latest/operate/cluster/,
+# read on 2026-10-12: v2.21 1.34-1.36 down to v2.7 1.17-1.25; every row below
+# from 2.7 up equals the page), carried here by endoflife.date. Older cycles
+# (2.0-2.6, 1.5) are endoflife.date only, the page no longer lists them. The page
+# says the table shows the Kubernetes versions *tested* for each release, that
+# each release is "generally tested against N-2 Kubernetes minor versions at
+# minimum", and that maintainers may test more "but there is no guarantee". By
+# the rule in CONTRIBUTING ("Maximum, minimum or tested with") that is a
+# tested-with table, not a stated maximum, so a target above a line's k8s_max is
+# a statement about what KEDA tests, not a statement by KEDA that it fails.
 schema_version: 2
 id: keda
 display_name: KEDA
