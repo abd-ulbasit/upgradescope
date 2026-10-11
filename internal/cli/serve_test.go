@@ -230,6 +230,89 @@ func TestServeTrustedProxyFlags(t *testing.T) {
 	}
 }
 
+// A set of ranges that together hold every address trusts the header from
+// any client just as one /0 does (#370), so it is refused, however the
+// ranges are split across flags or mixed with narrow ones. A partial cover
+// stays accepted: keeping the ranges to the proxy is the operator's job.
+func TestTrustedProxyCIDRsCoveringEverythingRefused(t *testing.T) {
+	flags := func(cidrs ...string) []string {
+		args := []string{"--trust-team-header", "X-Groups"}
+		for _, c := range cidrs {
+			args = append(args, "--trusted-proxy-cidr", c)
+		}
+		return args
+	}
+	for name, args := range map[string][]string{
+		"two v4 halves":              flags("0.0.0.0/1,128.0.0.0/1"),
+		"two v6 halves":              flags("::/1,8000::/1"),
+		"three v4 ranges":            flags("0.0.0.0/2,64.0.0.0/2,128.0.0.0/1"),
+		"split across repeated flag": flags("0.0.0.0/1", "128.0.0.0/1"),
+		"mixed with a narrow range":  flags("10.0.0.0/8", "0.0.0.0/1,128.0.0.0/1", "fd00::/8"),
+		"halves and a nested range":  flags("0.0.0.0/1,128.0.0.0/1,10.1.2.3"),
+		"unmasked halves":            flags("1.2.3.4/1,200.1.1.1/1"),
+		"v6 beside a narrow v4":      flags("127.0.0.1/32,::/1,8000::/1"),
+	} {
+		if err := execServe(t, args, serveOK()); err == nil || !strings.Contains(err.Error(), "every address") {
+			t.Errorf("%s %v: err = %v, want a refusal naming \"every address\"", name, args, err)
+		}
+	}
+	for name, args := range map[string][]string{
+		"a half and a quarter":    flags("0.0.0.0/1,128.0.0.0/2"),
+		"v4 and v6 ranges":        flags("10.0.0.0/8,fd00::/8"),
+		"one v4 half":             flags("0.0.0.0/1"),
+		"v4 halves and a v6 half": flags("0.0.0.0/2,64.0.0.0/2,::/1"),
+	} {
+		if err := execServe(t, args, serveOK()); err != nil {
+			t.Errorf("%s %v: err = %v, want it accepted (not every address)", name, args, err)
+		}
+	}
+}
+
+// prefixesCoverFamily merges sibling prefixes: it handles duplicates,
+// nested prefixes, single addresses and input that is not masked.
+func TestPrefixesCoverFamily(t *testing.T) {
+	pp := func(s ...string) []netip.Prefix {
+		var out []netip.Prefix
+		for _, x := range s {
+			out = append(out, netip.MustParsePrefix(x))
+		}
+		return out
+	}
+	eighths := pp("0.0.0.0/3", "32.0.0.0/3", "64.0.0.0/3", "96.0.0.0/3", "128.0.0.0/3", "160.0.0.0/3", "192.0.0.0/3", "224.0.0.0/3")
+	for _, tc := range []struct {
+		name string
+		in   []netip.Prefix
+		v6   bool
+		want bool
+	}{
+		{"nothing", nil, false, false},
+		{"a /0", pp("0.0.0.0/0"), false, true},
+		{"a v6 /0", pp("::/0"), true, true},
+		{"two halves", pp("0.0.0.0/1", "128.0.0.0/1"), false, true},
+		{"halves in the other order", pp("128.0.0.0/1", "0.0.0.0/1"), false, true},
+		{"v6 halves", pp("::/1", "8000::/1"), true, true},
+		{"quarters", pp("0.0.0.0/2", "64.0.0.0/2", "128.0.0.0/1"), false, true},
+		{"duplicates alone", pp("0.0.0.0/1", "0.0.0.0/1", "0.0.0.0/1"), false, false},
+		{"duplicates and the other half", pp("0.0.0.0/1", "0.0.0.0/1", "128.0.0.0/1"), false, true},
+		{"nested beside the cover", pp("0.0.0.0/1", "10.0.0.0/8", "128.0.0.0/1", "10.1.0.0/16"), false, true},
+		{"nested without the sibling", pp("0.0.0.0/1", "10.0.0.0/8"), false, false},
+		{"a half and a quarter", pp("0.0.0.0/1", "128.0.0.0/2"), false, false},
+		{"unmasked halves", pp("1.2.3.4/1", "200.9.9.9/1"), false, true},
+		{"a single address", pp("10.0.0.1/32"), false, false},
+		{"a single v6 address", pp("fd00::1/128"), true, false},
+		{"v4 prefixes are not a v6 cover", pp("0.0.0.0/1", "128.0.0.0/1"), true, false},
+		{"v6 prefixes are not a v4 cover", pp("::/1", "8000::/1"), false, false},
+		{"quarters, one missing", pp("0.0.0.0/2", "64.0.0.0/2", "192.0.0.0/2"), false, false},
+		{"eight /3s", eighths, false, true},
+		{"eight /3s, one missing", eighths[:7], false, false},
+		{"a 4in6 range is v6 and inert", pp("::ffff:0:0/96"), true, false},
+	} {
+		if got := prefixesCoverFamily(tc.in, tc.v6); got != tc.want {
+			t.Errorf("%s: prefixesCoverFamily(%v, v6=%v) = %v, want %v", tc.name, tc.in, tc.v6, got, tc.want)
+		}
+	}
+}
+
 // Every serve secret has an env var and a -file variant, so it can stay
 // out of argv (ps, /proc/<pid>/cmdline, shell history).
 func TestServeSecretsFromEnvAndFiles(t *testing.T) {
