@@ -98,18 +98,341 @@ fi
 # ("Description must be less than 125 characters"). It reads action.yml at
 # the release's tag, which never moves, so a long description costs a
 # release (v0.2.1 could not be listed).
-desc=$(awk '
-  /^description:/ { v = $0; sub(/^description: */, "", v); if (v !~ /^[>|][-+]?$/) { d = v; exit } on = 1; next }
-  on && /^  / { s = $0; sub(/^ +/, "", s); d = d (d == "" ? "" : " ") s; next }
-  on { exit }
-  END { print d }' action.yml)
-n=$(printf '%s' "$desc" | wc -m | tr -d ' ')
-if [ -n "$desc" ] && [ "$n" -lt 125 ]; then
-  ok "action.yml: the description is $n characters, under Marketplace's 125"
+#
+# yaml_description prints the top-level `description:` of the YAML file $1 as
+# a YAML parser reads it, for the forms an action.yml can plausibly use
+# (bash and awk only: this test runs on bare runners):
+#   - a block scalar, > or |, with an optional chomping indicator (- or +)
+#     and indentation digit in either order, then only an optional comment;
+#     blank lines inside it are kept (a folded block turns n of them into n
+#     newlines), more-indented lines are not folded, and the final newline
+#     is kept, dropped or multiplied as the chomping indicator says;
+#   - a plain scalar, on one line or continued over several (lines are
+#     joined by one space, a blank line is a newline), up to a comment, a
+#     blank-indented key or the end of the file;
+#   - a quoted scalar (escapes are not decoded).
+# CRLF line endings, and trailing whitespace after the indicator, do not
+# change the result.
+yaml_description() {
+  awk '
+    function trim(s) { sub(/^[ \t]+/, "", s); sub(/[ \t]+$/, "", s); return s }
+    function indent(s,  t) { t = s; sub(/[^ ].*$/, "", t); return length(t) }
+    function nl(n,  r) { r = ""; while (n-- > 0) r = r "\n"; return r }
+    { sub(/\r$/, "") }
+    mode == 0 && /^description:/ {
+      v = $0; sub(/^description:[ \t]*/, "", v)
+      if (v ~ /^#/) v = ""
+      ind = v; sub(/[ \t]+#.*$/, "", ind); sub(/[ \t]+$/, "", ind)
+      if (ind ~ /^[>|]([-+][1-9]?|[1-9][-+]?)?$/) {
+        mode = 1; style = substr(ind, 1, 1); chomp = "clip"; blockind = 0
+        if (ind ~ /-/) chomp = "strip"; else if (ind ~ /\+/) chomp = "keep"
+        if (match(ind, /[1-9]/)) blockind = substr(ind, RSTART, 1) + 0
+        next
+      }
+      sub(/[ \t]+#.*$/, "", v); text = trim(v); mode = 2; next
+    }
+    mode == 1 {
+      if ($0 ~ /^[ \t]*$/) { blanks++; next }
+      i = indent($0)
+      if (blockind == 0) { if (i == 0) exit; blockind = i }
+      if (i < blockind) exit
+      s = substr($0, blockind + 1)
+      more = (style == ">" && s ~ /^[ \t]/)
+      if (!seen) { out = nl(blanks) s; seen = 1 }
+      else if (style == "|") out = out nl(blanks + 1) s
+      else if (blanks == 0 && !more && !prevmore) out = out " " s
+      else out = out nl(blanks + (more || prevmore ? 1 : 0)) s
+      prevmore = more; blanks = 0; next
+    }
+    mode == 2 {
+      if ($0 ~ /^[ \t]*$/) { blanks++; next }
+      if (indent($0) == 0) exit
+      t = trim($0)
+      if (t ~ /^#/) exit
+      sub(/[ \t]+#.*$/, "", t)
+      if (text == "" && !blanks) text = t
+      else if (!blanks) text = text " " t
+      else text = text nl(blanks) t
+      blanks = 0
+    }
+    END {
+      if (mode == 1) {
+        if (!seen) val = (chomp == "keep") ? nl(blanks) : ""
+        else if (chomp == "strip") val = out
+        else if (chomp == "keep") val = out nl(blanks + 1)
+        else val = out "\n"
+      } else {
+        val = text
+        if (val ~ /^".*"$/ && length(val) > 1) val = substr(val, 2, length(val) - 2)
+        else if (val ~ /^'"'"'.*'"'"'$/ && length(val) > 1) { val = substr(val, 2, length(val) - 2); gsub(/'"'"''"'"'/, "'"'"'", val) }
+      }
+      printf "%s", val
+    }' "$1"
+}
+# desc_verdict FILE prints "N pass|fail": the description's length in
+# characters, and whether Marketplace takes it (not empty, under 125, not an
+# indicator that was not understood).
+desc_verdict() {
+  yaml_description "$1" >"$work/desc"
+  local n
+  n=$(wc -m <"$work/desc" | tr -d ' ')
+  if [ "$n" -gt 0 ] && [ "$n" -lt 125 ] && ! grep -q '^[>|]' "$work/desc"; then
+    echo "$n pass"
+  else
+    echo "$n fail"
+  fi
+}
+# The forms, each with the length a YAML parser (PyYAML) gives it, counted
+# by hand: they are not computed by yaml_description. A 124-character
+# description passes and a 125-character one fails in every form; the
+# 247-character description v0.2.1 shipped fails in every form.
+rep() { printf '%*s' "$1" '' | tr ' ' "$2"; }
+a124=$(rep 124 a) a125=$(rep 125 a) sp=$(rep 3 " ")
+old1="Gate rendered Kubernetes manifests on upgrade readiness: removed and"
+old2="deprecated APIs for a target version, as SARIF, outputs and a step summary."
+old3="Exit code 2 (findings at/above fail-on, or an unknown verdict unless"
+old4="allow-incomplete) fails the step."
+mkdir -p "$work/desc-cases"
+desc_n=0 desc_bad=0
+# dcase NAME LENGTH pass|fail [crlf] < file content
+dcase() {
+  local f="$work/desc-cases/$((++desc_n)).yml" got
+  if [ "${4:-}" = crlf ]; then sed 's/$/\r/' >"$f"; else cat >"$f"; fi
+  got=$(desc_verdict "$f")
+  if [ "$got" != "$2 $3" ]; then
+    desc_bad=$((desc_bad + 1))
+    printf 'case "%s": want "%s %s", got "%s"\n' "$1" "$2" "$3" "$got" >>"$work/desc-out"
+  fi
+}
+: >"$work/desc-out"
+dcase "folded, two lines" 9 pass <<EOF
+name: x
+description: >-
+  aaaa
+  bbbb
+author: y
+EOF
+dcase "124 characters in a block" 124 pass <<EOF
+description: >-
+  $a124
+author: y
+EOF
+dcase "125 characters in a block" 125 fail <<EOF
+description: >-
+  $a125
+author: y
+EOF
+dcase "124 characters, trailing spaces after the indicator" 124 pass <<EOF
+description: >-$sp
+  $a124
+author: y
+EOF
+dcase "125 characters, trailing spaces after the indicator" 125 fail <<EOF
+description: >-$sp
+  $a125
+author: y
+EOF
+dcase "124 characters, CRLF" 124 pass crlf <<EOF
+description: >-
+  $a124
+author: y
+EOF
+dcase "125 characters, CRLF" 125 fail crlf <<EOF
+description: >-
+  $a125
+author: y
+EOF
+dcase "125 characters folded over three lines (50, 50, 23)" 125 fail <<EOF
+description: >-
+  $(rep 50 a)
+  $(rep 50 b)
+  $(rep 23 c)
+author: y
+EOF
+dcase "124 characters folded over three lines (50, 50, 22)" 124 pass <<EOF
+description: >-
+  $(rep 50 a)
+  $(rep 50 b)
+  $(rep 22 c)
+author: y
+EOF
+dcase "a blank line inside a folded block is a newline" 5 pass <<EOF
+description: >-
+  aa
+
+  bb
+author: y
+EOF
+dcase "two blank lines inside a folded block are two newlines" 6 pass <<EOF
+description: >-
+  aa
+
+
+  bb
+author: y
+EOF
+dcase "a comment after the indicator" 3 pass <<EOF
+description: >- # shown on Marketplace
+  abc
+author: y
+EOF
+dcase "an indentation indicator, a more-indented line keeps its break" 9 pass <<EOF
+description: >2-
+  abc
+    def
+author: y
+EOF
+dcase "an indentation indicator before the chomping one" 8 pass <<EOF
+description: >-2
+  abc
+  defg
+author: y
+EOF
+dcase "a plain scalar continued over three lines" 11 pass <<EOF
+description: aaa
+  bbb
+  ccc
+author: y
+EOF
+dcase "a plain scalar that starts on the next line" 7 pass <<EOF
+description:
+  aaa
+  bbb
+author: y
+EOF
+dcase "a plain scalar, 124 characters" 124 pass <<EOF
+description: $a124
+author: y
+EOF
+dcase "a plain scalar, 125 characters" 125 fail <<EOF
+description: $a125
+author: y
+EOF
+dcase "a plain scalar with a comment" 3 pass <<EOF
+description: abc # not part of it
+author: y
+EOF
+dcase "a double-quoted scalar" 3 pass <<EOF
+description: "abc"
+author: y
+EOF
+dcase "a literal block keeps its line breaks" 3 pass <<EOF
+description: |-
+  a
+  b
+author: y
+EOF
+dcase "a folded block, clipped, keeps the final newline" 4 pass <<EOF
+description: >
+  abc
+author: y
+EOF
+dcase "a folded block, kept, keeps the trailing blank line too" 5 pass <<EOF
+description: >+
+  abc
+
+author: y
+EOF
+dcase "a block at the end of the file" 3 pass <<EOF
+description: >-
+  abc
+EOF
+dcase "a nested description is not the action's" 3 pass <<EOF
+inputs:
+  path:
+    description: this one is long enough to not count at all
+description: abc
+EOF
+dcase "the 247-character description of v0.2.1, folded" 247 fail <<EOF
+description: >-
+  $old1
+  $old2
+  $old3
+  $old4
+author: y
+EOF
+dcase "the 247-character description, trailing spaces after the indicator" 247 fail <<EOF
+description: >-$sp
+  $old1
+  $old2
+  $old3
+  $old4
+author: y
+EOF
+dcase "the 247-character description, CRLF" 247 fail crlf <<EOF
+description: >-
+  $old1
+  $old2
+  $old3
+  $old4
+author: y
+EOF
+dcase "the 247-character description, with a comment" 247 fail <<EOF
+description: >- # too long
+  $old1
+  $old2
+  $old3
+  $old4
+author: y
+EOF
+dcase "the 247-character description, with an indentation indicator" 247 fail <<EOF
+description: >2-
+  $old1
+  $old2
+  $old3
+  $old4
+author: y
+EOF
+dcase "the 247-character description, blank line between its lines" 247 fail <<EOF
+description: >-
+  $old1
+
+  $old2
+  $old3
+  $old4
+author: y
+EOF
+dcase "the 247-character description, literal" 247 fail <<EOF
+description: |-
+  $old1
+  $old2
+  $old3
+  $old4
+author: y
+EOF
+dcase "the 247-character description, plain over four lines (the colon made a comma, as YAML needs)" 247 fail <<EOF
+description: ${old1/: /, }
+  $old2
+  $old3
+  $old4
+author: y
+EOF
+dcase "an empty block" 0 fail <<EOF
+description: >-
+author: y
+EOF
+dcase "no description" 0 fail <<EOF
+name: x
+author: y
+EOF
+dcase "an indicator that is not one" 3 fail <<EOF
+description: >-x
+author: y
+EOF
+if [ "$desc_bad" = 0 ]; then
+  ok "the description reader counts $desc_n forms as a YAML parser does (124 passes, 125 and v0.2.1's 247 fail)"
 else
-  printf '%s characters: %s\n' "$n" "$desc" >"$work/out"
-  fail "action.yml: the description must be under 125 characters for GitHub Marketplace" "$work/out"
+  fail "the description reader counts $desc_n forms as a YAML parser does" "$work/desc-out"
 fi
+for yml in action.yml action/action.yml; do
+  v=$(desc_verdict "$yml")
+  if [ "${v#* }" = pass ]; then
+    ok "$yml: the description is ${v% *} characters, under Marketplace's 125"
+  else
+    printf '%s characters: %s\n' "${v% *}" "$(cat "$work/desc")" >"$work/out"
+    fail "$yml: the description must be under 125 characters for GitHub Marketplace" "$work/out"
+  fi
+done
 # On PRs and pushes, CI's action job runs only when the changes job's
 # action filter matches; each file the job tests must be in it. The release
 # filter gates release-check (GoReleaser snapshot and multi-arch images, up

@@ -13,6 +13,12 @@ only through a new release.
 
 ## [Unreleased]
 
+### Changed
+
+- The README's install table lists the chart on Artifact Hub and the Action
+  on GitHub Marketplace, and the Action examples in the README and the docs
+  pin `@v0.2.2` (#75).
+
 ## [0.2.2] - 2026-10-11
 
 A patch release so the GitHub Action can be listed on GitHub Marketplace,

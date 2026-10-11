@@ -463,12 +463,12 @@ jobs:
         run: |
           rm -f -- .upgradescope.yaml upgradescope-baseline.json
           cp trusted/.upgradescope.yaml trusted/upgradescope-baseline.json .
-      - uses: abd-ulbasit/upgradescope@v0.2.0
+      - uses: abd-ulbasit/upgradescope@v0.2.2
         id: gate
         with:
           path: rendered
           target: "1.37"
-          version: v0.2.0
+          version: v0.2.2
           config: .upgradescope.yaml           # named, so no other config is looked for
           baseline: upgradescope-baseline.json
 ```
