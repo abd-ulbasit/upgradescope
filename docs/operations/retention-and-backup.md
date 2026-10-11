@@ -275,8 +275,8 @@ team-map change that leaves every verdict, score and finding as it was
 rewrites the row's report in place with the new teams: the earlier
 attribution is gone from the database as well as from the API, and
 `/history` keeps only `at`, `score`, `ready` and `verdict`. `/report`,
-`/teams` and the exports always read the latest stored evaluation, so they cannot answer
-which team owned a blocker at an earlier time. An auditor who needs that
+`/teams` and the exports always read the latest stored evaluation, so they
+cannot answer which team owned a blocker at an earlier time. An auditor who needs that
 keeps the exports from the time (`GET /api/v1/clusters/{id}/export`).
 
 ## Backup and restore
