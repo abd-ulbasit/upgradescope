@@ -153,6 +153,7 @@ inert=(
   'hack/chart-release-annotations.sh'
   'hack/check-*.sh'
   'hack/claims-check.sh'
+  'hack/claims-trackers.sh'
   'hack/docs-live-check.sh'
   'hack/flags-diff.sh'
   'hack/helm-docs.sh'
