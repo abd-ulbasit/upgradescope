@@ -214,7 +214,13 @@ func newServeCmd() *cobra.Command {
 		Long: `Run the upgradescope server. It accepts snapshots that agents push,
 evaluates them against every target, keeps the history, serves the REST API
 and the dashboard at /, and sends Slack or webhook notifications when a
-cluster's readiness changes.
+cluster's readiness changes: a new blocker, all blockers resolved, or an
+add-on entering its end-of-life window. Each pass is compared with the
+target's last baseline, an evaluation that is decided or unknown only
+because the target is past the knowledge base's horizon. A target's first
+baseline is silent (after an upgrade, the previous default target's is
+used), and a pass that is unknown because a collector failed sends nothing
+and is no baseline (docs/operations.md, Notifications).
 
 It listens on loopback by default. On any other address, the read API needs
 a credential: --read-token (fleet-wide), read tokens minted with
