@@ -99,9 +99,9 @@ Pick how the gate moves:
   provenance, fails the step from every ref ([Latest moved
   back](#install-and-integrity)).
 
-The examples below pin v0.2.2, the release listed on GitHub Marketplace
-(v0.2.0 is the first release that ships this action: root `action.yml`,
-outputs, step summary). Put the release you pin in its place, or use `@v0`
+The examples below pin v0.3.0, the current release (the action is on
+GitHub Marketplace since v0.2.2; v0.2.0 is the first release that ships it:
+root `action.yml`, outputs, step summary). Put the release you pin in its place, or use `@v0`
 and leave out `version`.
 
 ```yaml
@@ -117,13 +117,13 @@ jobs:
         with:
           persist-credentials: false
       - run: helm template my-release ./chart --output-dir rendered
-      - uses: abd-ulbasit/upgradescope@v0.2.2   # or @<full commit SHA>
+      - uses: abd-ulbasit/upgradescope@v0.3.0   # or @<full commit SHA>
         id: gate
         with:
           path: rendered
           target: "1.36"
           fail-on: blocker
-          version: v0.2.2
+          version: v0.3.0
       - uses: github/codeql-action/upload-sarif@v4
         # Also when the gate failed. Not on a fork PR: its token is read-only.
         if: >-
@@ -166,11 +166,11 @@ same `action/run.sh`, and CI fails if they drift apart.
       - run: |
           mkdir -p rendered
           kustomize build overlays/prod > rendered/prod.yaml
-      - uses: abd-ulbasit/upgradescope@v0.2.2
+      - uses: abd-ulbasit/upgradescope@v0.3.0
         with:
           path: rendered
           target: "1.36"
-          version: v0.2.2
+          version: v0.3.0
 ```
 
 ### Without code scanning
@@ -181,9 +181,9 @@ need it to gate. Drop the upload step and `security-events: write`, keep
 outputs:
 
 ```yaml
-      - uses: abd-ulbasit/upgradescope@v0.2.2
+      - uses: abd-ulbasit/upgradescope@v0.3.0
         id: gate
-        with: {path: rendered, target: "1.36", version: v0.2.2}
+        with: {path: rendered, target: "1.36", version: v0.3.0}
       - if: ${{ !cancelled() }}   # also when the gate failed
         run: echo "verdict $VERDICT, score $SCORE, $BLOCKERS blockers"
         env:
@@ -223,11 +223,11 @@ upgradescope scan --files rendered --target 1.36 --fail-on never \
 ```
 
 ```yaml
-      - uses: abd-ulbasit/upgradescope@v0.2.2
+      - uses: abd-ulbasit/upgradescope@v0.3.0
         with:
           path: rendered
           target: "1.36"
-          version: v0.2.2
+          version: v0.3.0
           config: ci/upgradescope.yaml          # only when not .upgradescope.yaml at the root
           baseline: upgradescope-baseline.json
 ```
@@ -278,12 +278,12 @@ jobs:
         run: |
           rm -f -- .upgradescope.yaml upgradescope-baseline.json
           cp trusted/.upgradescope.yaml trusted/upgradescope-baseline.json .
-      - uses: abd-ulbasit/upgradescope@v0.2.2
+      - uses: abd-ulbasit/upgradescope@v0.3.0
         id: gate
         with:
           path: rendered
           target: "1.37"
-          version: v0.2.2
+          version: v0.3.0
           config: .upgradescope.yaml           # named, so no other config is looked for
           baseline: upgradescope-baseline.json
 ```
@@ -324,11 +324,11 @@ Either target the horizon or lower, upgrade to a release with a newer
 knowledge base, or accept the gap knowingly and gate on findings alone:
 
 ```yaml
-      - uses: abd-ulbasit/upgradescope@v0.2.2
+      - uses: abd-ulbasit/upgradescope@v0.3.0
         with:
           path: rendered
           target: "1.38"           # newer than the pinned release's horizon
-          version: v0.2.2
+          version: v0.3.0
           allow-incomplete: true   # an unknown verdict no longer fails the step
 ```
 
