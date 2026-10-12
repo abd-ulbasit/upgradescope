@@ -7,19 +7,23 @@
 [![Artifact Hub](https://img.shields.io/endpoint?url=https://artifacthub.io/badge/repository/upgradescope)](https://artifacthub.io/packages/search?repo=upgradescope)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 
-upgradescope tells you, before you upgrade Kubernetes, which of your add-ons
-are end of life or will not run on the next minor, and which removed APIs or
-no-longer-served CRD versions will break, for one cluster, a fleet, or the
-manifests in a pull request.
+upgradescope tells you, before you upgrade Kubernetes, what will break in
+one cluster, a fleet, or the manifests in a pull request:
 
-- **Cited add-on data** for 34 add-ons: end of life and, where upstream
-  publishes one, the Kubernetes range, every claim with a public citation
-  (Ingress NGINX, retired in March 2026, is a blocker).
-- **Who still writes a removed API**, from `managedFields` rather than the
-  last-applied annotation alone, and whether any client still requests one,
-  from the apiserver's metrics.
-- **CI with nothing to install**: the GitHub Action gates a pull request's
-  rendered manifests.
+1. **Add-on end of life and compatibility**, from cited data for 34 add-ons:
+   the end-of-life date and, where upstream publishes one, the Kubernetes
+   range, every claim with a public citation (Ingress NGINX, retired in
+   March 2026, is a blocker).
+2. **Custom resources at CRD versions no longer served**, and
+   `status.storedVersions` entries that block the CRD update dropping one.
+3. **Stored Helm release manifests and chart `kubeVersion`**: what the
+   installed revision would replay at the target, and charts that exclude it.
+4. **Pull-request and CI gating**: `scan --files` on rendered manifests, with
+   SARIF, JUnit and GitLab Code Quality output; the GitHub Action needs
+   nothing installed.
+
+Removed and deprecated APIs, version skew and removed in-tree volume plugins
+are checked too.
 
 The answer is a verdict (`ready`, `blocked`, or `unknown` when a required
 check could not run), cited findings and an exit code.
@@ -109,10 +113,10 @@ all with `rbac.helmSecrets=false`; the volume checks list
 | Check | A blocker when | Read from |
 |---|---|---|
 | [Add-ons](https://abd-ulbasit.github.io/upgradescope/concepts/addon-registry/) | past end of life, or the installed line excludes the target | images, Helm releases, chart labels, `IngressClass` |
-| [Removed APIs](https://abd-ulbasit.github.io/upgradescope/concepts/api-usage-detection/) | an object is still written through an API the target removed | `managedFields`, then the last-applied annotation; manifests |
-| Deprecated API requests | the apiserver was asked for an API the target removed | `apiserver_requested_deprecated_apis` |
 | CRD versions | custom resources at a version their CRD no longer serves | CRDs and their objects |
 | Helm charts | `kubeVersion` excludes the target, or a stored release uses a removed API | Helm releases; Argo CD and Flux charts (opt-in) |
+| [Removed APIs](https://abd-ulbasit.github.io/upgradescope/concepts/api-usage-detection/) | an object is still written through an API the target removed | `managedFields`, then the last-applied annotation; manifests |
+| Deprecated API requests | the apiserver was asked for an API the target removed | `apiserver_requested_deprecated_apis` |
 | Version skew | kubelets or kube-proxy outside the policy at the target | node and control-plane versions |
 | [In-tree volume plugins](https://abd-ulbasit.github.io/upgradescope/concepts/volume-plugins/) | a removed plugin (`glusterfs`, `gitRepo`) is still named | pods, PersistentVolumes, StorageClasses |
 | Managed-provider support | the EKS, GKE or AKS minor is past standard support | the provider's calendar |
@@ -177,11 +181,22 @@ has the sizes per platform.
 ## How it compares
 
 pluto, kubent and kubepug find deprecated APIs as one-shot CLIs; Nova finds
-outdated charts; EKS, GKE and AKS check their own clusters. upgradescope adds
-cited add-on end of life, authorship-based live detection, skew, and a
-verdict that admits what it could not see. The
+outdated charts; EKS, GKE and AKS check their own clusters.
+[kube-upgrade-check](https://github.com/runtimez-com/kube-upgrade-check)
+(krew plugin `upgrade-check`) covers similar live-cluster ground, also from
+`managedFields` and the deprecated-API metric, and adds control-plane and
+kubelet config checks, release-note checks and upgrade preflight
+(drain-blocking PodDisruptionBudgets, webhooks with a `Fail` policy) that
+upgradescope does not do yet
+([#397](https://github.com/abd-ulbasit/upgradescope/issues/397)).
+upgradescope adds cited add-on end of life, CRD version checks, stored Helm
+release replay and a gate on rendered manifests. The
 [comparison](https://abd-ulbasit.github.io/upgradescope/comparison/) says,
 with sources, what each does that upgradescope does not.
+
+**Use something else when** you need upgrade preflight, or control-plane
+flag, kubelet config and release-note checks on a self-managed cluster:
+kube-upgrade-check does those today.
 
 ## Project
 

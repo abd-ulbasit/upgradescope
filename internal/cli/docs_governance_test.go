@@ -102,3 +102,48 @@ func TestRoadmapRegistryCounts(t *testing.T) {
 		}
 	}
 }
+
+// TestReadmeLeadsWithTheWedge: the README's first screen, before its first
+// section, names what upgradescope does that other scanners do not, in the
+// order #404 sets (add-on end of life, unserved CRD versions, stored Helm
+// releases and chart kubeVersion, pull-request gating), and leaves
+// managedFields and the deprecated-API metric, which kube-upgrade-check
+// reads too, to the sections below. How it compares names
+// kube-upgrade-check and the preflight upgradescope lacks (#397), and the
+// README says when to use something else.
+func TestReadmeLeadsWithTheWedge(t *testing.T) {
+	readme := readDoc(t, "README.md")
+	first, _, _ := strings.Cut(readme, "\n## ")
+	first = strings.ToLower(strings.Join(strings.Fields(first), " "))
+	at := -1
+	for _, want := range []string{
+		"add-on end of life and compatibility",
+		"crd versions no longer served",
+		"stored helm release manifests and chart `kubeversion`",
+		"pull-request and ci gating",
+		"sarif, junit and gitlab",
+	} {
+		i := strings.Index(first, want)
+		if i < 0 {
+			t.Errorf("README.md's first screen does not name %q", want)
+			continue
+		}
+		if i < at {
+			t.Errorf("README.md's first screen names %q out of #404's order", want)
+		}
+		at = i
+	}
+	for _, feature := range []string{"managedfields", "apiserver_requested_deprecated_apis"} {
+		if strings.Contains(first, feature) {
+			t.Errorf("README.md's first screen headlines %q, which kube-upgrade-check reads too: keep it a feature below", feature)
+		}
+	}
+	_, compares, _ := strings.Cut(readme, "\n## How it compares")
+	compares, _, _ = strings.Cut(compares, "\n## ")
+	compares = strings.Join(strings.Fields(compares), " ")
+	for _, want := range []string{"kube-upgrade-check", "preflight", "issues/397", "**Use something else when**"} {
+		if !strings.Contains(compares, want) {
+			t.Errorf("README.md's How it compares does not say %q", want)
+		}
+	}
+}
