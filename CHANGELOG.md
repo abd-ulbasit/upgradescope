@@ -13,6 +13,14 @@ only through a new release.
 
 ## [Unreleased]
 
+### Added
+
+- A reproducible survey of the 50 most-starred Helm charts on Artifact Hub
+  against Kubernetes 1.37, run with the v0.3.0 release: the method, the
+  data (`results.json`, `results.csv`) and hand checks are in
+  `docs/research/helm-chart-survey-2026-10/`, and `hack/chart-survey.sh`
+  re-runs it (#412).
+
 ### Changed
 
 - The Action examples in the README and the docs, and the README's
