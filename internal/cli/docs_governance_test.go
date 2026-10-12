@@ -15,14 +15,97 @@ import (
 )
 
 // readmeWordBudget caps the README's length, counted as wc -w counts it
-// (white-space separated fields, code blocks and badges included). The long
-// material lives on the docs site; the README links it.
-const readmeWordBudget = 1500
+// (white-space separated fields, code blocks and badges included): #404 asks
+// for under 1,200. The long material lives on the docs site; the README
+// links it.
+const readmeWordBudget = 1200
 
-// TestReadmeStaysASummary: the README fits its word budget.
+// TestReadmeStaysASummary: the README is under its word budget.
 func TestReadmeStaysASummary(t *testing.T) {
-	if n := len(strings.Fields(readDoc(t, "README.md"))); n > readmeWordBudget {
-		t.Errorf("README.md has %d words, over the budget of %d: move the detail to a docs page and link it", n, readmeWordBudget)
+	if n := len(strings.Fields(readDoc(t, "README.md"))); n >= readmeWordBudget {
+		t.Errorf("README.md has %d words, not under the budget of %d: move the detail to a docs page and link it", n, readmeWordBudget)
+	}
+}
+
+// movedDetail are the docs pages that hold what the README only summarises
+// (#404): each must exist and the README must link it.
+var movedDetail = map[string]string{
+	"docs/operations/scale.md":                   "https://abd-ulbasit.github.io/upgradescope/operations/scale/",
+	"docs/operations/security-model-and-rbac.md": "https://abd-ulbasit.github.io/upgradescope/operations/security-model-and-rbac/",
+	"docs/operations/install.md":                 "https://abd-ulbasit.github.io/upgradescope/operations/install/",
+	"docs/getting-started/ci-gate.md":            "https://abd-ulbasit.github.io/upgradescope/getting-started/ci-gate/",
+	"docs/comparison.md":                         "https://abd-ulbasit.github.io/upgradescope/comparison/",
+}
+
+// TestReadmeLinksTheMovedDetail (#404): every docs page that received the
+// README's detail (scale and cost, the measured rows in full, the agent's
+// RBAC, the verification of every channel, the CI gate's fork and Dependabot
+// cases, kube-upgrade-check) exists and is linked from the README.
+func TestReadmeLinksTheMovedDetail(t *testing.T) {
+	readme := readDoc(t, "README.md")
+	for page, url := range movedDetail {
+		if _, err := os.Stat(filepath.Join(repoRoot, page)); err != nil {
+			t.Errorf("%s: %v", page, err)
+		}
+		if !strings.Contains(readme, "]("+url) {
+			t.Errorf("README.md does not link %s (%s), where its detail moved", url, page)
+		}
+	}
+	for _, anchor := range []string{"operations/scale/#the-readmes-measured-table", "comparison/#kube-upgrade-check"} {
+		if !strings.Contains(readme, anchor+")") {
+			t.Errorf("README.md does not link the section %s", anchor)
+		}
+	}
+	for page, heading := range map[string]string{
+		"docs/operations/scale.md": "\n## The README's Measured table\n",
+		"docs/comparison.md":       "\n## kube-upgrade-check\n",
+	} {
+		if !strings.Contains(readDoc(t, page), heading) {
+			t.Errorf("%s has no %q section, which the README links", page, strings.TrimSpace(heading))
+		}
+	}
+}
+
+// section returns doc from the line "## <heading>" to the next "## "
+// heading, or "" when there is no such section.
+func section(doc, heading string) string {
+	_, rest, ok := strings.Cut(doc, "\n## "+heading+"\n")
+	if !ok {
+		return ""
+	}
+	rest, _, _ = strings.Cut(rest, "\n## ")
+	return rest
+}
+
+// measuredFigures are the figures a Measured row can lose in shortening: the
+// decimals, the thousands and the commits.
+var measuredFigures = regexp.MustCompile("[0-9]+\\.[0-9]+|[0-9]{1,3}(?:,[0-9]{3})+|`[0-9a-f]{7,8}`")
+
+// TestReadmeMeasuredRowsAreOnTheScalePage (#404): the README's Measured
+// table is the short form of the one on Scale and cost. Every figure and
+// commit in a README row is in that page's table, so a re-measured number
+// cannot change in one place only, and each page has the four rows.
+func TestReadmeMeasuredRowsAreOnTheScalePage(t *testing.T) {
+	rows := func(page, heading string) []string {
+		var out []string
+		for _, l := range strings.Split(section(readDoc(t, page), heading), "\n") {
+			if strings.HasPrefix(l, "| ") && !strings.HasPrefix(l, "| What |") {
+				out = append(out, l)
+			}
+		}
+		return out
+	}
+	readme := rows("README.md", "Measured")
+	full := rows("docs/operations/scale.md", "The README's Measured table")
+	if len(readme) != 4 || len(full) != 4 {
+		t.Fatalf("the README's Measured table has %d rows and Scale and cost's copy %d; want 4 each", len(readme), len(full))
+	}
+	for i, row := range readme {
+		for _, fig := range measuredFigures.FindAllString(row, -1) {
+			if !strings.Contains(full[i], fig) {
+				t.Errorf("README.md Measured row %d says %s, and row %d of Scale and cost's README table does not: %s", i+1, fig, i+1, full[i])
+			}
+		}
 	}
 }
 
