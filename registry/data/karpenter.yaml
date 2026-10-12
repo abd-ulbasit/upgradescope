@@ -29,7 +29,8 @@ support:
     - https://endoflife.date/karpenter
     - https://karpenter.sh/docs/upgrading/compatibility/
 cycles:
-  - {cycle: "1.14", eol: false, citations: ["https://endoflife.date/karpenter"]}
+  - {cycle: "1.15", eol: false, citations: ["https://endoflife.date/karpenter"]}
+  - {cycle: "1.14", eol: "2026-10-10", citations: ["https://endoflife.date/karpenter"]}
   - {cycle: "1.13", eol: "2026-07-11", citations: ["https://endoflife.date/karpenter"]}
   - {cycle: "1.12", eol: "2026-06-10", citations: ["https://endoflife.date/karpenter"]}
   - {cycle: "1.11", eol: "2026-04-24", citations: ["https://endoflife.date/karpenter"]}
