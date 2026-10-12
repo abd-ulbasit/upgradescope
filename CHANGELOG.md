@@ -13,6 +13,11 @@ only through a new release.
 
 ## [Unreleased]
 
+### Changed
+
+- The Action examples in the README and the docs, and the README's
+  verification example, pin v0.3.0.
+
 ## [0.3.0] - 2026-10-12
 
 A release about add-on data: whether the add-on versions you run are past

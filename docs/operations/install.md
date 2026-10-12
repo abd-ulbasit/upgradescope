@@ -20,7 +20,7 @@ release workflow, with the dashboard and the knowledge base embedded.
 | Go | `go install github.com/abd-ulbasit/upgradescope/cmd/upgradescope@<version>` | any |
 | Container image | `ghcr.io/abd-ulbasit/upgradescope:<version>` (linux/amd64, linux/arm64) | v0.2.0, signed |
 | Helm chart | `oci://ghcr.io/abd-ulbasit/charts/upgradescope`, also on [Artifact Hub](https://artifacthub.io/packages/helm/upgradescope/upgradescope) | v0.2.0, signed |
-| GitHub Action | `uses: abd-ulbasit/upgradescope@v0.2.2`, on [GitHub Marketplace](https://github.com/marketplace/actions/upgradescope-gate); [the Action's README](https://github.com/abd-ulbasit/upgradescope/blob/main/action/README.md) | v0.2.0 (listed on Marketplace from v0.2.2) |
+| GitHub Action | `uses: abd-ulbasit/upgradescope@v0.3.0`, on [GitHub Marketplace](https://github.com/marketplace/actions/upgradescope-gate); [the Action's README](https://github.com/abd-ulbasit/upgradescope/blob/main/action/README.md) | v0.2.0 (listed on Marketplace from v0.2.2) |
 
 ## Release archives
 

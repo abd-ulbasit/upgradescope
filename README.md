@@ -37,7 +37,7 @@ go install github.com/abd-ulbasit/upgradescope/cmd/upgradescope@latest
 helm install upgradescope oci://ghcr.io/abd-ulbasit/charts/upgradescope --version 0.3.0 -n upgradescope --create-namespace
 ```
 
-In CI: `uses: abd-ulbasit/upgradescope@v0.2.2`
+In CI: `uses: abd-ulbasit/upgradescope@v0.3.0`
 ([Marketplace](https://github.com/marketplace/actions/upgradescope-gate),
 [action/README.md](action/README.md)). Every channel and its verification:
 [Install](https://abd-ulbasit.github.io/upgradescope/operations/install/).
@@ -45,7 +45,7 @@ In CI: `uses: abd-ulbasit/upgradescope@v0.2.2`
 Verifying a download:
 
 ```sh
-VERSION=v0.2.2   # the release you downloaded
+VERSION=v0.3.0   # the release you downloaded
 base=https://github.com/abd-ulbasit/upgradescope/releases/download/$VERSION
 curl -fsSLO "$base/upgradescope_linux_amd64.tar.gz"
 curl -fsSLO "$base/checksums.txt"
@@ -73,9 +73,9 @@ Gate pull requests with the Action:
 
 ```yaml
       - run: helm template my-release ./chart --output-dir rendered
-      - uses: abd-ulbasit/upgradescope@v0.2.2
+      - uses: abd-ulbasit/upgradescope@v0.3.0
         id: gate
-        with: {path: rendered, target: "1.37", version: v0.2.2}
+        with: {path: rendered, target: "1.37", version: v0.3.0}
       - uses: github/codeql-action/upload-sarif@v4
         # also after a failed gate; not on fork PRs (read-only token)
         if: ${{ !cancelled() && steps.gate.outputs.sarif-file != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
