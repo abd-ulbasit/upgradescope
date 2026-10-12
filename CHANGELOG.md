@@ -13,11 +13,63 @@ only through a new release.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-12
+
+A release about add-on data: whether the add-on versions you run are past
+end of life or will run on your next Kubernetes, with every range cited and
+two sources of false blockers removed. The README now leads with that, and
+the project has governance files and a public roadmap (#426).
+
+### Added
+
+- Seven add-ons in the registry, which now holds 34: Crossplane, Linkerd, the
+  AWS Load Balancer Controller, the AWS EFS CSI driver, the AWS EBS CSI
+  driver, Cluster Autoscaler and Longhorn (#394).
+  - Linkerd, the AWS Load Balancer Controller, the AWS EFS CSI driver and
+    Longhorn carry Kubernetes ranges read from their own pages, and Istio
+    gains 19 rows from istio.io's supported-releases table. 15 of the 34
+    entries now carry a range.
+  - Crossplane's end-of-life dates come from its own release table, because
+    endoflife.date does not track it. Longhorn's are synced from
+    endoflife.date.
+  - The add-ons whose projects publish no Kubernetes bound (Argo CD, Flux,
+    Gatekeeper, Traefik, CoreDNS, AKS app routing, kube-state-metrics,
+    Cluster Autoscaler and the AWS EBS CSI driver) say so in their entries,
+    with the page that was checked and the date.
+- `MAINTAINERS.md`, `GOVERNANCE.md` (with a contributor ladder),
+  `ADOPTERS.md` and `ROADMAP.md`, linked from the README and CONTRIBUTING
+  (#409).
+- A `# eol-sync: ignore-k8s-range` line in a registry entry keeps
+  endoflife.date's end-of-life dates but drops its Kubernetes range, for
+  products that publish only a tested-with table (registry/CONTRIBUTING.md).
+
 ### Changed
 
+- The README leads with add-on end of life and compatibility, custom
+  resources at CRD versions no longer served, stored Helm release manifests,
+  and pull-request gating with `--files`. The long material moved to the docs
+  site (3,171 words to about 1,400), and the README names kube-upgrade-check
+  for the checks upgradescope does not do yet (#404).
 - The README's install table lists the chart on Artifact Hub and the Action
   on GitHub Marketplace, and the Action examples in the README and the docs
-  pin `@v0.2.2` (#75).
+  pin a release tag (#75).
+- The krew manifest has no usage lines, its short description is "Find what
+  blocks your next upgrade", and its caveats list the PersistentVolume and
+  StorageClass reads that a scan needs, as the krew-index review asked
+  (#75).
+- The Renovate preset lists every chart in the registry.
+- The Fluent Bit entry records that endoflife.date's dates disagree with
+  Fluent Bit's own SECURITY.md (5.0 ends on 2026-11-06 at endoflife.date and
+  on 2026-11-30 upstream). The synced dates are unchanged until the upstream
+  data is corrected (#408).
+
+### Fixed
+
+- KEDA and Kyverno no longer raise `chart-incompat` blockers. Their
+  Kubernetes ranges came from endoflife.date, but both projects describe
+  them as tested-with tables with no guarantee outside them, and the
+  registry does not treat a tested-with table as a bound. KEDA 2.20.1 on
+  Kubernetes 1.36, for example, was reported as blocked (#394).
 
 ## [0.2.2] - 2026-10-11
 
@@ -2598,7 +2650,8 @@ First release.
   deprecated-callers signal is then reported as not assessed.
 - `kind: List` items are not expanded in `--files` mode.
 
-[Unreleased]: https://github.com/abd-ulbasit/upgradescope/compare/v0.2.2...HEAD
+[Unreleased]: https://github.com/abd-ulbasit/upgradescope/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/abd-ulbasit/upgradescope/compare/v0.2.2...v0.3.0
 [0.2.2]: https://github.com/abd-ulbasit/upgradescope/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/abd-ulbasit/upgradescope/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/abd-ulbasit/upgradescope/compare/v0.1.1...v0.2.0

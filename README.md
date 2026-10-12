@@ -38,7 +38,7 @@ every public claim, with the test that proves it: [claims ledger](docs/claims.md
 ```sh
 brew install abd-ulbasit/tap/upgradescope
 go install github.com/abd-ulbasit/upgradescope/cmd/upgradescope@latest
-helm install upgradescope oci://ghcr.io/abd-ulbasit/charts/upgradescope --version 0.2.2 -n upgradescope --create-namespace
+helm install upgradescope oci://ghcr.io/abd-ulbasit/charts/upgradescope --version 0.3.0 -n upgradescope --create-namespace
 ```
 
 In CI: `uses: abd-ulbasit/upgradescope@v0.2.2`, on
