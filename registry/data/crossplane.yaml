@@ -1,0 +1,72 @@
+# registry/data/crossplane.yaml
+# endoflife.date does not track Crossplane (https://endoflife.date/crossplane is
+# a 404, checked on 2026-10-12), so there is no endoflife_product and the cycles
+# below are hand-curated from the project's own release table.
+#
+# Where the end dates come from. The README's "Releases" table gives each
+# release's EOL as a month, and the release-cycle documentation says "the most
+# recent three releases" are maintained and that "when Crossplane cuts a new
+# release, the fourth most recent release reaches end of life"
+# (https://docs.crossplane.io/latest/learn/release-cycle/). The README table is
+# the source for every row and is cited at the commit that stated it, since the
+# current table lists only the maintained releases:
+#   v1.12-v1.14   4b93884c50 (Feb, May and Aug 2024)
+#   v1.15-v1.17   972c242528 (Nov 2024, Feb 2025, May 2025)
+#   v1.18, v1.19  b766bfb24f (Aug 2025, Nov 2025)
+#   v2.0, v2.1    4fc935e558 (May 2026, Aug 2026)
+#   v1.20, v2.2-v2.4   f111609b65, the table at v2.4 (Nov 2026, Nov 2026, Feb 2027, May 2027)
+# A line whose retiring release has shipped ends on that release's date (the
+# GitHub release of vX.Y.0, which falls in the README's month in every case):
+# v1.12 on 2024-02-15 (v1.15.0), v1.13 on 2024-05-16 (v1.16.0), v1.14 on
+# 2024-08-29 (v1.17.0), v1.15 on 2024-11-05 (v1.18.0), v1.16 on 2025-02-11
+# (v1.19.0), v1.17 on 2025-05-21 (v1.20.0), v1.18 on 2025-08-14 (v2.0.0), v1.19
+# on 2025-11-05 (v2.1.0), v2.0 on 2026-05-21 (v2.3.0) and v2.1 on 2026-08-20
+# (v2.4.0), from https://github.com/crossplane/crossplane/releases.
+# A line whose retiring release has not shipped yet (v1.20, v2.2, v2.3, v2.4)
+# has only the month the README publishes, so its date is the last day of that
+# month: the latest the line can end, never an earlier day than the project
+# states. v1.20 is the final v1 minor and got extended support, so the README
+# ties its end to v2.5 ("When v2.5 is released in Nov 2026, v1.20 will reach its
+# EOL"), not to the three-release rule.
+#
+# No Kubernetes range is recorded: Crossplane publishes no per-release
+# Kubernetes compatibility table. Its install guide
+# (https://docs.crossplane.io/latest/get-started/install/, read on 2026-10-12)
+# lists only the prerequisite "an actively supported Kubernetes version"
+# (kubernetes.io's support period), and the v1.20 guide says the same. That is a
+# policy relative to Kubernetes' own window, not a range per line. Neither the
+# README nor the v2.4.0 release notes state a Kubernetes version.
+#
+# Images: the chart's image.repository is xpkg.crossplane.io/crossplane/crossplane
+# from v1.20 and xpkg.upbound.io/crossplane/crossplane before it (v1.14's
+# values.yaml); the RBAC manager runs the same image. Provider and function
+# packages version separately and are not matched.
+schema_version: 2
+id: crossplane
+display_name: Crossplane
+matchers:
+  images:
+    - crossplane/crossplane
+  charts:
+    - crossplane
+support:
+  status: supported
+  citations:
+    - https://docs.crossplane.io/latest/learn/release-cycle/
+    - https://github.com/crossplane/crossplane/blob/f111609b65/README.md#releases
+cycles:
+  - {cycle: "2.4", eol: "2027-05-31", citations: ["https://github.com/crossplane/crossplane/blob/f111609b65/README.md#releases"]}
+  - {cycle: "2.3", eol: "2027-02-28", citations: ["https://github.com/crossplane/crossplane/blob/f111609b65/README.md#releases"]}
+  - {cycle: "2.2", eol: "2026-11-30", citations: ["https://github.com/crossplane/crossplane/blob/f111609b65/README.md#releases"]}
+  - {cycle: "2.1", eol: "2026-08-20", citations: ["https://github.com/crossplane/crossplane/blob/4fc935e558/README.md#releases", "https://github.com/crossplane/crossplane/releases/tag/v2.4.0"]}
+  - {cycle: "2.0", eol: "2026-05-21", citations: ["https://github.com/crossplane/crossplane/blob/4fc935e558/README.md#releases", "https://github.com/crossplane/crossplane/releases/tag/v2.3.0"]}
+  - {cycle: "1.20", eol: "2026-11-30", citations: ["https://github.com/crossplane/crossplane/blob/f111609b65/README.md#releases"]}
+  - {cycle: "1.19", eol: "2025-11-05", citations: ["https://github.com/crossplane/crossplane/blob/b766bfb24f/README.md#releases", "https://github.com/crossplane/crossplane/releases/tag/v2.1.0"]}
+  - {cycle: "1.18", eol: "2025-08-14", citations: ["https://github.com/crossplane/crossplane/blob/b766bfb24f/README.md#releases", "https://github.com/crossplane/crossplane/releases/tag/v2.0.0"]}
+  - {cycle: "1.17", eol: "2025-05-21", citations: ["https://github.com/crossplane/crossplane/blob/972c242528/README.md#releases", "https://github.com/crossplane/crossplane/releases/tag/v1.20.0"]}
+  - {cycle: "1.16", eol: "2025-02-11", citations: ["https://github.com/crossplane/crossplane/blob/972c242528/README.md#releases", "https://github.com/crossplane/crossplane/releases/tag/v1.19.0"]}
+  - {cycle: "1.15", eol: "2024-11-05", citations: ["https://github.com/crossplane/crossplane/blob/972c242528/README.md#releases", "https://github.com/crossplane/crossplane/releases/tag/v1.18.0"]}
+  - {cycle: "1.14", eol: "2024-08-29", citations: ["https://github.com/crossplane/crossplane/blob/4b93884c50/README.md#releases", "https://github.com/crossplane/crossplane/releases/tag/v1.17.0"]}
+  - {cycle: "1.13", eol: "2024-05-16", citations: ["https://github.com/crossplane/crossplane/blob/4b93884c50/README.md#releases", "https://github.com/crossplane/crossplane/releases/tag/v1.16.0"]}
+  - {cycle: "1.12", eol: "2024-02-15", citations: ["https://github.com/crossplane/crossplane/blob/4b93884c50/README.md#releases", "https://github.com/crossplane/crossplane/releases/tag/v1.15.0"]}
+recommendation: Upgrade Crossplane to a maintained minor release (the three most recent, per its release-cycle documentation) before moving the cluster to a Kubernetes version it has not been run on.

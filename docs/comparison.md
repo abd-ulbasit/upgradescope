@@ -20,7 +20,7 @@ before deciding). Corrections are welcome as issues.
 | **AKS** | blocks a minor upgrade on recent deprecated API use | no | no | at upgrade time | — |
 | **Radar** (Skyhook) | removed APIs in the target, from live resources, Helm manifests, last-applied configuration and apiserver metrics | not documented | kubelet, kube-proxy | live UI, checked when opened | hosted Radar Cloud (commercial) |
 | **Chkk** (commercial) | breaking changes and incompatibilities, curated (see below) | see below | see below | yes (SaaS) | yes |
-| **upgradescope** | written objects, manifests, Helm releases, apiserver requests | 27 add-ons, cited | kubelet, kube-proxy, control plane | yes (agent) | yes (server) |
+| **upgradescope** | written objects, manifests, Helm releases, apiserver requests | 34 add-ons, cited | kubelet, kube-proxy, control plane | yes (agent) | yes (server) |
 
 Every cell is expanded below. "Continuous" means it re-evaluates without
 someone re-running it.
@@ -78,6 +78,31 @@ multi-cluster Radar Cloud is the commercial product
   continuous agent and an open-source fleet server with history and
   notifications.
 
+## kube-upgrade-check
+
+[kube-upgrade-check](https://github.com/runtimez-com/kube-upgrade-check)
+(the krew plugin `upgrade-check`) checks a live cluster against a target
+minor. It covers ground similar to upgradescope's live scan: it reads
+`metadata.managedFields` for which client last wrote an object at which API
+version ([README](https://github.com/runtimez-com/kube-upgrade-check#readme)),
+reads the `apiserver_requested_deprecated_apis` metric
+([`internal/source/source.go`](https://github.com/runtimez-com/kube-upgrade-check/blob/main/internal/source/source.go)),
+and prints every check that could not run, with the reason (README). Both
+checked 2026-10-12.
+
+- **kube-upgrade-check, not upgradescope:** control-plane flags and kubelet
+  settings the target refuses to start with; rules taken from each
+  Kubernetes changelog; and upgrade preflight: disruption budgets that block
+  a drain, bare pods, and `Fail`-policy admission and CRD conversion
+  webhooks with no ready backend (README). upgradescope does not check
+  preflight yet
+  ([#397](https://github.com/abd-ulbasit/upgradescope/issues/397)).
+- **upgradescope, not kube-upgrade-check:** cited add-on end-of-life data;
+  stored Helm release manifests replayed at the target (kube-upgrade-check's
+  README says it does not read them); custom resources at CRD versions no
+  longer served; a gate on rendered manifests in a pull request; a
+  continuous agent and a fleet server.
+
 ## kubent (kube-no-trouble)
 
 [kubent](https://github.com/doitintl/kube-no-trouble) checks a live cluster
@@ -118,8 +143,9 @@ cluster against Helm repositories and reports charts that are outdated or
 deprecated, and can report outdated container images.
 
 - **Nova, not upgradescope:** "a newer version exists", for any chart in a
-  repository you can reach; upgradescope's registry knows end-of-life
-  dates for 27 add-ons, not the newest version of every chart.
+  repository you can reach; upgradescope's registry knows the end-of-life
+  dates and Kubernetes ranges of 34 add-ons (where upstream publishes
+  them), not the newest version of every chart.
 - **upgradescope, not Nova:** end of life rather than "outdated" (a
   supported old line is fine, an unsupported one blocks), API removals,
   skew and a verdict per target.
@@ -173,6 +199,8 @@ public, cited pages ([background research](research.md)).
 - Only deprecated and removed APIs, in one CI step: pluto, kubent or
   kubepug are smaller, single-purpose binaries.
 - "Is there a newer chart?": Nova.
+- Upgrade preflight, or control-plane flag, kubelet config and
+  release-note checks on a self-managed cluster: kube-upgrade-check.
 - A UI to browse the cluster, with an upgrade-impact view and more
   upgrade checks (PodDisruptionBudgets, feature gates): Radar.
 - On a single managed cluster, the provider's insights are already there;

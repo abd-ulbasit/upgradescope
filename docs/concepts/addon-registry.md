@@ -168,7 +168,7 @@ their own line too: that is the version running.
 
 ## What is in it
 
-27 add-ons today:
+34 add-ons today:
 
 | Add-on (`id`) | Release lines | Kubernetes ranges | Synced from endoflife.date |
 |---|---|---|---|
@@ -181,37 +181,48 @@ their own line too: that is the version running.
 | `fluent-bit` | yes | — | yes |
 | `flux` | yes | — | yes |
 | `gatekeeper` | yes | — | yes |
-| `istio` | yes | per release line | yes |
+| `istio` | yes | per release line, and compat rows from istio.io (1.13 to 1.31) | yes |
 | `karpenter` | yes | maximum per release line (compat rows) | yes |
-| `keda` | yes | per release line | yes |
-| `kyverno` | yes | per release line | yes |
+| `keda` | yes | — (a tested-with table, which `eol-sync` drops) | yes |
+| `kyverno` | yes | — (a tested-with matrix, which `eol-sync` drops) | yes |
+| `longhorn` | yes | compat rows (minimum, 1.5 and later) | yes |
 | `traefik` | yes | — | yes |
+| `crossplane` | yes (from its own release table) | — | — |
 | `ingress-nginx` | retired as a whole (March 2026) | — | — |
 | `kubernetes-dashboard` | retired as a whole (archived 2026-01-21) | — | — |
 | `promtail` | retired as a whole (2026-03-02) | — | — |
 | `grafana-agent` | retired as a whole (2025-11-01) | — | — |
 | `weave-net` | retired as a whole (archived 2024-06-20) | — | — |
 | `external-dns` | — | compat rows | — |
+| `linkerd` | — | compat rows, minimum and maximum (2.10 to 2.20) | — |
+| `aws-load-balancer-controller` | — | compat rows (minimum; 2.0 to 2.3 also a maximum) | — |
+| `aws-efs-csi-driver` | — | compat rows (minimum; 0.1.0 also a maximum) | — |
 | `rke2-ingress-nginx` | community builds ended 2026-03-31; Prime LTS only until 2027-11-30 | compat rows | — |
 | `aks-app-routing-nginx` | product end of life 2026-11-30 | — | — |
 | `coredns` | — | — (no support range published) | — |
+| `cluster-autoscaler` | — | — (a tested-with pairing, not a bound) | — |
+| `aws-ebs-csi-driver` | — | — ("all Kubernetes versions supported", not a bound) | — |
 | `kube-state-metrics` | — | — | — |
 | `metrics-server` | — | compat rows (0.3.x maximum, minimum of 0.6+) | — |
 | `prometheus-operator` | — | compat rows (minimum) | — |
 | `velero` | — | compat row (minimum) | — |
 
-So: 14 entries carry release-line EOL data kept in sync with
-[endoflife.date](https://endoflife.date), five are retired as a whole
+So: 15 entries carry release-line EOL data kept in sync with
+[endoflife.date](https://endoflife.date), one more (Crossplane, which
+endoflife.date does not track) carries release-line end dates read from its
+own release table, five are retired as a whole
 (Ingress NGINX, Kubernetes Dashboard, Promtail, Grafana Agent and Weave
 Net, each a blocker at any version), one more carries an end-of-life date
 for the product as a whole (the AKS application routing NGINX build), one
 carries an end date for everyone and a later one under a condition (RKE2's
 Ingress NGINX build, supported until 2027-11-30 only with a SUSE Rancher
 Prime LTS subscription),
-13 carry Kubernetes compatibility ranges, and for the 2 entries with
-none of these, a detected install is reported as `addon-no-data` (info)
-rather than judged. ExternalDNS, Metrics Server, Velero and Prometheus
-Operator have compatibility ranges but no end-of-life data, which is
+15 carry Kubernetes compatibility ranges, and for the 4 entries with
+none of these (CoreDNS, kube-state-metrics, Cluster Autoscaler and the AWS
+EBS CSI driver), a detected install is reported as `addon-no-data` (info)
+rather than judged. ExternalDNS, Metrics Server, Velero, Prometheus
+Operator, Linkerd, the AWS Load Balancer Controller and the AWS EFS CSI
+driver have compatibility ranges but no end-of-life data, which is
 reported the same way unless the range excludes the target. The
 registry is small on purpose: every row needs a source.
 
@@ -225,25 +236,42 @@ comments, and the ranges of an entry that endoflife.date syncs live in its
 
 - **A maximum** (the line is unsupported above it) is encoded where upstream
   says so: cert-manager's supported range per release line, Metrics Server
-  0.3.x (Kubernetes 1.8 to 1.21), and Karpenter, whose matrix lists the oldest
+  0.3.x (Kubernetes 1.8 to 1.21), Istio's supported Kubernetes versions per
+  release (istio.io, 1.13 to 1.31, kept as compat rows beside the ranges
+  endoflife.date syncs into its cycles, and tested to agree with them),
+  Linkerd's minimum and maximum per release (2.10 to 2.20), the AWS Load
+  Balancer Controller 2.0 to 2.3 (up to 1.21), the AWS EFS CSI driver 0.1.0
+  (1.11 to 1.13), and Karpenter, whose matrix lists the oldest
   Karpenter that runs each Kubernetes minor, so a line's maximum is the newest
   minor it can run. At Kubernetes 1.37 that makes cert-manager 1.21, Karpenter
-  up to 1.14 and Metrics Server 0.3.x blockers, because no release the
-  registry knows supports 1.37 yet.
+  up to 1.14, Metrics Server 0.3.x and Linkerd up to 2.20 blockers, because no
+  release of theirs the registry knows supports 1.37 yet, and Istio 1.30 and
+  older too; Istio 1.31 supports 1.37.
 - **A minimum** is encoded where upstream says older Kubernetes is
   unsupported: Calico 3.25 to 3.32 ("will not work" below 1.16 or 1.21),
   Cilium 1.13 and 1.14, Metrics Server 0.6 and later, Velero 1.14 to 1.18,
-  Prometheus Operator. A forward-upgrade scan cannot trip a minimum, since the
+  Prometheus Operator, the AWS Load Balancer Controller 2.4 and later, the
+  AWS EFS CSI driver 0.2 to 2.1, and Longhorn 1.5 and later (1.13 needs
+  Kubernetes 1.34). A forward-upgrade scan cannot trip a minimum, since the
   target is newer than the cluster; a target below one can.
 - **A tested-with list is not a range.** Argo CD, Cilium 1.15 and later,
-  Calico's tested versions (so Calico has no maximum) and the client-go
-  version kube-state-metrics is built with state what upstream runs its
-  tests on, and say nothing, or say "may work", about Kubernetes versions
-  outside it, so none of them is a bound: encoding the lowest or highest
-  tested version would call a working install incompatible.
-- **No matrix**: Flux, Traefik and Gatekeeper publish only a policy relative to
-  upstream Kubernetes's own support window, and CoreDNS only the version
-  kubeadm installs. Their entries say so in a comment.
+  Calico's tested versions (so Calico has no maximum), the client-go
+  version kube-state-metrics is built with, KEDA's and Kyverno's
+  compatibility tables, Ingress NGINX's supported-versions table, Cluster
+  Autoscaler's per-minor pairing ("tested on GCP") and Longhorn's tested
+  Kubernetes lists state what upstream runs its tests on, and say nothing,
+  or say "may work", about Kubernetes versions outside it, so none of them
+  is a bound: encoding the lowest or highest tested version would call a
+  working install incompatible. endoflife.date copies KEDA's and Kyverno's
+  tables into its cycles as ranges; their entries carry the
+  `# eol-sync: ignore-k8s-range` directive, so `tools/eol-sync` keeps the
+  end dates and drops the ranges.
+- **No matrix**: Flux, Traefik, Gatekeeper and Crossplane publish only a
+  policy relative to upstream Kubernetes's own support window, the AWS EBS
+  CSI driver says it is compatible with every Kubernetes version the project
+  or EKS supports, the AKS application routing add-on follows the cluster's
+  AKS version, and CoreDNS publishes only the version kubeadm installs.
+  Their entries say so in a comment.
 
 An image is matched by the repository path an entry declares. A path of two
 or more segments is a suffix on whole path segments: `ingress-nginx/controller` is
@@ -297,9 +325,9 @@ and Rancher's `hardened-*` rebuilds are listed under `unrecognizedImages`.
 Rancher's `mirrored-*` images are verbatim copies and match like the upstream
 image.
 
-Add-ons that endoflife.date does not track and that no entry covers yet
-(cluster-autoscaler, the AWS Load Balancer Controller and the other EKS
-add-ons) are not judged; the report lists their images as unrecognized.
+Add-ons no entry covers yet (the Amazon VPC CNI and the EKS Pod Identity
+Agent, for example) are not judged; the report lists their images as
+unrecognized.
 
 ## Cover your own add-ons
 

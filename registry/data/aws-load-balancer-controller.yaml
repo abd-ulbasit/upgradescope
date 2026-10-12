@@ -1,0 +1,45 @@
+# registry/data/aws-load-balancer-controller.yaml
+# Hand-curated: endoflife.date does not track the AWS Load Balancer
+# Controller and the project publishes no end-of-support dates for its
+# release lines (checked 2026-10-12: the installation guide, the README and
+# the GitHub releases page), so there are no cycles.
+#
+# Images (tag lists of public.ecr.aws/eks/aws-load-balancer-controller read
+# 2026-10-12): "v2.14.1", "v3.6.0", and per-architecture variants such as
+# "v2.14.1-linux_amd64", all reading back as the controller's version. The
+# per-region private repository AWS documents for EKS clusters ends in
+# amazon/aws-load-balancer-controller. The v1 "ALB Ingress Controller"
+# (amazon/aws-alb-ingress-controller) is the predecessor project and is not
+# claimed.
+schema_version: 2
+id: aws-load-balancer-controller
+display_name: AWS Load Balancer Controller
+matchers:
+  images:
+    - eks/aws-load-balancer-controller # public.ecr.aws/eks
+    - amazon/aws-load-balancer-controller # <account>.dkr.ecr.<region>.amazonaws.com
+  charts:
+    - aws-load-balancer-controller # eks-charts
+support:
+  status: supported
+  citations:
+    - https://github.com/kubernetes-sigs/aws-load-balancer-controller/releases
+    - https://kubernetes-sigs.github.io/aws-load-balancer-controller/latest/deploy/installation/
+# Kubernetes ranges, read on 2026-10-12 from the "Supported Kubernetes
+# versions" list of the installation guide (permalink below; the same text is
+# at https://kubernetes-sigs.github.io/aws-load-balancer-controller/latest/deploy/installation/#supported-kubernetes-versions):
+#   v2.0.0~v2.1.3 requires Kubernetes 1.15-1.21
+#   v2.2.0~v2.3.1 requires Kubernetes 1.16-1.21
+#   v2.4.0+       requires Kubernetes 1.19+
+#   v2.5.0+       requires Kubernetes 1.22+
+# "requires 1.15-1.21" names both ends, so 2.0 to 2.3 have a minimum and a
+# maximum. "N+" is a minimum only: 2.4 stops being listed once 2.5 requires
+# 1.22, and nothing is said about a maximum for 2.4 and later, so none is
+# recorded (Velero's "1.18 to latest" rule). The page names no Kubernetes
+# requirement for 3.x; its install commands use v3.6.0, and the "v2.5.0+" line
+# is read to include it. A forward-upgrade scan cannot trip a minimum.
+compat:
+  - {range: ">=2.5.0", k8s_min: "1.22", citations: ["https://github.com/kubernetes-sigs/aws-load-balancer-controller/blob/0e7eefa9b20ba84ec0bd198fc42b41b8ee3a139f/docs/deploy/installation.md#supported-kubernetes-versions"]}
+  - {range: ">=2.4.0 <2.5.0", k8s_min: "1.19", citations: ["https://github.com/kubernetes-sigs/aws-load-balancer-controller/blob/0e7eefa9b20ba84ec0bd198fc42b41b8ee3a139f/docs/deploy/installation.md#supported-kubernetes-versions"]}
+  - {range: ">=2.2.0 <2.4.0", k8s_min: "1.16", k8s_max: "1.21", citations: ["https://github.com/kubernetes-sigs/aws-load-balancer-controller/blob/0e7eefa9b20ba84ec0bd198fc42b41b8ee3a139f/docs/deploy/installation.md#supported-kubernetes-versions"]}
+  - {range: ">=2.0.0 <2.2.0", k8s_min: "1.15", k8s_max: "1.21", citations: ["https://github.com/kubernetes-sigs/aws-load-balancer-controller/blob/0e7eefa9b20ba84ec0bd198fc42b41b8ee3a139f/docs/deploy/installation.md#supported-kubernetes-versions"]}

@@ -6,8 +6,12 @@
 #
 # No Kubernetes range is recorded: Gatekeeper publishes no matrix, only a
 # policy that it "is assumed to be compatible with the current Kubernetes
-# Supported Versions" (Release_Management.md, read on 2026-10-10), a window
-# that moves with Kubernetes rather than a range per Gatekeeper line.
+# Supported Versions" (Release_Management.md, read again on 2026-10-12), a window
+# that moves with Kubernetes rather than a range per Gatekeeper line. The install
+# guide (https://open-policy-agent.github.io/gatekeeper/website/docs/install/, the
+# "Minimum Kubernetes Version" section) points to that same policy for the
+# minimum and adds only that Gatekeeper "requires resources introduced in
+# Kubernetes v1.16", an old floor no scan target reaches, so it is not a row.
 schema_version: 2
 id: gatekeeper
 display_name: OPA Gatekeeper

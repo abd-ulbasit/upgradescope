@@ -107,10 +107,12 @@ func TestKrewManifest(t *testing.T) {
 	if n := len(p.Spec.ShortDescription); n == 0 || n > 50 || strings.Contains(p.Spec.ShortDescription, "\n") {
 		t.Errorf("shortDescription %q: want one line of at most 50 characters", p.Spec.ShortDescription)
 	}
-	if !strings.Contains(p.Spec.Description, "kubectl upgradescope scan") {
-		t.Error("description has no kubectl upgradescope example")
+	// krew-index asks for no usage lines in the description: `kubectl krew
+	// info` shows it, and the homepage has the examples.
+	if strings.Contains(p.Spec.Description, "kubectl upgradescope") {
+		t.Errorf("description has a usage line (krew-index asks for none):\n%s", p.Spec.Description)
 	}
-	for _, needle := range []string{"/metrics", "nodes", "NOT ASSESSED", "--allow-incomplete"} {
+	for _, needle := range []string{"/metrics", "nodes", "persistentvolumes", "NOT ASSESSED", "--allow-incomplete"} {
 		if !strings.Contains(p.Spec.Caveats, needle) {
 			t.Errorf("caveats do not mention %q (the RBAC the scan needs)", needle)
 		}

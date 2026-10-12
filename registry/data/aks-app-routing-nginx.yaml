@@ -5,6 +5,12 @@
 # retirement, so it is a separate product from upstream ingress-nginx (whose
 # EOL verdict would be false here). The sources give a month, not a day:
 # eol_date is the last day of that month.
+#
+# No Kubernetes compat rows: the application routing page
+# (https://learn.microsoft.com/en-us/azure/aks/app-routing, read 2026-10-12)
+# states no supported Kubernetes versions or NGINX-to-Kubernetes mapping. The
+# add-on is managed by AKS and follows the cluster's AKS version, whose
+# support is the managed-provider calendar (registry/data/providers/aks.yaml).
 schema_version: 2
 id: aks-app-routing-nginx
 display_name: AKS application routing NGINX

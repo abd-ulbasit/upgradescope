@@ -21,6 +21,18 @@ func extractSlug(raw []byte) string {
 	return string(m[1])
 }
 
+// ignoreRangeRe is the directive an entry carries, on a column-0 comment line
+// of its own, when the Kubernetes range endoflife.date copies from the
+// project is a tested-with table and not a stated maximum or minimum (see
+// "Maximum, minimum or tested with" in registry/CONTRIBUTING.md).
+var ignoreRangeRe = regexp.MustCompile(`(?m)^# eol-sync: ignore-k8s-range[ \t]*\r?$`)
+
+// ignoresK8sRange reports whether the entry asks eol-sync to keep the
+// lifecycle of each cycle but not the Kubernetes range endoflife.date carries
+// for it: the engine turns a bound into a blocker, and a tested-with table is
+// not something the project says is unsupported.
+func ignoresK8sRange(raw []byte) bool { return ignoreRangeRe.Match(raw) }
+
 // cycleRow is one generated registry cycle. eol is already a YAML scalar:
 // a quoted date, true or false.
 type cycleRow struct {
