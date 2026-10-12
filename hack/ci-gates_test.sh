@@ -151,6 +151,9 @@ inert=(
   'hack/action_test.sh'
   'hack/bench/*.sh'
   'hack/chart-release-annotations.sh'
+  # the Helm chart survey harness (docs/research/helm-chart-survey-*): run
+  # by hand; its offline test runs in hack-test (repo-checks, not gated)
+  'hack/chart-survey.sh'
   'hack/check-*.sh'
   'hack/claims-check.sh'
   'hack/claims-trackers.sh'

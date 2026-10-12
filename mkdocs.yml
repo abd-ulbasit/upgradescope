@@ -134,4 +134,5 @@ nav:
       - How to contribute: contributing.md
       - Architecture: architecture.md
       - Background research (June 2026): research.md
+      - Helm chart survey (October 2026): research/helm-chart-survey-2026-10/README.md
   - Changelog: changelog.md
