@@ -1443,6 +1443,19 @@ the maximum latency and the attempts.
   same two cores. A database across a network adds its round trip to every
   statement.
 
+## The README's Measured table
+
+The README quotes four numbers in short. These are its rows in full; the
+sections above have the agent tick's runs, and
+[Install](install.md#sizes) has the size of every platform.
+
+| What | Measured | How |
+|---|---|---|
+| `scan` against a live kind cluster (Kubernetes 1.37) | median 0.49 s, p90 0.52 s | 30 runs on a ThinkPad (Linux, amd64), October 2026 audit at main `8a951dd` (#130) |
+| `scan --files` on the demo's four rendered objects (`hack/demo/rendered`) | median 0.022 s, p90 0.022 s | 30 runs, Apple M1 Pro, main `9d0b161`, 2026-10-02 |
+| A steady agent tick at 2,001 fake (KWOK) nodes, about 14,000 pods and 1,000 Helm releases, reusing the pod pass (the default) | 20 API requests, 27.8 MiB read (1.5 MiB on the wire), 2.4 s; 31 requests on the tick that lists every pod | medians of the 5 ticks that reused the pass (31: the 2 that listed every pod), after the first of 8, `make bench-agent` at `0b6fec28` on lab A, 10 October 2026; #362 later added two volume lists (22 and 33, computed) |
+| Binary and archive, linux/amd64 (stripped binary, `.tar.gz` download) | 61.5 MiB binary, 18.7 MiB archive | the published v0.2.0 assets (commit `62603159`, GoReleaser v2.17.1, Go 1.26.9), 2026-10-11; the release check fails beyond 2% |
+
 ## Reproducing
 
 Both benchmarks are manual: they take minutes, fill a cluster, or start a
