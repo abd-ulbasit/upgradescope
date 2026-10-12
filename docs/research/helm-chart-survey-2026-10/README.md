@@ -12,7 +12,7 @@ commit `d946ecb06b698cb1e9371582be5338ca60847a24`, knowledge base
 preliminary run of 2026-10-11; [what changed](#what-changed-since-the-preliminary-run)
 says how and why.
 
-The question: if you install today's most popular Helm charts at their
+The question: if you install today's most-starred Helm charts at their
 default values, what stands between them and Kubernetes 1.37? That means
 removed or deprecated APIs, end-of-life or incompatible components, custom
 resources at versions that are no longer served, and charts whose own
@@ -27,14 +27,15 @@ Each number below names its source. **upgradescope** means the JSON report
 of `upgradescope scan --files`. **helm** means `helm pull` or
 `helm template`.
 
-- **No chart uses a removed or deprecated Kubernetes API (upgradescope).**
-  42 of the 50 charts rendered at `--kube-version 1.37.0` and were scanned.
-  None had a `removed-api` finding or a `deprecated-api` finding. At default
-  values, API removals are not what blocks these charts from 1.37. Custom
-  resource definitions are another matter: kyverno 3.9.1 (17) and metallb
-  0.16.1 (1) have `crd-version` info findings for CRD versions their own
-  CRDs mark deprecated. Those are the projects' APIs, not Kubernetes', and
-  are not blockers.
+- **None of the 42 scanned charts uses a removed or deprecated Kubernetes
+  API at default values (upgradescope).** 42 of the 50 charts rendered at
+  `--kube-version 1.37.0` and were scanned. None had a `removed-api` finding
+  or a `deprecated-api` finding. At default values, API removals are not
+  what blocks these charts from 1.37. Custom resource definitions are
+  another matter: kyverno 3.9.1 (17) and metallb 0.16.1 (1) have
+  `crd-version` info findings for CRD versions their own CRDs mark
+  deprecated. Those are the projects' APIs, not Kubernetes', and are not
+  blockers.
 - **3 of the 42 are blocked at 1.37 (upgradescope).** Every one of these
   blockers comes from add-on lifecycle data, and none comes from an API:
     - cert-manager 1.21.2 supports Kubernetes up to 1.36;
@@ -44,9 +45,12 @@ of `upgradescope scan --files`. **helm** means `helm pull` or
 - **1 chart refuses 1.37 by its own `kubeVersion` (helm).** Rancher 2.15.2
   declares `kubeVersion: < 1.37.0-0`. `helm template --kube-version 1.37.0`
   refuses it, and the same command accepts `--kube-version 1.36.0`. Its 1.36
-  render, scanned against 1.37, is `ready` (upgradescope). So the only thing
-  holding Rancher back from 1.37 is its own version cap, which upgradescope's
-  files mode cannot see.
+  render, scanned against 1.37, is `ready` (upgradescope): apart from its
+  own version cap, the scan found nothing. The registry has no Rancher entry
+  (`docker.io/rancher/rancher` and `docker.io/rancher/shell` are in
+  `unrecognizedImages`), so `ready` means nothing known was found, not that
+  Rancher itself was assessed. The cap, which upgradescope's files mode
+  cannot see, is Rancher's own statement that 2.15 does not support 1.37.
 - **5 charts do not render at default values (helm).** All 5 stop on a
   value they require: loki, gitlab, external-dns (kubernetes-sigs),
   aws-load-balancer-controller and sonarqube.
@@ -132,7 +136,8 @@ nothing, for reasons the data shows:
   cycles. Both give 1.32 to 1.36 for 1.30, so the finding is the same.
 
 The registry also re-read argo-cd, traefik, kube-state-metrics, ingress-nginx
-and fluent-bit and changed only their comments; their results are the same.
+and fluent-bit and changed only their comments and citations; their results
+are the same.
 
 ## Method
 
