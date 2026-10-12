@@ -64,8 +64,10 @@ Due 15 November 2026 ([milestone](https://github.com/abd-ulbasit/upgradescope/mi
 - **Docs for people switching**: migrating from kube-no-trouble, pluto and
   kubepug, a comparison that includes kube-upgrade-check ([#405](https://github.com/abd-ulbasit/upgradescope/issues/405)), and
   one page per upgrade problem ([#406](https://github.com/abd-ulbasit/upgradescope/issues/406)).
-- Not yet an issue: which CRD versions each add-on release serves, and, for
-  an end-of-life add-on, the supported line or replacement to move to.
+- **Add-on upgrades themselves**: which CRD versions each add-on release
+  serves, so an add-on upgrade cannot strand custom resources
+  ([#427](https://github.com/abd-ulbasit/upgradescope/issues/427)), and, for an end-of-life or incompatible add-on, the
+  supported line or upstream successor to move to ([#428](https://github.com/abd-ulbasit/upgradescope/issues/428)).
 
 ## 3. Launch: first users
 
@@ -84,7 +86,8 @@ December 2026 to February 2027; the adoption review is on 7 December 2026
   2027 CFP ([#416](https://github.com/abd-ulbasit/upgradescope/issues/416)).
 - **Three teams outside the project** running it on real clusters
   ([#411](https://github.com/abd-ulbasit/upgradescope/issues/411)); what they ask for decides what comes after this roadmap.
-- **The krew plugin** merged in krew-index.
+- **The krew-index submission** decided, merged or withdrawn
+  ([kubernetes-sigs/krew-index#6411](https://github.com/kubernetes-sigs/krew-index/pull/6411), tracked in [#75](https://github.com/abd-ulbasit/upgradescope/issues/75)).
 
 ## 4. CNCF readiness
 
