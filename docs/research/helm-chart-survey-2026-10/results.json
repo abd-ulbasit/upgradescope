@@ -1,16 +1,16 @@
 {
   "meta": {
-    "surveyDate": "2026-10-11",
-    "startedAt": "2026-10-11T23:09:24Z",
+    "surveyDate": "2026-10-12",
+    "startedAt": "2026-10-12T05:24:48Z",
     "n": 50,
     "selected": 50,
     "target": "1.37",
     "prevTarget": "1.36",
     "upgradescope": {
-      "versionOutput": "upgradescope dev\n  commit:        2e524c9365b280802f6055276ff1662a771fda21\n  built:         unknown\n  go:            go1.26.9 darwin/arm64\n  kb:            k8s.io/api v0.37.1; lifecycle 91e89ab0; registry fe1fdf07\n  kb horizon:    Kubernetes 1.37\n  registry date: unknown",
-      "version": "dev",
-      "commit": "2e524c9365b280802f6055276ff1662a771fda21",
-      "kb": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry fe1fdf07"
+      "versionOutput": "upgradescope 0.3.0\n  commit:        d946ecb06b698cb1e9371582be5338ca60847a24\n  built:         2026-10-12T04:52:19Z\n  go:            go1.26.9 darwin/arm64\n  kb:            k8s.io/api v0.37.1; lifecycle 91e89ab0; registry 80526ac2\n  kb horizon:    Kubernetes 1.37\n  registry date: 2026-10-12",
+      "version": "0.3.0",
+      "commit": "d946ecb06b698cb1e9371582be5338ca60847a24",
+      "kb": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry 80526ac2"
     },
     "helm": "version.BuildInfo{Version:\"v4.1.4\", GitCommit:\"05fa37973dc9e42b76e1d2883494c87174b6074f\", GitTreeState:\"clean\", GoVersion:\"go1.26.2\", KubeClientVersion:\"v1.35\"}",
     "jq": "jq-1.8.1",
@@ -27,18 +27,19 @@
       "upgradescope scan --files rendered-1.37 --target 1.37 --output json --fail-on never",
       "upgradescope scan --files rendered-1.36 --target 1.36 --output json --fail-on never",
       "upgradescope scan --files rendered-1.36 --target 1.37 --output json --fail-on never (only when kubeVersion refuses 1.37)"
-    ]
+    ],
+    "finishedAt": "2026-10-12T05:31:23Z"
   },
   "dropped": [],
   "summary": {
     "charts": 50,
     "classes": {
       "removedApi": 0,
-      "incompatibleAddon": 3,
+      "incompatibleAddon": 2,
       "eolAddon": 1,
       "unservedCrVersion": 0,
       "otherBlocker": 0,
-      "anyBlocker": 4,
+      "anyBlocker": 3,
       "deprecatedOnly": 0,
       "eolApproaching": 1,
       "kubeVersionExcludesTarget": 1,
@@ -46,18 +47,18 @@
       "renderFailed": 5,
       "fetchFailed": 2,
       "scanFailed": 0,
-      "none": 38
+      "none": 39
     },
     "renderFailures": {
       "required-value": 5
     },
     "verdicts": {
-      "blocked": 4,
-      "ready": 38
+      "blocked": 3,
+      "ready": 39
     },
     "prevVerdicts": {
-      "blocked": 2,
-      "ready": 41
+      "blocked": 1,
+      "ready": 42
     },
     "topFindings": [
       {
@@ -107,13 +108,6 @@
         "category": "chart-incompat",
         "severity": "blocker",
         "title": "Istio 1.30.5 supports Kubernetes up to 1.36 (target 1.37)",
-        "charts": 1
-      },
-      {
-        "key": "chart-incompat/kyverno/1.19",
-        "category": "chart-incompat",
-        "severity": "blocker",
-        "title": "Kyverno 1.19.1 supports Kubernetes up to 1.35 (target 1.37)",
         "charts": 1
       },
       {
@@ -199,6 +193,13 @@
         "severity": "info",
         "title": "metallb.io/v1beta1 BGPPeer is a deprecated CRD version",
         "charts": 1
+      },
+      {
+        "key": "crd-version/deprecated/policies.kyverno.io/v1alpha1/DeletingPolicy",
+        "category": "crd-version",
+        "severity": "info",
+        "title": "policies.kyverno.io/v1alpha1 DeletingPolicy is a deprecated CRD version",
+        "charts": 1
       }
     ],
     "addons": [
@@ -230,11 +231,6 @@
       {
         "id": "istio",
         "category": "eol-approaching",
-        "charts": 1
-      },
-      {
-        "id": "kyverno",
-        "category": "chart-incompat",
         "charts": 1
       },
       {
@@ -286,22 +282,11 @@
         "title": "Istio 1.30.5 supports Kubernetes up to 1.36 (target 1.37)",
         "file": null,
         "line": null
-      },
-      {
-        "rank": 37,
-        "chart": "kyverno",
-        "repository": "kyverno",
-        "version": "3.9.1",
-        "category": "chart-incompat",
-        "key": "chart-incompat/kyverno/1.19",
-        "title": "Kyverno 1.19.1 supports Kubernetes up to 1.35 (target 1.37)",
-        "file": null,
-        "line": null
       }
     ],
     "unrecognizedImages": {
       "charts": 37,
-      "distinct": 71,
+      "distinct": 69,
       "top": [
         {
           "image": "docker.io/library/busybox",
@@ -492,7 +477,7 @@
       "repository": "prometheus-community",
       "repoUrl": "https://prometheus-community.github.io/helm-charts",
       "repoKind": "http",
-      "stars": 1235,
+      "stars": 1236,
       "official": true,
       "verifiedPublisher": true,
       "cncf": true,
@@ -558,8 +543,8 @@
         "error": null,
         "verdict": "ready",
         "score": 100,
-        "toolVersion": "dev",
-        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry fe1fdf07",
+        "toolVersion": "0.3.0",
+        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry 80526ac2",
         "findings": [
           {
             "category": "addon-no-data",
@@ -657,8 +642,8 @@
         "error": null,
         "verdict": "blocked",
         "score": 75,
-        "toolVersion": "dev",
-        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry fe1fdf07",
+        "toolVersion": "0.3.0",
+        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry 80526ac2",
         "findings": [
           {
             "category": "chart-incompat",
@@ -745,8 +730,8 @@
         "error": null,
         "verdict": "ready",
         "score": 100,
-        "toolVersion": "dev",
-        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry fe1fdf07",
+        "toolVersion": "0.3.0",
+        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry 80526ac2",
         "findings": [],
         "notAssessed": [
           "deprecated-calls",
@@ -816,8 +801,8 @@
         "error": null,
         "verdict": "blocked",
         "score": 75,
-        "toolVersion": "dev",
-        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry fe1fdf07",
+        "toolVersion": "0.3.0",
+        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry 80526ac2",
         "findings": [
           {
             "category": "eol-addon",
@@ -922,8 +907,8 @@
         "error": null,
         "verdict": "ready",
         "score": 100,
-        "toolVersion": "dev",
-        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry fe1fdf07",
+        "toolVersion": "0.3.0",
+        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry 80526ac2",
         "findings": [
           {
             "category": "addon-no-data",
@@ -1016,8 +1001,8 @@
         "error": null,
         "verdict": "ready",
         "score": 100,
-        "toolVersion": "dev",
-        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry fe1fdf07",
+        "toolVersion": "0.3.0",
+        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry 80526ac2",
         "findings": [],
         "notAssessed": [
           "deprecated-calls",
@@ -1084,8 +1069,8 @@
         "error": null,
         "verdict": "ready",
         "score": 100,
-        "toolVersion": "dev",
-        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry fe1fdf07",
+        "toolVersion": "0.3.0",
+        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry 80526ac2",
         "findings": [],
         "notAssessed": [
           "deprecated-calls",
@@ -1157,8 +1142,8 @@
         "error": null,
         "verdict": "ready",
         "score": 100,
-        "toolVersion": "dev",
-        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry fe1fdf07",
+        "toolVersion": "0.3.0",
+        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry 80526ac2",
         "findings": [],
         "notAssessed": [
           "deprecated-calls",
@@ -1310,8 +1295,8 @@
         "error": null,
         "verdict": "ready",
         "score": 100,
-        "toolVersion": "dev",
-        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry fe1fdf07",
+        "toolVersion": "0.3.0",
+        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry 80526ac2",
         "findings": [
           {
             "category": "addon-no-data",
@@ -1386,8 +1371,8 @@
         "error": null,
         "verdict": "ready",
         "score": 100,
-        "toolVersion": "dev",
-        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry fe1fdf07",
+        "toolVersion": "0.3.0",
+        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry 80526ac2",
         "findings": [],
         "notAssessed": [
           "deprecated-calls",
@@ -1582,8 +1567,8 @@
         "error": null,
         "verdict": "ready",
         "score": 100,
-        "toolVersion": "dev",
-        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry fe1fdf07",
+        "toolVersion": "0.3.0",
+        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry 80526ac2",
         "findings": [],
         "notAssessed": [
           "deprecated-calls",
@@ -1677,8 +1662,8 @@
         "error": null,
         "verdict": "ready",
         "score": 100,
-        "toolVersion": "dev",
-        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry fe1fdf07",
+        "toolVersion": "0.3.0",
+        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry 80526ac2",
         "findings": [],
         "notAssessed": [
           "deprecated-calls",
@@ -1747,8 +1732,8 @@
         "error": null,
         "verdict": "ready",
         "score": 100,
-        "toolVersion": "dev",
-        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry fe1fdf07",
+        "toolVersion": "0.3.0",
+        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry 80526ac2",
         "findings": [],
         "notAssessed": [
           "deprecated-calls",
@@ -1827,8 +1812,8 @@
         "error": null,
         "verdict": "ready",
         "score": 100,
-        "toolVersion": "dev",
-        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry fe1fdf07",
+        "toolVersion": "0.3.0",
+        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry 80526ac2",
         "findings": [],
         "notAssessed": [
           "deprecated-calls",
@@ -1936,8 +1921,8 @@
         "error": null,
         "verdict": "ready",
         "score": 100,
-        "toolVersion": "dev",
-        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry fe1fdf07",
+        "toolVersion": "0.3.0",
+        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry 80526ac2",
         "findings": [],
         "notAssessed": [
           "deprecated-calls",
@@ -1945,9 +1930,7 @@
           "versions"
         ],
         "unrecognizedImages": [
-          "docker.io/longhornio/longhorn-manager",
-          "docker.io/longhornio/longhorn-share-manager",
-          "docker.io/longhornio/longhorn-ui"
+          "docker.io/longhornio/longhorn-share-manager"
         ]
       },
       "scanPrev": {
@@ -2015,8 +1998,8 @@
         "error": null,
         "verdict": "ready",
         "score": 100,
-        "toolVersion": "dev",
-        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry fe1fdf07",
+        "toolVersion": "0.3.0",
+        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry 80526ac2",
         "findings": [],
         "notAssessed": [
           "deprecated-calls",
@@ -2083,8 +2066,8 @@
         "error": null,
         "verdict": "ready",
         "score": 100,
-        "toolVersion": "dev",
-        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry fe1fdf07",
+        "toolVersion": "0.3.0",
+        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry 80526ac2",
         "findings": [],
         "notAssessed": [
           "deprecated-calls",
@@ -2199,8 +2182,8 @@
         "error": null,
         "verdict": "ready",
         "score": 100,
-        "toolVersion": "dev",
-        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry fe1fdf07",
+        "toolVersion": "0.3.0",
+        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry 80526ac2",
         "findings": [],
         "notAssessed": [
           "deprecated-calls",
@@ -2267,8 +2250,8 @@
         "error": null,
         "verdict": "ready",
         "score": 100,
-        "toolVersion": "dev",
-        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry fe1fdf07",
+        "toolVersion": "0.3.0",
+        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry 80526ac2",
         "findings": [],
         "notAssessed": [
           "deprecated-calls",
@@ -2344,8 +2327,8 @@
         "error": null,
         "verdict": "ready",
         "score": 100,
-        "toolVersion": "dev",
-        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry fe1fdf07",
+        "toolVersion": "0.3.0",
+        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry 80526ac2",
         "findings": [
           {
             "category": "addon-no-data",
@@ -2427,8 +2410,8 @@
         "error": null,
         "verdict": "ready",
         "score": 100,
-        "toolVersion": "dev",
-        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry fe1fdf07",
+        "toolVersion": "0.3.0",
+        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry 80526ac2",
         "findings": [],
         "notAssessed": [
           "deprecated-calls",
@@ -2508,8 +2491,8 @@
         "error": null,
         "verdict": "ready",
         "score": 100,
-        "toolVersion": "dev",
-        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry fe1fdf07",
+        "toolVersion": "0.3.0",
+        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry 80526ac2",
         "findings": [],
         "notAssessed": [
           "deprecated-calls",
@@ -2576,8 +2559,8 @@
         "error": null,
         "verdict": "ready",
         "score": 100,
-        "toolVersion": "dev",
-        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry fe1fdf07",
+        "toolVersion": "0.3.0",
+        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry 80526ac2",
         "findings": [],
         "notAssessed": [
           "deprecated-calls",
@@ -2651,8 +2634,8 @@
         "error": null,
         "verdict": "ready",
         "score": 100,
-        "toolVersion": "dev",
-        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry fe1fdf07",
+        "toolVersion": "0.3.0",
+        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry 80526ac2",
         "findings": [],
         "notAssessed": [
           "deprecated-calls",
@@ -2684,7 +2667,7 @@
       "repository": "vmware-tanzu",
       "repoUrl": "https://vmware-tanzu.github.io/helm-charts/",
       "repoKind": "http",
-      "stars": 191,
+      "stars": 192,
       "official": false,
       "verifiedPublisher": false,
       "cncf": false,
@@ -2719,8 +2702,8 @@
         "error": null,
         "verdict": "ready",
         "score": 100,
-        "toolVersion": "dev",
-        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry fe1fdf07",
+        "toolVersion": "0.3.0",
+        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry 80526ac2",
         "findings": [
           {
             "category": "addon-no-data",
@@ -2820,8 +2803,8 @@
         "error": null,
         "verdict": "ready",
         "score": 100,
-        "toolVersion": "dev",
-        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry fe1fdf07",
+        "toolVersion": "0.3.0",
+        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry 80526ac2",
         "findings": [],
         "notAssessed": [
           "deprecated-calls",
@@ -2895,8 +2878,8 @@
         "error": null,
         "verdict": "ready",
         "score": 100,
-        "toolVersion": "dev",
-        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry fe1fdf07",
+        "toolVersion": "0.3.0",
+        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry 80526ac2",
         "findings": [],
         "notAssessed": [
           "deprecated-calls",
@@ -2965,8 +2948,8 @@
         "error": null,
         "verdict": "ready",
         "score": 100,
-        "toolVersion": "dev",
-        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry fe1fdf07",
+        "toolVersion": "0.3.0",
+        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry 80526ac2",
         "findings": [],
         "notAssessed": [
           "deprecated-calls",
@@ -3042,8 +3025,8 @@
         "error": null,
         "verdict": "ready",
         "score": 100,
-        "toolVersion": "dev",
-        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry fe1fdf07",
+        "toolVersion": "0.3.0",
+        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry 80526ac2",
         "findings": [
           {
             "category": "crd-version",
@@ -3126,8 +3109,8 @@
         "error": null,
         "verdict": "blocked",
         "score": 70,
-        "toolVersion": "dev",
-        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry fe1fdf07",
+        "toolVersion": "0.3.0",
+        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry 80526ac2",
         "findings": [
           {
             "category": "chart-incompat",
@@ -3225,8 +3208,8 @@
         "error": null,
         "verdict": "ready",
         "score": 100,
-        "toolVersion": "dev",
-        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry fe1fdf07",
+        "toolVersion": "0.3.0",
+        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry 80526ac2",
         "findings": [],
         "notAssessed": [
           "crds",
@@ -3311,20 +3294,11 @@
       "scan": {
         "ok": true,
         "error": null,
-        "verdict": "blocked",
-        "score": 75,
-        "toolVersion": "dev",
-        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry fe1fdf07",
+        "verdict": "ready",
+        "score": 100,
+        "toolVersion": "0.3.0",
+        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry 80526ac2",
         "findings": [
-          {
-            "category": "chart-incompat",
-            "severity": "blocker",
-            "key": "chart-incompat/kyverno/1.19",
-            "title": "Kyverno 1.19.1 supports Kubernetes up to 1.35 (target 1.37)",
-            "detail": "Installed version 1.19.1 is in the 1.19 release line, which supports Kubernetes 1.33 through 1.35.",
-            "objects": [],
-            "objectsTotal": 0
-          },
           {
             "category": "crd-version",
             "severity": "info",
@@ -3493,13 +3467,11 @@
         "target": "1.36",
         "ok": true,
         "error": null,
-        "verdict": "blocked",
-        "score": 75,
-        "blockers": 1,
+        "verdict": "ready",
+        "score": 100,
+        "blockers": 0,
         "warnings": 0,
-        "blockerKeys": [
-          "chart-incompat/kyverno/1.19"
-        ]
+        "blockerKeys": []
       },
       "scanOfPrevRender": null,
       "images": [
@@ -3561,8 +3533,8 @@
         "error": null,
         "verdict": "ready",
         "score": 100,
-        "toolVersion": "dev",
-        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry fe1fdf07",
+        "toolVersion": "0.3.0",
+        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry 80526ac2",
         "findings": [],
         "notAssessed": [
           "deprecated-calls",
@@ -3629,8 +3601,8 @@
         "error": null,
         "verdict": "ready",
         "score": 100,
-        "toolVersion": "dev",
-        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry fe1fdf07",
+        "toolVersion": "0.3.0",
+        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry 80526ac2",
         "findings": [],
         "notAssessed": [
           "deprecated-calls",
@@ -3726,8 +3698,8 @@
         "error": null,
         "verdict": "ready",
         "score": 100,
-        "toolVersion": "dev",
-        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry fe1fdf07",
+        "toolVersion": "0.3.0",
+        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry 80526ac2",
         "findings": [],
         "notAssessed": [
           "deprecated-calls",
@@ -3850,8 +3822,8 @@
         "error": null,
         "verdict": "ready",
         "score": 100,
-        "toolVersion": "dev",
-        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry fe1fdf07",
+        "toolVersion": "0.3.0",
+        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry 80526ac2",
         "findings": [],
         "notAssessed": [
           "deprecated-calls",
@@ -3950,8 +3922,8 @@
         "error": null,
         "verdict": "ready",
         "score": 100,
-        "toolVersion": "dev",
-        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry fe1fdf07",
+        "toolVersion": "0.3.0",
+        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry 80526ac2",
         "findings": [],
         "notAssessed": [
           "deprecated-calls",
@@ -4027,8 +3999,8 @@
         "error": null,
         "verdict": "ready",
         "score": 100,
-        "toolVersion": "dev",
-        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry fe1fdf07",
+        "toolVersion": "0.3.0",
+        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry 80526ac2",
         "findings": [],
         "notAssessed": [
           "deprecated-calls",
@@ -4095,8 +4067,8 @@
         "error": null,
         "verdict": "ready",
         "score": 100,
-        "toolVersion": "dev",
-        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry fe1fdf07",
+        "toolVersion": "0.3.0",
+        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry 80526ac2",
         "findings": [],
         "notAssessed": [
           "deprecated-calls",
@@ -4172,8 +4144,8 @@
         "error": null,
         "verdict": "ready",
         "score": 100,
-        "toolVersion": "dev",
-        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry fe1fdf07",
+        "toolVersion": "0.3.0",
+        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry 80526ac2",
         "findings": [],
         "notAssessed": [
           "deprecated-calls",
@@ -4253,8 +4225,8 @@
         "error": null,
         "verdict": "ready",
         "score": 100,
-        "toolVersion": "dev",
-        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry fe1fdf07",
+        "toolVersion": "0.3.0",
+        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry 80526ac2",
         "findings": [],
         "notAssessed": [
           "deprecated-calls",
@@ -4340,8 +4312,8 @@
         "error": null,
         "verdict": "ready",
         "score": 100,
-        "toolVersion": "dev",
-        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry fe1fdf07",
+        "toolVersion": "0.3.0",
+        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry 80526ac2",
         "findings": [],
         "notAssessed": [
           "deprecated-calls",
@@ -4423,8 +4395,8 @@
         "error": null,
         "verdict": "ready",
         "score": 100,
-        "toolVersion": "dev",
-        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry fe1fdf07",
+        "toolVersion": "0.3.0",
+        "kbVersion": "k8s.io/api v0.37.1; lifecycle 91e89ab0; registry 80526ac2",
         "findings": [],
         "notAssessed": [
           "deprecated-calls",

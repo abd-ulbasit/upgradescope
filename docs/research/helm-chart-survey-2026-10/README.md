@@ -3,14 +3,14 @@
 **The 50 most-starred Helm charts on Artifact Hub, rendered at default values
 and judged against Kubernetes 1.37.**
 
-!!! note "Preliminary dataset"
-    This is the run of 2026-10-11 (UTC), made with upgradescope built from
-    commit `2e524c9365b280802f6055276ff1662a771fda21` (knowledge base
-    `k8s.io/api v0.37.1; lifecycle 91e89ab0; registry fe1fdf07`). The survey
-    will be run again with the v0.3.0 registry data, and that run will replace
-    these files. Numbers that come from the registry (the add-on findings) may
-    change then. Numbers that come from helm (render failures and
-    `kubeVersion` refusals) change only if the charts change.
+This is the run of 2026-10-12 (UTC), made with the published upgradescope
+v0.3.0 release: `upgradescope_darwin_arm64.tar.gz` from the
+[v0.3.0 release](https://github.com/abd-ulbasit/upgradescope/releases/tag/v0.3.0),
+sha256 `91d3b5c1a98cc9b021cc770d8c1f3ca44d11237d7e3bc2b7bbb124bad3495b7f`,
+commit `d946ecb06b698cb1e9371582be5338ca60847a24`, knowledge base
+`k8s.io/api v0.37.1; lifecycle 91e89ab0; registry 80526ac2`. It replaces the
+preliminary run of 2026-10-11; [what changed](#what-changed-since-the-preliminary-run)
+says how and why.
 
 The question: if you install today's most popular Helm charts at their
 default values, what stands between them and Kubernetes 1.37? That means
@@ -35,11 +35,10 @@ of `upgradescope scan --files`. **helm** means `helm pull` or
   0.16.1 (1) have `crd-version` info findings for CRD versions their own
   CRDs mark deprecated. Those are the projects' APIs, not Kubernetes', and
   are not blockers.
-- **4 of the 42 are blocked at 1.37 (upgradescope).** Every one of these
+- **3 of the 42 are blocked at 1.37 (upgradescope).** Every one of these
   blockers comes from add-on lifecycle data, and none comes from an API:
     - cert-manager 1.21.2 supports Kubernetes up to 1.36;
     - Istio 1.30.5 (chart `istiod`) supports up to 1.36;
-    - Kyverno 1.19.1 (chart `kyverno` 3.9.1) supports up to 1.35;
     - Ingress NGINX (chart `ingress-nginx` 4.15.1, controller 1.15.1) has been
       end-of-life since 2026-03-24.
 - **1 chart refuses 1.37 by its own `kubeVersion` (helm).** Rancher 2.15.2
@@ -55,12 +54,14 @@ of `upgradescope scan --files`. **helm** means `helm pull` or
   kubernetes-dashboard 7.14.0 at `https://kubernetes.github.io/dashboard` and
   sealed-secrets 2.18.6 at `https://bitnami-labs.github.io/sealed-secrets/`.
   Both repositories answered `index.yaml` with 404 Not Found on the survey
-  day.
-- **At 1.36 the picture is a little better (upgradescope).** 43 charts
+  day, as they had the day before.
+- **At 1.36 only ingress-nginx is blocked (upgradescope).** 43 charts
   rendered at `--kube-version 1.36.0`, Rancher among them. Scanned at
-  `--target 1.36`, 2 were blocked (ingress-nginx and kyverno) and 41 were
+  `--target 1.36`, 1 was blocked (ingress-nginx, end of life) and 42 were
   ready. cert-manager 1.21 and Istio 1.30 support 1.36, so they become
   blockers only at the move to 1.37.
+- **One add-on is approaching end of life (upgradescope, warning).** Istio
+  1.30 reaches end of life on 2026-12-31.
 
 Some things were not what we expected:
 
@@ -82,15 +83,56 @@ Some things were not what we expected:
   Kubernetes upgrade question, and the survey did not check that any image
   can be pulled.
 - **The registry knows the add-on but not the release (upgradescope,
-  info).** It has no lifecycle data for these releases: kube-state-metrics
-  2.20.0 (in kube-prometheus-stack and prometheus), Prometheus Operator
-  0.94.1, Metrics Server 0.9.0, ExternalDNS 0.18.0 (the Bitnami chart) and
-  Velero 1.18.2. Their end of life and compatibility were not assessed.
+  info).** It has no release-line (end-of-life) data for these releases:
+  kube-state-metrics 2.20.0 (in kube-prometheus-stack and prometheus),
+  Prometheus Operator 0.94.1, Metrics Server 0.9.0, ExternalDNS 0.18.0 (the
+  Bitnami chart) and Velero 1.18.2. Their end of life was not assessed.
 - **37 of the 42 scanned charts render at least one image that no add-on
-  matcher recognises.** That is 71 distinct image repositories in all
+  matcher recognises.** That is 69 distinct image repositories in all
   (upgradescope `unrecognizedImages`). Most are applications such as
   databases, which the add-on registry does not set out to cover. The table
   below lists the most common.
+
+## What changed since the preliminary run
+
+The preliminary run (2026-10-11, upgradescope built from `2e524c93`,
+registry `fe1fdf07`, 27 registry entries) and this run (2026-10-12,
+v0.3.0, registry `80526ac2`, 34 entries) selected the same 50 charts, in
+the same order, at the same versions: Artifact Hub's latest stable version
+did not move for any of them. helm and jq were the same versions. Compared
+record by record, every chart has the same appVersion, `kubeVersion`, fetch
+and render outcome (with the same helm error where there was one) and the
+same rendered image list in both runs. (The preliminary run's directory was
+not kept, so the renders themselves could not be compared file by file.) So
+every difference below comes from the registry, except the star counts.
+
+| What changed | Preliminary | This run | Why |
+|---|---|---|---|
+| kyverno 3.9.1 (Kyverno 1.19.1) at 1.37 | blocked: "Kyverno 1.19.1 supports Kubernetes up to 1.35" | ready (score 75 to 100); the 17 `crd-version` infos are unchanged | v0.3.0's registry no longer encodes a Kubernetes range for Kyverno. Kyverno's [releases page](https://kyverno.io/docs/installation/releases/) gives "Kubernetes Versions Supported: v1.33 - v1.35" for 1.19 but says "Other Kubernetes versions may work, but are not tested and therefore no guarantees are made": a tested-with range, not a limit (`registry/data/kyverno.yaml`, `registry/CONTRIBUTING.md`, "Maximum, minimum or tested with"). The preliminary blocker was a false one. Kyverno has still not tested 1.19 on 1.37. |
+| kyverno at 1.36 | blocked | ready | The same change: 1.36 is outside 1.33 to 1.35 too |
+| Charts blocked at 1.37 | 4 | 3 | kyverno |
+| Charts blocked at 1.36 | 2 | 1 | kyverno |
+| Incompatible add-on class | 3 | 2 | kyverno |
+| "None of the above" class | 38 | 39 | kyverno |
+| Distinct unrecognised images | 71 | 69 | v0.3.0 adds a `longhorn` entry whose matchers claim `longhornio/longhorn-manager` and `longhornio/longhorn-ui`. Longhorn 1.13.0 is matched now and has no finding: its compat row needs Kubernetes 1.34 or later (no maximum) and the 1.13 line's end of life is 2027-11-29. The number of charts with an unrecognised image stays 37, since longhorn still renders `docker.io/longhornio/longhorn-share-manager`, which no matcher claims |
+| Stars | kube-prometheus-stack 1235, velero 191 | 1236, 192 | Artifact Hub's counts moved overnight. The order did not change |
+| "Most common findings" table | ends with metallb's BGPPeer | also lists `policies.kyverno.io/v1alpha1 DeletingPolicy` | Not a new finding: the table keeps the first 20 rows, and the Kyverno blocker row that left made room for a Kyverno `crd-version` info that was already in the preliminary data |
+
+Three other new registry entries name charts in the sample and changed
+nothing, for reasons the data shows:
+
+- **cluster-autoscaler 9.59.0** renders no Deployment and no `image:` line
+  at default values: its `templates/deployment.yaml` renders only when
+  `autoDiscovery.clusterName`, `autoDiscovery.namespace`,
+  `autoDiscovery.labels` or `autoscalingGroups` is set. There is nothing for
+  the new `cluster-autoscaler` entry to match.
+- **aws-load-balancer-controller 3.6.0** still fails to render at default
+  values (a required value), so it was never scanned.
+- **Istio** gained compat rows from istio.io beside the endoflife.date
+  cycles. Both give 1.32 to 1.36 for 1.30, so the finding is the same.
+
+The registry also re-read argo-cd, traefik, kube-state-metrics, ingress-nginx
+and fluent-bit and changed only their comments; their results are the same.
 
 ## Method
 
@@ -103,14 +145,13 @@ survey day's run used:
 
 | Tool | Version |
 |---|---|
-| upgradescope | built from `2e524c9365b280802f6055276ff1662a771fda21` (`go build -ldflags "-X github.com/abd-ulbasit/upgradescope/internal/cli.version=dev -X github.com/abd-ulbasit/upgradescope/internal/cli.commit=<commit>" ./cmd/upgradescope`), knowledge base `k8s.io/api v0.37.1; lifecycle 91e89ab0; registry fe1fdf07` |
+| upgradescope | 0.3.0, the published release archive `upgradescope_darwin_arm64.tar.gz` (sha256 `91d3b5c1a98cc9b021cc770d8c1f3ca44d11237d7e3bc2b7bbb124bad3495b7f`, matching the release's `checksums.txt`; `gh attestation verify` passed for source ref `refs/tags/v0.3.0`, commit `d946ecb06b698cb1e9371582be5338ca60847a24`), knowledge base `k8s.io/api v0.37.1; lifecycle 91e89ab0; registry 80526ac2` |
 | helm | v4.1.4 (`GitCommit 05fa37973dc9e42b76e1d2883494c87174b6074f`, `KubeClientVersion v1.35`) |
 | jq | 1.8.1 |
 
-The run started at 2026-10-11T23:09:24Z, on one machine. `results.json` →
-`meta` holds the same facts, the complete `upgradescope version` output
-among them. (That run's `meta` has no end time; the harness records
-`finishedAt` from the next run on.)
+The run started at 2026-10-12T05:24:48Z and finished at
+2026-10-12T05:31:23Z, on one machine. `results.json` → `meta` holds the same
+facts, the complete `upgradescope version` output among them.
 
 1. **Select.** Read
    `https://artifacthub.io/api/v1/packages/search?kind=0&sort=stars&limit=60&offset=0`
@@ -124,7 +165,7 @@ among them. (That run's `meta` has no end time; the harness records
     - keep the first 50.
 
    On the survey day, none of the top 50 was dropped (`dropped` is empty):
-   the 50 charts are the first 50 search results, from 1235 stars down to
+   the 50 charts are the first 50 search results, from 1236 stars down to
    102. Each chart is surveyed at its latest stable version.
    When Artifact Hub's latest version is a prerelease, the newest stable
    version is used instead. A version counts as a prerelease when it is
@@ -175,11 +216,11 @@ A chart can be in more than one blocker class.
 | Class | Charts |
 |---|---|
 | Removed API (blocker) | 0 |
-| Incompatible add-on (blocker) | 3 |
+| Incompatible add-on (blocker) | 2 |
 | End-of-life add-on (blocker) | 1 |
 | Custom resources at an unserved version (blocker) | 0 |
 | Other blocker | 0 |
-| Any blocker | 4 |
+| Any blocker | 3 |
 | Deprecated API only (no blocker) | 0 |
 | Add-on approaching end of life (warning) | 1 |
 | `kubeVersion` excludes 1.37 | 1 |
@@ -187,7 +228,7 @@ A chart can be in more than one blocker class.
 | Render failure at default values | 5 |
 | Fetch failure | 2 |
 | Scan failure | 0 |
-| None of the above | 38 |
+| None of the above | 39 |
 
 Render failures by class: required-value 5.
 
@@ -195,8 +236,8 @@ Render failures by class: required-value 5.
 
 | Verdict | At 1.37 (rendered at 1.37.0) | At 1.36 (rendered at 1.36.0) |
 |---|---|---|
-| blocked | 4 | 2 |
-| ready | 38 | 41 |
+| blocked | 3 | 1 |
+| ready | 39 | 42 |
 
 ### Charts with a blocker at 1.37
 
@@ -205,7 +246,6 @@ Render failures by class: required-value 5.
 | cert-manager | 1.21.2 | chart-incompat | cert-manager 1.21.2 supports Kubernetes up to 1.36 (target 1.37) | - |
 | ingress-nginx | 4.15.1 | eol-addon | Ingress NGINX Controller is end-of-life since 2026-03-24 | - |
 | istiod | 1.30.5 | chart-incompat | Istio 1.30.5 supports Kubernetes up to 1.36 (target 1.37) | - |
-| kyverno | 3.9.1 | chart-incompat | Kyverno 1.19.1 supports Kubernetes up to 1.35 (target 1.37) | - |
 
 ### Charts whose `kubeVersion` excludes 1.37
 
@@ -224,7 +264,6 @@ Render failures by class: required-value 5.
 | no lifecycle data for Velero 1.18.2 | addon-no-data | info | 1 |
 | cert-manager 1.21.2 supports Kubernetes up to 1.36 (target 1.37) | chart-incompat | blocker | 1 |
 | Istio 1.30.5 supports Kubernetes up to 1.36 (target 1.37) | chart-incompat | blocker | 1 |
-| Kyverno 1.19.1 supports Kubernetes up to 1.35 (target 1.37) | chart-incompat | blocker | 1 |
 | kyverno.io/v1 ClusterPolicy is a deprecated CRD version | crd-version | info | 1 |
 | kyverno.io/v1 Policy is a deprecated CRD version | crd-version | info | 1 |
 | kyverno.io/v2 CleanupPolicy is a deprecated CRD version | crd-version | info | 1 |
@@ -237,6 +276,7 @@ Render failures by class: required-value 5.
 | kyverno.io/v2beta1 Policy is a deprecated CRD version | crd-version | info | 1 |
 | kyverno.io/v2beta1 PolicyException is a deprecated CRD version | crd-version | info | 1 |
 | metallb.io/v1beta1 BGPPeer is a deprecated CRD version | crd-version | info | 1 |
+| policies.kyverno.io/v1alpha1 DeletingPolicy is a deprecated CRD version | crd-version | info | 1 |
 
 ### Add-ons matched to the registry (from findings)
 
@@ -248,7 +288,6 @@ Render failures by class: required-value 5.
 | ingress-nginx | eol-addon | 1 |
 | istio | chart-incompat | 1 |
 | istio | eol-approaching | 1 |
-| kyverno | chart-incompat | 1 |
 | metrics-server | addon-no-data | 1 |
 | prometheus-operator | addon-no-data | 1 |
 | velero | addon-no-data | 1 |
@@ -270,7 +309,7 @@ From the `image:` lines of the render at 1.37.0 (a grep, see `images` in the rec
 
 ### Images no add-on matcher recognised
 
-71 distinct image repositories in 37 charts. The most common:
+69 distinct image repositories in 37 charts. The most common:
 
 | Image repository | Charts |
 |---|---|
@@ -304,7 +343,7 @@ From the `image:` lines of the render at 1.37.0 (a grep, see `images` in the rec
 
 | # | Chart | Repository | Version | Stars | Render at 1.37.0 | Verdict at 1.37 | Blockers | Warnings | Verdict at 1.36 |
 |---|---|---|---|---|---|---|---|---|---|
-| 1 | kube-prometheus-stack | prometheus-community | 92.3.0 | 1235 | ok | ready | 0 | 0 | ready |
+| 1 | kube-prometheus-stack | prometheus-community | 92.3.0 | 1236 | ok | ready | 0 | 0 | ready |
 | 2 | cert-manager | cert-manager | 1.21.2 | 997 | ok | blocked | 1 | 0 | ready |
 | 3 | argo-cd | argo | 10.10.2 | 846 | ok | ready | 0 | 0 | ready |
 | 4 | ingress-nginx | ingress-nginx | 4.15.1 | 822 | ok | blocked | 1 | 0 | blocked |
@@ -333,14 +372,14 @@ From the `image:` lines of the render at 1.37.0 (a grep, see `images` in the rec
 | 27 | mysql | bitnami | 14.0.3 | 197 | ok | ready | 0 | 0 | ready |
 | 28 | elasticsearch | elastic | 8.5.1 | 193 | ok | ready | 0 | 0 | ready |
 | 29 | mongodb | bitnami | 20.0.0 | 193 | ok | ready | 0 | 0 | ready |
-| 30 | velero | vmware-tanzu | 12.2.1 | 191 | ok | ready | 0 | 0 | ready |
+| 30 | velero | vmware-tanzu | 12.2.1 | 192 | ok | ready | 0 | 0 | ready |
 | 31 | nextcloud | nextcloud | 9.4.0 | 190 | ok | ready | 0 | 0 | ready |
 | 32 | minio | bitnami | 17.0.21 | 169 | ok | ready | 0 | 0 | ready |
 | 33 | cluster-autoscaler | cluster-autoscaler | 9.59.0 | 168 | ok | ready | 0 | 0 | ready |
 | 34 | metallb | metallb | 0.16.1 | 154 | ok | ready | 0 | 0 | ready |
 | 35 | istiod | istio-official | 1.30.5 | 143 | ok | blocked | 1 | 1 | ready |
 | 36 | rancher | rancher-stable | 2.15.2 | 141 | failed (kubeVersion) | - | 0 | 0 | ready |
-| 37 | kyverno | kyverno | 3.9.1 | 140 | ok | blocked | 1 | 0 | blocked |
+| 37 | kyverno | kyverno | 3.9.1 | 140 | ok | ready | 0 | 0 | ready |
 | 38 | cloudnative-pg | cloudnative-pg | 0.29.1 | 140 | ok | ready | 0 | 0 | ready |
 | 39 | argo-workflows | argo | 2.0.12 | 139 | ok | ready | 0 | 0 | ready |
 | 40 | gitea | gitea | 12.7.0 | 135 | ok | ready | 0 | 0 | ready |
@@ -357,24 +396,37 @@ From the `image:` lines of the render at 1.37.0 (a grep, see `images` in the rec
 
 ## Checked by hand
 
-Before writing this up, we checked 8 charts from the final run against the
-rendered YAML and the registry entry in `registry/data/`: 5 with findings and
-3 without. All 8 agreed, and the harness needed no change.
+After the run, we checked 12 charts by hand: 7 with findings and 5 without.
+For each, we rendered the downloaded archive again with
+`helm template survey <tgz> --namespace survey --include-crds --kube-version 1.37.0`
+(fresh helm directories, `KUBECONFIG=/dev/null`) and scanned that render with
+the v0.3.0 binary (`scan --files --target 1.37 --output json --fail-on never`).
+For all 12, the finding keys matched the record exactly. The new renders
+matched the run's file for file, except in kube-prometheus-stack and redis,
+where only generated passwords (and kube-prometheus-stack's `checksum/secret`
+annotation over them) differ. We then read each finding against the
+rendered YAML line and the registry entry in `registry/data/` at v0.3.0.
+All 12 agreed, and the harness needed no change.
 
 | Chart | Finding | Rendered evidence | Registry entry |
 |---|---|---|---|
-| cert-manager 1.21.2 | chart-incompat, up to 1.36 | `cert-manager/templates/deployment.yaml:46` `image: "quay.io/jetstack/cert-manager-controller:v1.21.2"` | `cert-manager.yaml`: `range: ">=1.21.0 <1.22.0", k8s_min: "1.33", k8s_max: "1.36"` |
-| ingress-nginx 4.15.1 | eol-addon | `ingress-nginx/templates/controller-deployment.yaml:39` `image: registry.k8s.io/ingress-nginx/controller:v1.15.1@sha256:594c...` | `ingress-nginx.yaml`: `status: eol`, `eol_date: "2026-03-24"` |
-| istiod 1.30.5 | chart-incompat, up to 1.36; eol-approaching 2026-12-31 | `istiod/templates/deployment.yaml:57` `image: "registry.istio.io/release/pilot:1.30.5"`, labels `app: istiod`, `istio.io/rev: "default"` (the report says it was detected via labels) | `istio.yaml`: `cycle: "1.30", eol: "2026-12-31", k8s_min: "1.32", k8s_max: "1.36"` |
-| kyverno 3.9.1 | chart-incompat, up to 1.35 | `kyverno/templates/admission-controller/deployment.yaml:59` `image: "reg.kyverno.io/kyverno/kyvernopre:v1.19.1"` | `kyverno.yaml`: `cycle: "1.19", eol: false, k8s_min: "1.33", k8s_max: "1.35"` |
-| kube-prometheus-stack 92.3.0 | addon-no-data, Prometheus Operator 0.94.1 and kube-state-metrics 2.20.0 | the operator and kube-state-metrics Deployments | Both entries say `status: supported` and have no release-line cycles, so no row covers either version. `prometheus-operator.yaml` has only minimum compatibility rows (`>=0.84.0`, `k8s_min: "1.25"`). `kube-state-metrics.yaml` has no compatibility rows on purpose: upstream publishes a client-go build version, not a supported range |
-| argo-cd 10.10.2 | none | 8 × `quay.io/argoproj/argocd:v3.5.4`, which is not in `unrecognizedImages`, so a matcher claimed it | `argo-cd.yaml`: `cycle: "3.5", eol: false`, and no Kubernetes range recorded. Nothing to report is correct |
-| redis 28.3.1 | none | 2 × `registry-1.docker.io/bitnami/redis:latest`, in `unrecognizedImages`. The APIs are `apps/v1`, `policy/v1`, `networking.k8s.io/v1` and `v1` | no redis entry. Nothing to report is correct |
-| traefik 41.7.1 | none | `docker.io/traefik:v3.7.14`, 25 `apiextensions.k8s.io/v1` CRDs, one `networking.k8s.io/v1` IngressClass | `traefik.yaml`: `cycle: "3.7", eol: false`, and no Kubernetes range recorded. Nothing to report is correct |
+| cert-manager 1.21.2 | chart-incompat, up to 1.36 | `cert-manager/templates/deployment.yaml:46` `image: "quay.io/jetstack/cert-manager-controller:v1.21.2"` | `cert-manager.yaml:47`: `range: ">=1.21.0 <1.22.0", k8s_min: "1.33", k8s_max: "1.36"` |
+| ingress-nginx 4.15.1 | eol-addon | `ingress-nginx/templates/controller-deployment.yaml:39` `image: registry.k8s.io/ingress-nginx/controller:v1.15.1@sha256:594c...` | `ingress-nginx.yaml:42,45`: `status: eol`, `eol_date: "2026-03-24"` |
+| istiod 1.30.5 | chart-incompat, up to 1.36; eol-approaching 2026-12-31 | `istiod/templates/deployment.yaml:57` `image: "registry.istio.io/release/pilot:1.30.5"`, labels `app: istiod`, `istio.io/rev: "default"` (lines 10-11; the report says it was detected via labels) | `istio.yaml:35`: `cycle: "1.30", eol: "2026-12-31", k8s_min: "1.32", k8s_max: "1.36"`, and the compat row at line 73 agrees (1.32 to 1.36) |
+| kube-prometheus-stack 92.3.0 | addon-no-data, Prometheus Operator 0.94.1 and kube-state-metrics 2.20.0 | `templates/prometheus-operator/deployment.yaml:44` `quay.io/prometheus-operator/prometheus-operator:v0.94.1`; `charts/kube-state-metrics/templates/deployment.yaml:54` `registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.20.0` | Both entries say `status: supported` and have no release-line cycles, so no row gives an end of life for either version, which is what the finding says. `kube-state-metrics.yaml` has no compatibility rows on purpose: upstream publishes a client-go build version, not a supported range |
+| velero 12.2.1 | addon-no-data, Velero 1.18.2 | `velero/templates/deployment.yaml:44` `image: "docker.io/velero/velero:v1.18.2"` | `velero.yaml:25`: compat row `>=1.14.0 <1.19.0`, `k8s_min: "1.18"` (open-ended, so 1.37 is fine) and no cycles, so no end of life to assess |
+| kyverno 3.9.1 | 17 crd-version infos, no blocker | `kyverno/templates/admission-controller/deployment.yaml:107` `image: "reg.kyverno.io/kyverno/kyverno:v1.19.1"`; `charts/crds/templates/kyverno.io/kyverno.io_clusterpolicies.yaml:65-69` `deprecated: true` on `name: v1` | `kyverno.yaml:46`: `cycle: "1.19", eol: false` with no Kubernetes range (the `eol-sync: ignore-k8s-range` directive, line 6). No blocker is correct for v0.3.0's data; the preliminary blocker came from the range that was removed |
+| metallb 0.16.1 | crd-version info, metallb.io/v1beta1 BGPPeer | `charts/crds/templates/crds.yaml:428-430` `deprecated: true` on `name: v1beta1` of `bgppeers.metallb.io` | not a registry finding: the CRD itself marks the version deprecated |
+| longhorn 1.13.0 | none (newly matched) | `longhorn/templates/daemonset-sa.yaml:53` `image: docker.io/longhornio/longhorn-manager:v1.13.0`, `deployment-ui.yaml:68` `longhornio/longhorn-ui:v1.13.0`; neither is in `unrecognizedImages` now | `longhorn.yaml:60`: `range: ">=1.13.0", k8s_min: "1.34"`; line 64: `cycle: "1.13", eol: "2027-11-29"`. Nothing to report is correct |
+| argo-cd 10.10.2 | none | 8 × `quay.io/argoproj/argocd:v3.5.4`, which is not in `unrecognizedImages`, so a matcher claimed it | `argo-cd.yaml:30`: `cycle: "3.5", eol: false`, and no Kubernetes range recorded. Nothing to report is correct |
+| redis 28.3.1 | none | `redis/templates/master/application.yaml:67` `registry-1.docker.io/bitnami/redis:latest`, in `unrecognizedImages` | no redis entry. Nothing to report is correct |
+| traefik 41.7.1 | none | `traefik/templates/deployment.yaml:68` `image: docker.io/traefik:v3.7.14` | `traefik.yaml:29`: `cycle: "3.7", eol: false`, and no Kubernetes range recorded. Nothing to report is correct |
+| cluster-autoscaler 9.59.0 | none | no `image:` line at all: the render holds only RBAC, a PodDisruptionBudget, a Service and a ServiceAccount, because the Deployment needs `autoDiscovery.clusterName` or `autoscalingGroups` | `cluster-autoscaler.yaml` (new in v0.3.0) has nothing to match. Nothing to report is correct, and it says nothing about Cluster Autoscaler itself |
 
 We also checked Rancher by hand. Its `Chart.yaml` reads
-`kubeVersion: < 1.37.0-0`, and helm's error at 1.37.0 is
-`chart requires kubeVersion: < 1.37.0-0 which is incompatible with Kubernetes v1.37.0`.
+`kubeVersion: < 1.37.0-0`; `helm template --kube-version 1.37.0` exits 1
+with `chart requires kubeVersion: < 1.37.0-0 which is incompatible with Kubernetes v1.37.0`,
+and `--kube-version 1.36.0` exits 0.
 
 ## Limitations
 
@@ -382,7 +434,8 @@ We also checked Rancher by hand. Its `Chart.yaml` reads
   attention, and the sample leans toward charts that people browse.
 - **Default values only.** Real installs set values. A value can switch on
   templates that use other APIs, images or versions. 5 charts did not render
-  at all without values, and their results are missing here.
+  at all without values, and their results are missing here. Others render
+  less than a real install: cluster-autoscaler renders no Deployment.
 - **Helm's built-in capabilities.** Without a cluster, `helm template` fills
   `.Capabilities.APIVersions` with its own built-in list. Here that was helm
   4.1.4, client v1.35. We set `.Capabilities.KubeVersion` with
@@ -400,11 +453,15 @@ We also checked Rancher by hand. Its `Chart.yaml` reads
   add-on only when it produces a finding, and an add-on finding names no
   object or file. The add-on table therefore counts findings, not matches.
   An add-on that was matched and found fine, such as argo-cd, traefik,
-  cilium 1.20.2 or fluent-bit, does not appear in it.
-- **Registry coverage.** The registry used here had 27 add-on entries (the
-  `.yaml` files in `registry/data/` at commit `2e524c93`). An
+  cilium 1.20.2, fluent-bit, kyverno or longhorn, does not appear in it.
+- **Registry coverage.** The registry used here had 34 add-on entries (the
+  `.yaml` files in `registry/data/` at v0.3.0, commit `d946ecb0`). An
   add-on outside it, or a release it has no row for, is not judged. The
   `addon-no-data` rows and the unrecognised images show where it ran out.
+- **Ready is not tested.** The registry encodes only stated minimums and
+  maximums, never a tested-with range. A `ready` verdict means no stated
+  limit is crossed, not that upstream has tested the release on 1.37:
+  Kyverno 1.19, for example, is tested on 1.33 to 1.35.
 - **Image tags come from a grep.** The `images` lists and the `:latest`
   table come from the `image:` lines of the rendered YAML, skipping values
   that are still template text. They are not from the scan. A ConfigMap that
@@ -417,11 +474,17 @@ We also checked Rancher by hand. Its `Chart.yaml` reads
 
 ```sh
 export KUBECONFIG=/dev/null          # no cluster is needed; make sure none is contacted
-git checkout 2e524c9365b280802f6055276ff1662a771fda21
-go build -ldflags "-X github.com/abd-ulbasit/upgradescope/internal/cli.version=dev \
-  -X github.com/abd-ulbasit/upgradescope/internal/cli.commit=$(git rev-parse HEAD)" \
-  -o /tmp/survey/upgradescope ./cmd/upgradescope
-hack/chart-survey.sh run /tmp/survey 50 1.37 /tmp/survey/upgradescope
+mkdir -p /tmp/survey/bin && cd /tmp/survey
+base=https://github.com/abd-ulbasit/upgradescope/releases/download/v0.3.0
+curl -fsSLO "$base/upgradescope_darwin_arm64.tar.gz"    # or the archive for your platform
+curl -fsSLO "$base/checksums.txt"
+shasum -a 256 -c --ignore-missing checksums.txt
+gh attestation verify upgradescope_darwin_arm64.tar.gz -R abd-ulbasit/upgradescope \
+  --source-ref refs/tags/v0.3.0
+tar -xzf upgradescope_darwin_arm64.tar.gz -C bin
+bin/upgradescope version                # 0.3.0, commit d946ecb0...
+# from a checkout of this repository:
+hack/chart-survey.sh run /tmp/survey/run 50 1.37 /tmp/survey/bin/upgradescope
 ```
 
 The run keeps every download, render, scan and helm error under the output
@@ -431,10 +494,13 @@ move, so a later run selects and renders what is current then.
 
 Every count and table in "What we found" and "Results" can be recomputed
 from the committed `results.json` with jq. The other numbers have other
-sources: the tool versions and the start time are in `results.json` →
-`meta`, the registry entry count is in `registry/data/` at commit
-`2e524c93`, and the line numbers under "Checked by hand" are in the run
-directory's renders, which are not committed. For example:
+sources: the tool versions and the start and end times are in
+`results.json` → `meta`, the archive's sha256 is in the release's
+`checksums.txt`, the registry entry counts are in `registry/data/` at
+`2e524c93` (27) and v0.3.0 (34), the preliminary numbers are in this file's
+history (`git log -p -- docs/research/helm-chart-survey-2026-10/results.json`),
+and the line numbers under "Checked by hand" are in the run directory's
+renders, which are not committed. For example:
 
 ```sh
 jq '.summary.classes' results.json                      # the class counts
@@ -448,7 +514,7 @@ jq '[.charts[] | select(.repository == "bitnami") | any(.images[]?; endswith(":l
 
 - [`results.json`](results.json) has these keys:
     - `meta`: the date, the start time, the tool versions and the
-      commands (runs after this one also record `finishedAt`);
+      commands, and the end time (`finishedAt`);
     - `dropped`: the selection's drop log;
     - `summary`: every count and table above;
     - `charts`: one record per chart. A record holds its Artifact Hub
