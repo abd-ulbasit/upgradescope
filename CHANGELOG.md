@@ -48,7 +48,7 @@ the project has governance files and a public roadmap (#426).
 - The README leads with add-on end of life and compatibility, custom
   resources at CRD versions no longer served, stored Helm release manifests,
   and pull-request gating with `--files`. The long material moved to the docs
-  site (3,171 words to about 1,400), and the README names kube-upgrade-check
+  site (3,171 words to 1,181), and the README names kube-upgrade-check
   for the checks upgradescope does not do yet (#404).
 - The README's install table lists the chart on Artifact Hub and the Action
   on GitHub Marketplace, and the Action examples in the README and the docs
