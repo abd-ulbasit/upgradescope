@@ -325,9 +325,9 @@ and Rancher's `hardened-*` rebuilds are listed under `unrecognizedImages`.
 Rancher's `mirrored-*` images are verbatim copies and match like the upstream
 image.
 
-Add-ons no entry covers yet (the Amazon VPC CNI and the EKS add-ons other
-than the EBS and EFS CSI drivers, for example) are not judged; the report
-lists their images as unrecognized.
+Add-ons no entry covers yet (the Amazon VPC CNI and the EKS Pod Identity
+Agent, for example) are not judged; the report lists their images as
+unrecognized.
 
 ## Cover your own add-ons
 
