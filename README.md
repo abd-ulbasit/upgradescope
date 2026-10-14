@@ -189,6 +189,9 @@ self-managed cluster: kube-upgrade-check does those today.
 [REST API](https://abd-ulbasit.github.io/upgradescope/reference/api/) ([OpenAPI](api/openapi.yaml)) ·
 [Compatibility policy](https://abd-ulbasit.github.io/upgradescope/compatibility-policy/)
 
+**Status:** maintenance mode since 15 October 2026: data refreshes and fixes,
+no new features ([roadmap](ROADMAP.md)).
+
 The author interned at chkk.io, which sells in this category. upgradescope
 is clean-room: no proprietary code, data, schemas or documents were used,
 and every knowledge-base entry is generated from upstream source or carries
