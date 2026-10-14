@@ -16,7 +16,7 @@ release workflow, with the dashboard and the knowledge base embedded.
 | Release archive | download from [Releases](https://github.com/abd-ulbasit/upgradescope/releases), verify, extract | v0.1.1 (signed from v0.2.0) |
 | Homebrew | `brew install abd-ulbasit/tap/upgradescope` | v0.2.0 |
 | deb / rpm / apk | the packages attached to the release | v0.2.0 |
-| krew | `kubectl krew install upgradescope` | once the plugin is in krew-index |
+| krew | not available: krew-index declined the plugin on 2026-10-13 ([#6411](https://github.com/kubernetes-sigs/krew-index/pull/6411)); use Homebrew or a release archive | — |
 | Go | `go install github.com/abd-ulbasit/upgradescope/cmd/upgradescope@<version>` | any |
 | Container image | `ghcr.io/abd-ulbasit/upgradescope:<version>` (linux/amd64, linux/arm64) | v0.2.0, signed |
 | Helm chart | `oci://ghcr.io/abd-ulbasit/charts/upgradescope`, also on [Artifact Hub](https://artifacthub.io/packages/helm/upgradescope/upgradescope) | v0.2.0, signed |

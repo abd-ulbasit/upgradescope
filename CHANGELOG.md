@@ -13,6 +13,12 @@ only through a new release.
 
 ## [Unreleased]
 
+### Project
+
+- upgradescope is in maintenance mode: the weekly data refresh, fixes and
+  Kubernetes 1.38 data continue; the v0.4.0 features are on hold until users
+  ask for them (ROADMAP.md, #426). krew-index declined the plugin (#75).
+
 ### Added
 
 - A reproducible survey of the 50 most-starred Helm charts on Artifact Hub

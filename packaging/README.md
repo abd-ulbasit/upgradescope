@@ -12,7 +12,7 @@ workflow can do.
 | Image `ghcr.io/abd-ulbasit/upgradescope` (licenses in `/licenses/`) | GoReleaser `dockers_v2` | cosign on the index and every platform image, SBOM and provenance attestations |
 | Helm chart `oci://ghcr.io/abd-ulbasit/charts/upgradescope` (image pinned by digest) | release.yml `chart` job | cosign |
 | Homebrew `abd-ulbasit/tap/upgradescope` | the tap's own workflow ([homebrew-tap/](homebrew-tap/)) | the tap verifies `checksums.txt` with cosign before rendering |
-| krew `kubectl upgradescope` | release.yml `krew` job (krew-release-bot, from [`.krew.yaml`](../.krew.yaml)) | krew-index CI |
+| krew `kubectl upgradescope` (declined by krew-index on 2026-10-13, not published) | release.yml `krew` job (krew-release-bot, from [`.krew.yaml`](../.krew.yaml)), gated off | krew-index CI |
 | Artifact Hub listing of the chart | release.yml pushes [artifacthub/artifacthub-repo.yml](artifacthub/artifacthub-repo.yml) | Artifact Hub |
 | `go install …/cmd/upgradescope@vX.Y.Z` | the Go module proxy | ci.yml `build` job (`make go-install-check`) |
 
@@ -62,6 +62,12 @@ The tap holds no upgradescope secret, and upgradescope holds no tap
 secret. The tap pulls and verifies.
 
 ### krew
+
+krew-index declined the plugin on 2026-10-13 as overlapping with an existing
+plugin ([kubernetes-sigs/krew-index#6411](https://github.com/kubernetes-sigs/krew-index/pull/6411)). The
+`.krew.yaml` template, its test and release.yml's krew job stay, gated on
+`KREW_PLUGIN_IN_INDEX`, which stays unset. The steps below are how the
+submission was made.
 
 krew-release-bot only *updates* plugins that are already in krew-index, so
 the first submission is a manual pull request:
