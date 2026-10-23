@@ -64,7 +64,7 @@ another release's `checksums.txt` (an older one with a known flaw, say)
 would verify as this one.
 
 Each archive also has an SPDX SBOM (`<archive>.sbom.json`) and a GitHub
-build-provenance attestation. Verify it with gh 2.68 or later, naming the
+build-provenance attestation. Verify it with gh 2.102 or later, naming the
 workflow and the tag (what the GitHub Action checks before it installs):
 
 ```sh
@@ -75,7 +75,15 @@ gh attestation verify upgradescope_linux_amd64.tar.gz --repo abd-ulbasit/upgrade
 
 `--repo` alone accepts an attestation made by any workflow of the
 repository, on any branch; `--signer-workflow` and `--source-ref` limit it to
-the release workflow run for this tag.
+the release workflow run for this tag. They do so exactly from gh 2.102.0
+on. Older versions accept more: `--signer-workflow` matches only the start
+of the signing workflow's path (and, before 2.97.0, as an unescaped regular
+expression), and `--source-ref` ignores case
+([GHSA-wjmr-j3rp-mh2g](https://github.com/cli/cli/security/advisories/GHSA-wjmr-j3rp-mh2g),
+[GHSA-4mq3-hpgx-9cx8](https://github.com/cli/cli/security/advisories/GHSA-4mq3-hpgx-9cx8)).
+With one of those, an attestation from another workflow of this repository
+whose path begins with `release.yml`, or from a tag that differs only in
+case, would pass.
 
 The deb, rpm and apk packages are covered by the same `checksums.txt`, under
 the names GitHub serves them with, so download them by those names and the
@@ -136,7 +144,8 @@ a pattern over every tag would accept another release's image under this
 tag.
 
 Releases after v0.3.0 also attach a build-provenance attestation to the
-image index in the registry. Verify it with gh 2.68 or later:
+image index in the registry. Verify it with gh 2.102 or later (older
+versions check `--signer-workflow` and `--source-ref` loosely, as above):
 
 ```sh
 gh attestation verify "oci://ghcr.io/abd-ulbasit/upgradescope:${VERSION#v}" --bundle-from-oci \

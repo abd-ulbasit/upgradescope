@@ -86,6 +86,29 @@ for v in "0.2.0 ''" "0.2.0-rc.2 rc.2"; do
 done
 check "no template action is left unrendered" 0.2.0 "" lacks '{{'
 
+# The gh the release docs ask for: 2.102 and nothing older. Before 2.102.0,
+# gh attestation verify matched --signer-workflow only as a prefix of the
+# signing workflow's path (before 2.97.0 as an unescaped regexp) and
+# --source-ref ignoring case (cli/cli GHSA-wjmr-j3rp-mh2g,
+# GHSA-4mq3-hpgx-9cx8), so the commands would accept more than they claim.
+# The footer, install.md and the ledger's IR-28 name the same minimum. (The
+# Action's own gh_min, a capability check, is hack/action_test.sh's.)
+check "the footer names gh 2.102 as the provenance minimum" 0.2.0 "" has 'Build provenance (gh 2.102 or later)'
+check "the footer says why an older gh is not enough" 0.2.0 "" has '`--signer-workflow` as a prefix'
+for src in footer docs/operations/install.md IR-28; do
+  case $src in
+    footer) text=$(<"$work/footer.tmpl") ;;
+    IR-28) text=$(grep -E '^\| IR-28 ' docs/claims.md || true) ;;
+    *) text=$(<"$src") ;;
+  esac
+  found=$(grep -oE 'gh 2\.[0-9]+' <<<"$text" | sort -u | tr '\n' ',' || true)
+  if [ "$found" = "gh 2.102," ]; then
+    echo "ok   $src names gh 2.102 for gh attestation verify, and no other gh" | tee -a "$work/results"
+  else
+    echo "FAIL $src names gh versions '${found:-none}', want exactly 'gh 2.102'" | tee -a "$work/results" >&2
+  fi
+done
+
 # The header (#388): the notes list only the type!: commits under Breaking
 # changes, so they link the CHANGELOG at the tag, the reviewed record.
 for v in "0.2.1 ''" "0.3.0-rc.1 rc.1"; do

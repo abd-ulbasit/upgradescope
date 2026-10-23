@@ -358,7 +358,7 @@ release:
 
     Each platform image is signed too and verifies on its own: `cosign verify ghcr.io/abd-ulbasit/upgradescope@<platform digest>` with the same flags (and the chart: `cosign verify ghcr.io/abd-ulbasit/charts/upgradescope:{{ .Version }}`). Each archive has an SPDX SBOM (`<archive>.sbom.json`); archives, packages and the image carry LICENSE, NOTICE and THIRD_PARTY_NOTICES (in the image under `/licenses/`).
 
-    Build provenance (gh 2.68 or later), for an archive or package and for the image. `--signer-workflow` and `--source-ref` are what tie the attestation to this release: without them, an attestation made by any workflow of the repository, on any branch, would pass.
+    Build provenance (gh 2.102 or later), for an archive or package and for the image. `--signer-workflow` and `--source-ref` are what tie the attestation to this release: without them, an attestation made by any workflow of the repository, on any branch, would pass. Older gh checks both loosely (`--signer-workflow` as a prefix of the workflow's path, `--source-ref` ignoring case), so use 2.102 or later.
 
     ```sh
     gh attestation verify upgradescope_linux_amd64.tar.gz --repo abd-ulbasit/upgradescope \
