@@ -58,6 +58,15 @@ brew style Formula/upgradescope.rb
 Edit `formula.rb.tmpl`, never `Formula/upgradescope.rb`. The next run
 overwrites the formula.
 
+### This repository and upgradescope's copy of it
+
+upgradescope keeps a copy of these files in its `packaging/homebrew-tap/`,
+where its CI tests the scripts and the template. This repository is the
+one that runs, and Dependabot bumps the action pins here only, so the
+copy's pins can lag. Port a change to the scripts or the template in both
+repositories, file by file; never push upgradescope's whole directory over
+this one, which would undo the bumps.
+
 ### Before the first signed release
 
 The tap starts with no formula: `Formula/upgradescope.rb` does not exist

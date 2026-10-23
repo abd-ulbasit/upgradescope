@@ -82,6 +82,18 @@ first run creates `Formula/upgradescope.rb`.
    verifies the latest signed release and commits the formula. After that
    it runs every 6 hours.
 
+After that first push, the tap repository owns its files, and
+[`homebrew-tap/`](homebrew-tap/) here is a copy that `make hack-test`
+tests (the scripts and the template). Dependabot bumps the tap's action
+pins in the tap repository only: upgradescope's own Dependabot does not
+read `packaging/homebrew-tap/.github/`, and GitHub ignores a
+`dependabot.yml` outside the repository root's `.github/`. So the pins
+here lag the tap's, on purpose. To change the tap, make the same change
+in both repositories file by file, and never push this whole directory
+over the tap again, which would undo Dependabot's bumps. To see how the
+two differ: `git diff --no-index packaging/homebrew-tap <tap checkout>`
+(the tap also has `Formula/` and `LICENSE`).
+
 The tap holds no upgradescope secret, and upgradescope holds no tap
 secret. The tap pulls and verifies.
 
