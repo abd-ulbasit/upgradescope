@@ -7,8 +7,8 @@ so that the rulesets are reviewed like code and can be re-applied, and
 | File | State | Ruleset id |
 |---|---|---|
 | `release-tags.json` | applied (2026-10-11) | 24349764 |
-| `main.json` | applied (2026-10-11); the `ci-ok` pin (`integration_id` 15368) awaits a re-apply with the PUT below | 24343445 |
-| `release-tag-creation.json` | not yet applied: create it with the POST below | none yet |
+| `main.json` | applied (2026-10-11); the `ci-ok` pin (`integration_id` 15368) awaits a re-apply with the PUT below, before the pull request that adds it merges | 24343445 |
+| `release-tag-creation.json` | not yet applied: create it with the POST below, before the pull request that adds it merges | none yet |
 | `major-tag.json` | not applied (see below) | none |
 
 Updating or checking one needs the GitHub API. Writing needs admin on the
@@ -60,10 +60,17 @@ After an intended change in the UI, copy the new state into the file in the
 same pull request: `gh api repos/abd-ulbasit/upgradescope/rulesets/<id>`,
 without the `id`, `node_id`, `source*`, `created_at`, `updated_at`,
 `current_user_can_bypass` and `_links` fields, formatted like the files here.
-After a change to a file, apply it with the PUT above. Until then the
-check fails on that pull request and on every one after it, which is the
-point; so apply a file change right after it merges, or just before, with
-the pull request's check re-run.
+After a change to a file, apply it with the PUT above (or the POST, for a
+new file). Until then the check fails on that pull request and on every one
+after it, which is the point. Because the check runs in `repo-checks`,
+which `ci-ok` needs, and `ci-ok` is required on `main`, such a pull request
+cannot merge without the admin bypass until the change is applied. So:
+apply the file just before merging, re-run the pull request's failed
+checks, and merge. Between the apply and the merge, `main`'s own run (and
+any other open pull request) still compares the old file and fails; a
+re-run after the merge, or a rebase, clears it. Check first that the new
+ruleset blocks nothing the merge needs (a required check that is not
+produced, a tag rule a workflow trips).
 
 ## `release-tags.json`: release tags are immutable
 
