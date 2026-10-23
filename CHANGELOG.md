@@ -54,6 +54,14 @@ only through a new release.
   attestation of its own, pushed to GHCR beside it
   (`gh attestation verify oci://ghcr.io/abd-ulbasit/upgradescope:<version>
   --bundle-from-oci ...`), from the next release.
+- The release notes, the Install page and the chart README verify
+  signatures against the exact release tag
+  (`--certificate-identity .../release.yml@refs/tags/vX.Y.Z`) instead of a
+  pattern over every tag, which accepted another release's signed
+  `checksums.txt`, image or chart, and show `gh attestation verify` with
+  `--signer-workflow` and `--source-ref` (as the Action runs it) instead of
+  `--repo` alone, which accepts an attestation from any workflow of the
+  repository.
 
 ## [0.3.0] - 2026-10-12
 

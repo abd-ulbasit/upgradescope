@@ -593,7 +593,9 @@ jobs:
         run: |
           got="$(cosign version 2>&1 | awk '/^GitVersion:/ { print $2 }')"
           [ "$got" = v2.6.3 ] || { echo "::error::cosign is '$got', want v2.6.3"; exit 1; }
-          flags=(--certificate-identity-regexp '^https://github.com/abd-ulbasit/upgradescope/\.github/workflows/release\.yml@refs/tags/'
+          # install.md's exact identity: its $VERSION is the tag, this $VERSION
+          # the version without its v.
+          flags=(--certificate-identity "https://github.com/abd-ulbasit/upgradescope/.github/workflows/release.yml@refs/tags/v$VERSION"
             --certificate-oidc-issuer https://token.actions.githubusercontent.com)
           cosign verify "$IMAGE:$VERSION" "${flags[@]}" >/dev/null
           for d in $(docker buildx imagetools inspect "$IMAGE:$VERSION" --format '{{json .Manifest}}' \

@@ -70,6 +70,19 @@ for v in "0.2.0 ''" "0.2.0-rc.2 rc.2"; do
   check "the footer ($1) shows the chart cosign verify command" "$1" "$pre" has "cosign verify ghcr.io/abd-ulbasit/charts/upgradescope:$1"
   check "the footer ($1) keeps verify-blob for checksums.txt" "$1" "$pre" has 'cosign verify-blob checksums.txt --bundle checksums.txt.sigstore.json'
   check "the footer ($1) says verify-blob works on older cosign" "$1" "$pre" has 'verify-blob` of `checksums.txt` works from cosign 2.4.3'
+  # The exact identity of this tag, never a pattern over every tag: one would
+  # accept another release's signed checksums.txt or image (a rollback or a
+  # swap between releases).
+  check "the footer ($1) verifies against this tag's exact identity" "$1" "$pre" has \
+    "--certificate-identity 'https://github.com/abd-ulbasit/upgradescope/.github/workflows/release.yml@refs/tags/v$1'"
+  check "the footer ($1) offers no identity regexp" "$1" "$pre" lacks 'identity-regexp'
+  # Build provenance: an attestation from any workflow of the repository
+  # passes without --signer-workflow and --source-ref.
+  check "the footer ($1) pins gh attestation verify to release.yml" "$1" "$pre" has \
+    '--signer-workflow abd-ulbasit/upgradescope/.github/workflows/release.yml'
+  check "the footer ($1) pins gh attestation verify to this tag" "$1" "$pre" has "--source-ref refs/tags/v$1 --deny-self-hosted-runners"
+  check "the footer ($1) verifies the image's provenance from the registry" "$1" "$pre" has \
+    "gh attestation verify oci://ghcr.io/abd-ulbasit/upgradescope:$1 --bundle-from-oci"
 done
 check "no template action is left unrendered" 0.2.0 "" lacks '{{'
 

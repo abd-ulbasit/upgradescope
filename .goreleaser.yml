@@ -343,17 +343,29 @@ release:
 
     ## Verify
 
-    Archives, the image and the chart are signed keylessly by this repository's release workflow. Verifying the image or the chart needs **cosign 3.x, or 2.6.3 or later** (older versions fail with `no signatures found`); `cosign verify-blob` of `checksums.txt` works from cosign 2.4.3.
+    Archives, the image and the chart are signed keylessly by this repository's release workflow at this release's tag. Verifying the image or the chart needs **cosign 3.x, or 2.6.3 or later** (older versions fail with `no signatures found`); `cosign verify-blob` of `checksums.txt` works from cosign 2.4.3. The identity below names this tag exactly: a pattern that accepts any tag would also accept another release's signed `checksums.txt` or image, so an older release could be passed off as this one.
 
     ```sh
     cosign verify-blob checksums.txt --bundle checksums.txt.sigstore.json \
-      --certificate-identity-regexp '^https://github.com/abd-ulbasit/upgradescope/\.github/workflows/release\.yml@refs/tags/' \
+      --certificate-identity 'https://github.com/abd-ulbasit/upgradescope/.github/workflows/release.yml@refs/tags/{{ .Tag }}' \
       --certificate-oidc-issuer https://token.actions.githubusercontent.com
     sha256sum --ignore-missing -c checksums.txt
 
     cosign verify ghcr.io/abd-ulbasit/upgradescope:{{ .Version }} \
-      --certificate-identity-regexp '^https://github.com/abd-ulbasit/upgradescope/\.github/workflows/release\.yml@refs/tags/' \
+      --certificate-identity 'https://github.com/abd-ulbasit/upgradescope/.github/workflows/release.yml@refs/tags/{{ .Tag }}' \
       --certificate-oidc-issuer https://token.actions.githubusercontent.com
     ```
 
     Each platform image is signed too and verifies on its own: `cosign verify ghcr.io/abd-ulbasit/upgradescope@<platform digest>` with the same flags (and the chart: `cosign verify ghcr.io/abd-ulbasit/charts/upgradescope:{{ .Version }}`). Each archive has an SPDX SBOM (`<archive>.sbom.json`); archives, packages and the image carry LICENSE, NOTICE and THIRD_PARTY_NOTICES (in the image under `/licenses/`).
+
+    Build provenance (gh 2.68 or later), for an archive or package and for the image. `--signer-workflow` and `--source-ref` are what tie the attestation to this release: without them, an attestation made by any workflow of the repository, on any branch, would pass.
+
+    ```sh
+    gh attestation verify upgradescope_linux_amd64.tar.gz --repo abd-ulbasit/upgradescope \
+      --signer-workflow abd-ulbasit/upgradescope/.github/workflows/release.yml \
+      --source-ref refs/tags/{{ .Tag }} --deny-self-hosted-runners
+    gh attestation verify oci://ghcr.io/abd-ulbasit/upgradescope:{{ .Version }} --bundle-from-oci \
+      --repo abd-ulbasit/upgradescope \
+      --signer-workflow abd-ulbasit/upgradescope/.github/workflows/release.yml \
+      --source-ref refs/tags/{{ .Tag }} --deny-self-hosted-runners
+    ```
