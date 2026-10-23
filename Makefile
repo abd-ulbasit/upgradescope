@@ -142,6 +142,15 @@ vuln-latest:
 image-scan:
 	./hack/image-scan.sh $(RELEASE_TAG)
 
+# No credentials in the files git would commit (gitleaks, pinned and
+# sha256-verified; .gitleaks.toml allowlists fake test fixtures by value).
+# CI's repo-checks job runs it first. `./hack/secret-scan.sh --history`
+# scans every commit of a full clone instead. Needs jq and, the first time,
+# network (it installs gitleaks into bin/tools).
+.PHONY: secret-scan
+secret-scan:
+	./hack/secret-scan.sh
+
 # Offline tests for the gate itself: a stub scanner drives hack/vulncheck.sh
 # through its pass, fail and fail-closed paths.
 vuln-test:
@@ -432,6 +441,7 @@ hack-test:
 	./hack/vuln-latest-release_test.sh
 	./hack/vuln-latest-release-workflow_test.sh
 	./hack/image-scan_test.sh
+	./hack/secret-scan_test.sh
 	./hack/release-artifacthub-workflow_test.sh
 	./hack/docs-live-check_test.sh
 	./hack/docs-live-workflow_test.sh

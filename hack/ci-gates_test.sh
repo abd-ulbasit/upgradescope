@@ -170,6 +170,9 @@ inert=(
   # verify job and daily; no gated job runs it
   'hack/image-scan.sh'
   'hack/grype.yaml'
+  # the secret scan and its allowlist: repo-checks (not gated) runs it
+  'hack/secret-scan.sh'
+  '.gitleaks.toml'
   'hack/kb-derived.sh'
   'hack/notices.sh'
   'hack/release-*.sh'

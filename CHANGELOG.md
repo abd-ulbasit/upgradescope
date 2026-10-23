@@ -73,6 +73,9 @@ only through a new release.
   (`make image-scan`), failing on a fixable high or critical finding:
   the distroless base's OS packages and unreachable modules are what
   govulncheck cannot see. v0.3.0 scans clean.
+- CI scans every pull request and push for committed credentials with
+  gitleaks (`make secret-scan`); a scan of the whole history found only
+  two fake test fixtures, which `.gitleaks.toml` allowlists by value.
 
 ## [0.3.0] - 2026-10-12
 

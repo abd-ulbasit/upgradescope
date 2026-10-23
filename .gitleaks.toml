@@ -1,0 +1,18 @@
+# gitleaks configuration for hack/secret-scan.sh (make secret-scan; CI's
+# repo-checks job on every pull request and push). gitleaks' default rules,
+# plus an allowlist of the test fixtures that look like credentials on
+# purpose. Each entry names the fake value itself, not a file, so a real
+# secret added next to a fixture is still found. Add one only for a value
+# that is fake by construction, with the file it lives in.
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "test fixtures: fake tokens"
+regexTarget = "match"
+regexes = [
+  # base64("test-token"), the chart's rendered ingest token in hack/test-chart.sh
+  '''dGVzdC10b2tlbg==''',
+  # a counting hex pattern, the read token in internal/server/store's tests
+  '''abcdef0123456789abcdef0123456789''',
+]
