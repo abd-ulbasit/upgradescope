@@ -4,8 +4,12 @@
 #   - npm ci (the lockfile, exactly);
 #   - unit tests (vitest);
 #   - npm run build = typecheck (tsc --noEmit) + vite build into web/dist;
-#   - no high or critical advisory in production dependencies (dev-only
-#     tooling never reaches the embedded bundle);
+#   - no moderate or worse advisory in production dependencies (they are
+#     the embedded bundle), and no high or critical one in any dependency,
+#     dev ones included: vite, typescript and their plugins write the
+#     bundle that ships inside the binary, so a compromised or vulnerable
+#     build tool is a supply-chain risk to it even though none of its own
+#     code is shipped;
 #   - the committed go:embed copy (internal/server/webdist) is byte-identical
 #     to the fresh build: `go install` users get that copy, so a stale one
 #     ships an old dashboard. Fix with `make web` and commit the result.
@@ -20,7 +24,8 @@ echo "== node $(node --version), npm $(npm --version)"
   npm ci --no-fund --no-audit
   npm test
   npm run build
-  npm audit --omit=dev --audit-level=high
+  npm audit --omit=dev --audit-level=moderate
+  npm audit --audit-level=high
 )
 
 echo "== internal/server/webdist matches the fresh build"

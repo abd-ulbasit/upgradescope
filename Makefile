@@ -29,8 +29,9 @@ web:
 	find internal/server/webdist -mindepth 1 -type d -empty -delete
 	cp -R web/dist/. internal/server/webdist/
 
-# The CI dashboard gate: npm ci, vitest, typecheck + vite build, production
-# dependency advisories, and the committed webdist equals the fresh build.
+# The CI dashboard gate: npm ci, vitest, typecheck + vite build, advisories
+# (moderate and up in production dependencies, high and up in every one, the
+# build toolchain included), and the committed webdist equals the fresh build.
 # Read-only outside web/. Needs Node (CI runs it on Node 22 and 24).
 .PHONY: web-test
 web-test:
