@@ -34,6 +34,11 @@ only through a new release.
 
 ### Security
 
+- Built with Go 1.26.10 (`go.mod` requires Go 1.26.10, and the Dockerfile
+  pins the `golang:1.26.10` image by digest). This fixes GO-2026-6809, the
+  `crypto/x509` advisory (compromised intermediate certificates are now
+  distrusted) that `govulncheck` reported as reachable against Go 1.26.9;
+  `make vuln` passes with an empty allowlist.
 - The Homebrew tap refuses a release older than the version its formula
   ships, so GitHub's Latest moved back no longer downgrades `brew upgrade`
   (a deliberate rollback is a manual run with `allow-downgrade`), and it
