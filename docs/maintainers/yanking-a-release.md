@@ -59,10 +59,62 @@ them). A compromised one must not be downloadable:
 - delete every asset of `$BAD` (archives, packages, SBOMs, `checksums.txt`,
   its bundle) with `gh release delete-asset`, keeping the release page and
   its warning: the tag cannot be deleted, and the page is where users land;
-- delete the image versions `${BAD#v}` and `$BAD` and the chart version
-  `${BAD#v}` in the GHCR package settings (Packages → upgradescope and
-  charts/upgradescope → versions), so pulls by tag and by digest fail;
-  Artifact Hub drops the chart version on its next scan.
+- delete every GHCR package version that belongs to `$BAD`'s image and
+  chart, below, so pulls by tag and by digest fail; Artifact Hub drops the
+  chart version on its next scan.
+
+The image tags `${BAD#v}` and `$BAD` name one index, which is a single
+package version. Its platform images (what a node pulls, by digest),
+BuildKit's attestation manifests, and the signatures and attestations
+stored beside each of them (under a tag `sha256-<digest>` whose index lists
+more untagged versions) are separate versions. Deleting only the tagged one
+leaves every platform image pullable by its digest. For v0.3.0 the image is
+25 versions and the chart 3. Do this after step 1.3 has moved `:latest` off
+`$BAD`, with the owner's `gh` allowed to read and delete packages
+(`gh auth refresh -s read:packages,delete:packages`):
+
+    oras="$(hack/install-tool.sh oras)"
+    # collect <repository> <tag>: every manifest digest of that tag: its own,
+    # its children when it is an index, and for each of those the referrers
+    # index under sha256-<hex> and what that lists.
+    collect() {
+      local top d ref
+      top=$("$oras" resolve "${1}:${2}") || return 1
+      for d in "$top" $("$oras" manifest fetch "${1}@${top}" | jq -r '.manifests[]?.digest'); do
+        echo "$d"
+        ref=$("$oras" manifest fetch "${1}:sha256-${d#sha256:}" 2>/dev/null) || continue
+        "$oras" resolve "${1}:sha256-${d#sha256:}"
+        jq -r '.manifests[]?.digest' <<<"$ref"
+      done | sort -u
+    }
+    collect ghcr.io/abd-ulbasit/upgradescope "${BAD#v}" >bad-image.txt
+    collect ghcr.io/abd-ulbasit/upgradescope "${GOOD#v}" >good-image.txt
+    comm -12 bad-image.txt good-image.txt   # must print nothing: $GOOD keeps all of its own
+    collect ghcr.io/abd-ulbasit/charts/upgradescope "${BAD#v}" >bad-chart.txt
+
+    # delete <package, / as %2F> <digests>: the package version named by each digest.
+    delete() {
+      gh api --paginate "users/abd-ulbasit/packages/container/${1}/versions?per_page=100" \
+        --jq '.[] | "\(.name) \(.id)"' | sort >"versions-${1}.txt"
+      join "$2" "versions-${1}.txt" >"delete-${1}.txt"
+      if [ "$(wc -l <"delete-${1}.txt")" != "$(wc -l <"$2")" ]; then
+        echo "not every digest in $2 is a version of ${1}: stop and look"; return 1
+      fi
+      cut -d' ' -f2 "delete-${1}.txt" | while read -r id; do
+        gh api -X DELETE "user/packages/container/${1}/versions/${id}"
+      done
+    }
+    delete upgradescope bad-image.txt
+    delete charts%2Fupgradescope bad-chart.txt
+
+Then check, logged out of ghcr.io (`docker logout ghcr.io`), that nothing
+is left: for each line of `bad-image.txt`,
+`"$oras" manifest fetch "ghcr.io/abd-ulbasit/upgradescope@<digest>"` must
+fail, and the same for `bad-chart.txt` under
+`ghcr.io/abd-ulbasit/charts/upgradescope`. GitHub can restore a deleted
+package version for 30 days (the package's settings), so keep
+`bad-image.txt`, `bad-chart.txt` and the `delete-*.txt` files (each
+digest with its version id) with the incident notes.
 
 The signatures and attestations stay valid forever for what they signed,
 and a verifier pinned to `release.yml@refs/tags/$BAD` still accepts them.
