@@ -104,7 +104,10 @@ The hardened settings are therefore `rbac.helmSecrets=false` (no Secret or
 ConfigMap read at all; Helm chart findings go missing), or
 `rbac.helmSecretsNamespaces` listing only the namespaces that hold add-on
 releases. Keep the default only where reading every Secret is acceptable for
-a read-only scanner's token.
+a read-only scanner's token. The chart has no egress NetworkPolicy for the
+agent, so nothing limits where a compromised agent could send what it
+reads. [A design note](../design/agent-secret-access.md) proposes making
+`false` the default in the next minor release and adding that policy.
 
 `rbac.create=false` lets you bind a role of your own; each collector that
 lacks access degrades to "not assessed" with the reason.
