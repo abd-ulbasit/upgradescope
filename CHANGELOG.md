@@ -62,6 +62,12 @@ only through a new release.
   `--signer-workflow` and `--source-ref` (as the Action runs it) instead of
   `--repo` alone, which accepts an attestation from any workflow of the
   repository.
+- The chart's values reference and the security model page say that a
+  token, webhook URL or key passed as a chart value (and the ingest token
+  the chart generates) is stored in every Helm release revision Secret,
+  where it outlives a rotation and is readable by anyone who can read
+  Secrets in the namespace; `server.existingSecret` and
+  `agent.existingSecret` keep secret values out of Helm.
 
 ## [0.3.0] - 2026-10-12
 

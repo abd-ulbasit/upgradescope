@@ -174,7 +174,9 @@ agent:
   serverToken: ""
   # -- Name of an existing Secret with key "serverToken" (preferred over an
   # inline token for anything beyond dev). Mounted as a file, re-read on
-  # change: see serverToken.
+  # change: see serverToken. An inline serverToken is also stored in every
+  # Helm release revision, where it outlives a rotation (see
+  # server.existingSecret).
   existingSecret: ""
   # -- Port of the agent's /healthz (liveness), /readyz (a tick succeeded
   # within two intervals) and /metrics (Prometheus) listener, named "http"
@@ -359,6 +361,15 @@ server:
   # the other rotations in that Secret stop arriving until the key is back.
   # Rotate the value instead. Emptying a key, or deleting another optional
   # one, keeps the old value.
+  # Prefer it beyond a test install. Without it, the chart renders its own
+  # Secret, and Helm stores every rendered manifest and every value in the
+  # release record: a Secret sh.helm.release.v1.<release>.v<N> per revision
+  # in the release namespace. A token, webhook URL or key set here, or the
+  # ingest token the chart generates, is then readable from that record by
+  # anyone who can get Secrets in the namespace (this chart's agent too,
+  # with rbac.helmSecrets), and an old value stays in the earlier revisions
+  # after a rotation, up to `helm upgrade --history-max` of them (10 by
+  # default). With existingSecret no secret value passes through Helm.
   existingSecret: ""
   # -- With existingSecret: protect the read API with its readToken key.
   readTokenFromSecret: false

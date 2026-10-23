@@ -258,6 +258,21 @@ and the releases apart.
   URL as an environment variable, never as arguments. Either source is
   trimmed of surrounding whitespace (a Secret's trailing newline), and a
   value of whitespace only is refused.
+- **Values passed to Helm stay in Helm's history.** Helm stores each
+  release revision, the values you set and every rendered manifest, in a
+  Secret `sh.helm.release.v1.<release>.v<N>` in the release namespace. A
+  token, webhook URL or webhook key set as a chart value
+  (`server.ingestToken`, `readToken`, `adminToken`, `slackWebhook`,
+  `webhook`, `webhookSecret`, `agent.serverToken`), and the ingest token the
+  chart generates when none is set, is readable there by anyone who can
+  `get` Secrets in that namespace, the agent included when
+  `rbac.helmSecrets` covers it. Rotating the value leaves the old one in the
+  earlier revisions, up to `helm upgrade --history-max` of them (10 by
+  default). Outside a test install, create the Secrets yourself and name
+  them with `server.existingSecret` and `agent.existingSecret`: then no
+  secret value passes through Helm. After a token leaked through a value,
+  revoke it at its source (`tokens revoke`, a new Slack webhook), since
+  rotating it in the chart does not clear the history.
 - **Webhook URLs are secrets too.** A Slack webhook's path is its
   credential. `serve` refuses to start unless `--slack-webhook` and
   `--webhook` are absolute http(s) URLs, naming the flag and never the
