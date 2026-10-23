@@ -185,6 +185,7 @@ jobs:
     permissions:
       contents: read
       issues: read # ci.yml's repo-checks job declares it: its hack/claims-trackers.sh step reads the claims ledger's tracker issues
+      actions: read # ci.yml's repo-checks job declares it: its hack/release-environment-live.sh step reads the release environment (skipped on a release)
       pull-requests: read # ci.yml's changes job declares it (skipped on tags)
       security-events: write # ci.yml's action job declares it; it uploads SARIF only on a dispatched fixture run, never on a tag
 
@@ -206,10 +207,15 @@ jobs:
   # in the repository settings, not here (Settings -> Environments ->
   # release: a required reviewer, and deployment tags limited to
   # v*.*.*), so this job waits for approval after ci passed, before
-  # anything is published. Every later job that publishes or signs needs
-  # this one, so one approval covers the release. It is a gate against a
-  # mistaken or unattended tag (an agent with a maintainer's token pushing
-  # one), not against a workflow file that drops it: the tagged commit's
+  # anything is published. GitHub creates an environment a job names with no
+  # protection on first use, so CI's repo-checks job fails on every pull
+  # request and push while it lacks either rule
+  # (hack/release-environment-live.sh). Every later job that publishes or
+  # signs needs this one, so one approval covers the release. It is a gate
+  # against a mistaken or unattended tag (an agent with a maintainer's token
+  # pushing one), not against a token that can also approve the deployment
+  # (the maintainer's own, through the API), nor against a workflow file
+  # that drops it: the tagged commit's
   # release.yml decides which jobs reference the environment, which is why
   # who may create release tags is restricted by a ruleset
   # (.github/rulesets/release-tag-creation.json) and the Homebrew tap

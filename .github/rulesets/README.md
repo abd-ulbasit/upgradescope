@@ -127,8 +127,12 @@ What it does not cover:
 - A token with the owner's rights (an AI agent's `gh auth`, a leaked
   personal access token) is the admin role and can still create a tag. The
   `release` environment's required reviewer (`release.yml`'s `goreleaser`
-  job) is the second gate for that case, as long as the tagged
-  `release.yml` keeps referencing it.
+  job) then holds the release until someone approves it, as long as the
+  tagged `release.yml` keeps referencing it. That stops a tag pushed by
+  mistake or by an unattended agent, but the reviewer is the owner, so the
+  same token can approve the deployment through the API: against a stolen
+  owner token, revoking it is the control. CI checks that the environment
+  keeps a required reviewer (`hack/release-environment-live.sh`).
 - It cannot make a tag's commit be on `main`. The Homebrew tap therefore
   checks that itself before it publishes a release: the signed workflow
   commit must be an ancestor of `main`

@@ -51,8 +51,23 @@ account action that a workflow cannot do.
    for it. GitHub creates it on first use with no protection, so set it up
    before the next tag: Settings -> Environments -> `release` -> Required
    reviewers (the maintainer), and Deployment branches and tags -> Selected
-   -> tag pattern `v*.*.*`. Every release then waits for one approval after
-   CI has passed.
+   -> tag pattern `v*.*.*`. Leave "Prevent self-review" off while one
+   maintainer both tags and approves, or no release can be approved. Every
+   release then waits for one approval after CI has passed. CI's
+   `hack/release-environment-live.sh` (`make release-environment-check`)
+   fails on every pull request and push until the environment has a
+   required reviewer and only that tag pattern. With the API instead of the
+   UI:
+
+   ```sh
+   uid=$(gh api users/abd-ulbasit --jq .id)
+   jq -n --argjson uid "$uid" '{reviewers: [{type: "User", id: $uid}],
+     deployment_branch_policy: {protected_branches: false, custom_branch_policies: true}}' |
+     gh api -X PUT repos/abd-ulbasit/upgradescope/environments/release --input -
+   gh api -X POST repos/abd-ulbasit/upgradescope/environments/release/deployment-branch-policies \
+     -f name='v*.*.*' -f type=tag
+   make release-environment-check
+   ```
 
 ### Homebrew tap
 

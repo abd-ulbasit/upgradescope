@@ -40,7 +40,10 @@ only through a new release.
   refuses a release whose tag is not on `main`, checking the signing
   certificate's commit too (`--certificate-github-workflow-sha`).
 - Releases wait for the `release` environment (a required reviewer, set in
-  the repository settings) before anything is published, only the
+  the repository settings) before anything is published, and CI fails on
+  every pull request and push while that environment is missing or has no
+  required reviewer (`make release-environment-check`), since GitHub would
+  create it unprotected on the first release; only the
   repository's admin role may create a release tag
   (`.github/rulesets/release-tag-creation.json`), and the `main` ruleset
   pins the required `ci-ok` check to the GitHub Actions app, so a commit

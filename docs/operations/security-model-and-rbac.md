@@ -386,7 +386,8 @@ workflow. A second job, which builds nothing, checks that the release's
 them and attests their provenance. Releases after v0.3.0 also carry a
 build-provenance attestation of the image in the registry. Publishing waits
 on the repository's `release` environment, whose required reviewer is a
-repository setting, and a ruleset kept in
+repository setting that CI checks on every pull request and push, and a
+ruleset kept in
 `.github/rulesets/release-tag-creation.json` lets only the repository's
 admin role create a release tag once it is applied.
 
@@ -407,4 +408,5 @@ gap each one leaves; the claims ledger's IR rows hold the tests behind them.
 | Dependabot | weekly | outdated actions, Go modules, npm packages and base images | tool versions pinned in `hack/` scripts, the kind node images and the BuildKit image, bumped by hand |
 | OpenSSF Scorecard (`scorecard.yml`) | pushes to `main`, and weekly | repository practices: pinning, token permissions, branch protection | code |
 | `hack/rulesets-live.sh` | every pull request and push | drift between `.github/rulesets/*.json` and the applied rulesets | `bypass_actors`, which the CI token cannot see |
+| `hack/release-environment-live.sh` | every pull request and push | a `release` environment that is missing, has no required reviewer, or deploys from more than the tags `v*.*.*` | who the reviewer is, and an approval given with a stolen maintainer token |
 | Release verification (release.yml's `verify` job) | every release | the image, every platform image and the chart verify with cosign against the exact tag, the image's provenance with `gh attestation verify`, and the published chart installs on kind | a release whose tagged `release.yml` was altered to skip it |

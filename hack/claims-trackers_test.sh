@@ -127,8 +127,10 @@ fi
 # and still runs on a pull request, a push to main and a dispatch on a
 # branch. Its `if`, evaluated with node (it uses only !, && and !=, which
 # JavaScript evaluates the same way; a missing input is null, as in Actions).
-# The same holds for the other online step of that job, which reads the live
-# rulesets (hack/rulesets-live.sh, IR-06 and IR-11), so both are evaluated.
+# The same holds for the other online steps of that job, which read the live
+# rulesets (hack/rulesets-live.sh, IR-06 and IR-11) and the release
+# environment (hack/release-environment-live.sh, IR-27), so all three are
+# evaluated.
 check_if() { # check_if <step name> <run line> <label>
   local step cond want ctx got
   step=$(awk -v name="$1" '/^  repo-checks:$/ { j = 1; next } j && /^  [a-z0-9_-]+:[ ]*$/ { j = 0 }
@@ -165,6 +167,7 @@ EOF
 }
 check_if "every tracker the claims ledger names is open" "hack/claims-trackers.sh" "claims-trackers"
 check_if "the live rulesets equal .github/rulesets" "hack/rulesets-live.sh" "rulesets-live"
+check_if "the release environment holds releases for a reviewer" "hack/release-environment-live.sh" "release-environment-live"
 
 pass=$(grep -c '^ok' "$work/results" || true)
 fail=$(grep -c '^FAIL' "$work/results" || true)

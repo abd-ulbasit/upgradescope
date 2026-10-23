@@ -389,6 +389,13 @@ claims-server: build
 rulesets-check:
 	./hack/rulesets-live.sh
 
+# The release environment holds every release for a reviewer and deploys only
+# tags v*.*.*. Online and read-only, like rulesets-check (CI's repo-checks job
+# passes github.token with actions: read).
+.PHONY: release-environment-check
+release-environment-check:
+	./hack/release-environment-live.sh
+
 # Offline self-tests of the hack/ scripts CI is built from (stubs and
 # fixtures only: no network, cluster or Docker).
 .PHONY: hack-test
@@ -396,6 +403,7 @@ hack-test:
 	./hack/claims-check_test.sh
 	./hack/claims-trackers_test.sh
 	./hack/rulesets-live_test.sh
+	./hack/release-environment-live_test.sh
 	./hack/shard_test.sh
 	./hack/test-heap_test.sh
 	./hack/test_test.sh
