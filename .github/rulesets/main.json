@@ -33,7 +33,7 @@
         "strict_required_status_checks_policy": false,
         "do_not_enforce_on_create": false,
         "required_status_checks": [
-          { "context": "ci-ok" },
+          { "context": "ci-ok", "integration_id": 15368 },
           { "context": "breaking-change", "integration_id": 15368 }
         ]
       }

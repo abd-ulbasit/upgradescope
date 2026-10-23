@@ -11,7 +11,8 @@
 # (metadata read, which the job's github.token has, and which works
 # anonymously on a public repository). It never changes a ruleset.
 #
-# The applied files are listed below, by name: major-tag.json is not applied
+# The applied files are listed below, by name (main.json, release-tags.json,
+# release-tag-creation.json): major-tag.json is not applied
 # (see .github/rulesets/README.md) and is never compared. For each file the
 # live ruleset of the same `name` must exist and equal it in `target`,
 # `enforcement`, `conditions` and `rules`. The rules are compared as a set
@@ -37,7 +38,7 @@ dir=${RULESETS_DIR:-.github/rulesets}
 repo=${RULESETS_REPO:-${GITHUB_REPOSITORY:-abd-ulbasit/upgradescope}}
 gh_cmd=${RULESETS_GH:-gh}
 sleep_s=${RULESETS_RETRY_SLEEP:-2}
-applied=(main.json release-tags.json)
+applied=(main.json release-tags.json release-tag-creation.json)
 
 command -v jq >/dev/null 2>&1 || { echo "rulesets-live: jq is not installed" >&2; exit 1; }
 command -v "$gh_cmd" >/dev/null 2>&1 || { echo "rulesets-live: gh is not installed, so the live rulesets cannot be read" >&2; exit 1; }

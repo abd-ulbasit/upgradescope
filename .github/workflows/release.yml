@@ -12,7 +12,9 @@ name: release
 #   ci         the whole ci.yml suite (workflow_call) at the tagged commit:
 #              unit/race, vuln gate, web, chart, images, Postgres, kind e2e,
 #              release-check. Nothing below runs unless it passed;
-#   goreleaser linux/darwin/windows amd64+arm64 archives (dashboard
+#   goreleaser after the `release` environment's protection rules pass
+#              (one approval releases; see the job): linux/darwin/windows
+#              amd64+arm64 archives (dashboard
 #              embedded, with completions, man pages and license notices),
 #              deb/rpm/apk packages, the published contracts (api/:
 #              report and webhook schemas, OpenAPI), checksums.txt over
@@ -179,10 +181,24 @@ jobs:
 
   # GoReleaser publishes the archives and the image together: the image
   # packages the exact linux binaries in the archives (Dockerfile.release).
+  #
+  # The `release` environment is the human gate. Its protection rules live
+  # in the repository settings, not here (Settings -> Environments ->
+  # release: a required reviewer, and deployment tags limited to
+  # v*.*.*), so this job waits for approval after ci passed, before
+  # anything is published. Every later job that publishes or signs needs
+  # this one, so one approval covers the release. It is a gate against a
+  # mistaken or unattended tag (an agent with a maintainer's token pushing
+  # one), not against a workflow file that drops it: the tagged commit's
+  # release.yml decides which jobs reference the environment, which is why
+  # who may create release tags is restricted by a ruleset
+  # (.github/rulesets/release-tag-creation.json) and the Homebrew tap
+  # checks the signed commit is on main.
   goreleaser:
     needs: [preflight, ci]
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    environment: release
     permissions:
       contents: write # the GitHub release and its assets
       packages: write # the GHCR image

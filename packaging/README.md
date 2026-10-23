@@ -40,10 +40,19 @@ account action that a workflow cannot do.
 2. **The rulesets** in [`.github/rulesets/`](../.github/rulesets/) are
    applied (2026-10-11): `release-tags.json` as ruleset 24349764 and
    `main.json` as ruleset 24343445, which requires `ci-ok` and
-   `breaking-change`. Nothing to do here; CI's `hack/rulesets-live.sh` checks
-   on every pull request and push that the live rulesets still equal the
-   files. After a change to a file, or an intended change in the UI, that
-   README has the update commands.
+   `breaking-change`. Two changes wait to be applied (that README has the
+   commands): `main.json` now pins `ci-ok` to the GitHub Actions app (PUT),
+   and `release-tag-creation.json` (POST), which lets only the admin role
+   create a release tag. CI's `hack/rulesets-live.sh` checks on every pull
+   request and push that the live rulesets still equal the files, and fails
+   until both are applied. After a change to a file, or an intended change
+   in the UI, that README has the update commands.
+3. **The `release` environment.** `release.yml`'s `goreleaser` job waits
+   for it. GitHub creates it on first use with no protection, so set it up
+   before the next tag: Settings -> Environments -> `release` -> Required
+   reviewers (the maintainer), and Deployment branches and tags -> Selected
+   -> tag pattern `v*.*.*`. Every release then waits for one approval after
+   CI has passed.
 
 ### Homebrew tap
 

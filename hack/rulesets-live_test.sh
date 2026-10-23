@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Tests for hack/rulesets-live.sh (make hack-test), with a fake `gh` first on
 # PATH that serves a "live" copy of the applied rulesets from a directory of
-# fixtures: the repository's own .github/rulesets/main.json and
-# release-tags.json, dressed as the API returns them (ids, timestamps, rules
+# fixtures: the repository's own .github/rulesets/main.json,
+# release-tags.json and release-tag-creation.json, dressed as the API returns them (ids, timestamps, rules
 # and checks in another order), then changed one way at a time. The check
 # passes when the live rulesets equal the files, and fails on a changed
 # include pattern, a missing ruleset, an extra or a missing rule, a required
@@ -70,6 +70,7 @@ fresh() {
   mkdir "$work/live"
   dress "$repo_dir/main.json" 111 >"$work/live/111.json"
   dress "$repo_dir/release-tags.json" 222 >"$work/live/222.json"
+  dress "$repo_dir/release-tag-creation.json" 444 >"$work/live/444.json"
   if [ "${1:-}" = -nobypass ]; then
     for f in "$work"/live/[0-9]*.json; do jq 'del(.bypass_actors)' "$f" >"$f.t" && mv "$f.t" "$f"; done
   fi
@@ -102,9 +103,9 @@ expect() {
 }
 
 fresh
-expect "equal rulesets pass (order and extra API fields do not matter)" 0 "2 rulesets match" 
+expect "equal rulesets pass (order and extra API fields do not matter)" 0 "3 rulesets match" 
 expect "the bypass actors were compared" 0 "bypass_actors compared"
-grep -q 'rulesets/111' "$work/ghlog" && grep -q 'rulesets/222' "$work/ghlog" &&
+grep -q 'rulesets/111' "$work/ghlog" && grep -q 'rulesets/222' "$work/ghlog" && grep -q 'rulesets/444' "$work/ghlog" &&
   echo "ok   each ruleset is read by id" | tee -a "$work/results" ||
   { echo "FAIL each ruleset is read by id: $(cat "$work/ghlog")" | tee -a "$work/results" >&2; }
 
@@ -113,7 +114,7 @@ grep -q 'rulesets/111' "$work/ghlog" && grep -q 'rulesets/222' "$work/ghlog" &&
 fresh
 edit 222 '.' # no-op
 jq '. + [{id: 333, name: "something else", target: "branch", enforcement: "active"}]' "$work/live/list.json" >"$work/live/l.t" && mv "$work/live/l.t" "$work/live/list.json"
-expect "an unrelated live ruleset is ignored" 0 "2 rulesets match"
+expect "an unrelated live ruleset is ignored" 0 "3 rulesets match"
 
 fresh -nobypass
 expect "bypass_actors absent from the live answer passes, with one line saying so" 0 "bypass_actors not compared"
@@ -166,12 +167,18 @@ fresh -nobypass
 edit 222 '.rules |= map(select(.type != "update"))'
 expect "a rule difference still fails with bypass_actors absent" 1 "release-tags.json: rules"
 fresh
+edit 444 '.bypass_actors = []'
+expect "release-tag-creation.json: a creation rule nobody may bypass (or anyone may) fails" 1 "release-tag-creation.json: bypass_actors"
+fresh
+edit 444 '.rules = []'
+expect "release-tag-creation.json without its creation rule fails" 1 "release-tag-creation.json: rules"
+fresh
 edit 222 '.rules += [{type: "creation"}]'
 expect "the failure shows a diff of the file against the live ruleset" 1 "creation"
 
 # The API: transient failures are retried twice; any other failure is closed.
 fresh
-expect "two transient API failures are retried" 0 "2 rulesets match" FAKE_FAIL_FIRST=2
+expect "two transient API failures are retried" 0 "3 rulesets match" FAKE_FAIL_FIRST=2
 fresh
 expect "three API failures in a row fail closed" 1 "could not read" FAKE_FAIL_FIRST=3
 fresh
@@ -209,7 +216,7 @@ fresh
 mkdir "$work/withmajor"
 cp "$repo_dir"/*.json "$work/withmajor/"
 echo 'not a ruleset' >"$work/withmajor/major-tag.json"
-expect "major-tag.json is not one of the applied files" 0 "2 rulesets match" RULESETS_DIR="$work/withmajor"
+expect "major-tag.json is not one of the applied files" 0 "3 rulesets match" RULESETS_DIR="$work/withmajor"
 
 # A file that cannot be read is an error, not a pass.
 fresh

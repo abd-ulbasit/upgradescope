@@ -39,6 +39,13 @@ only through a new release.
   (a deliberate rollback is a manual run with `allow-downgrade`), and it
   refuses a release whose tag is not on `main`, checking the signing
   certificate's commit too (`--certificate-github-workflow-sha`).
+- Releases wait for the `release` environment (a required reviewer, set in
+  the repository settings) before anything is published, only the
+  repository's admin role may create a release tag
+  (`.github/rulesets/release-tag-creation.json`), and the `main` ruleset
+  pins the required `ci-ok` check to the GitHub Actions app, so a commit
+  status of that name no longer satisfies it. The two ruleset changes take
+  effect once applied (`.github/rulesets/README.md`).
 
 ## [0.3.0] - 2026-10-12
 
