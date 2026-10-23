@@ -64,7 +64,10 @@ only through a new release.
   `checksums.txt`, image or chart, and show `gh attestation verify` with
   `--signer-workflow` and `--source-ref` (as the Action runs it) instead of
   `--repo` alone, which accepts an attestation from any workflow of the
-  repository.
+  repository. They ask for gh 2.102 or later: older gh matches
+  `--signer-workflow` only as a prefix and `--source-ref` ignoring case,
+  and the Action's README says what that means on a runner with an older
+  gh.
 - The chart's values reference and the security model page say that a
   token, webhook URL or key passed as a chart value (and the ingest token
   the chart generates) is stored in every Helm release revision Secret,
