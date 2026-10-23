@@ -389,3 +389,22 @@ on the repository's `release` environment, whose required reviewer is a
 repository setting, and a ruleset kept in
 `.github/rulesets/release-tag-creation.json` lets only the repository's
 admin role create a release tag once it is applied.
+
+### What each check catches, and what it misses
+
+No single check covers the supply chain. This is what runs, where, and the
+gap each one leaves; the claims ledger's IR rows hold the tests behind them.
+
+| Check | Runs | Catches | Misses |
+|---|---|---|---|
+| govulncheck, binary mode (`make vuln`, `hack/vuln-allowlist.txt`) | CI on code changes, `main`, weekly and every release; daily on the latest release's binary | Go advisories, standard library included, whose vulnerable code the linux/amd64 binary can reach; an accepted one needs a reason and an expiry | OS packages in the image, the dashboard's npm tree, CI tooling, and unreachable vulnerable code (by design) |
+| grype on the image and SBOMs (`make image-scan`, `hack/grype.yaml`) | every release (verify job) and daily | fixable high and critical CVEs in the distroless base's packages and in every module the published SBOMs list, reachable or not | anything before publishing (it scans what was pushed), unfixed CVEs, and findings below high |
+| npm audit (`make web-test`) | CI on every pull request and `main` | moderate and worse advisories in the dashboard's runtime dependencies, high and worse in all of them, the vite and TypeScript toolchain included | advisories published between pull requests (no scheduled run) and malicious packages that have no advisory |
+| npm audit of `hack/renovate` (`make renovate-audit`) | CI's vuln job, weekly | advisories in the CI-only Renovate validator | — |
+| CodeQL, security-extended (`codeql.yml`) | pull requests, `main`, weekly | taint flows in the Go code (request input into SQL, file paths, redirects, outbound requests, logs), DOM XSS in the dashboard, injection and permission problems in the workflows | authorization logic, and it does not block a merge (not part of `ci-ok`) |
+| go vet and staticcheck (`make lint`) | every pull request | bugs and API misuse | security flows |
+| gitleaks (`make secret-scan`, `.gitleaks.toml`) | every pull request and push | credentials, generic keys included, in the files a commit ships | secrets added and removed within a pull request's own commits (`--history` scans those by hand) |
+| Dependabot | weekly | outdated actions, Go modules, npm packages and base images | tool versions pinned in `hack/` scripts, the kind node images and the BuildKit image, bumped by hand |
+| OpenSSF Scorecard (`scorecard.yml`) | pushes to `main`, and weekly | repository practices: pinning, token permissions, branch protection | code |
+| `hack/rulesets-live.sh` | every pull request and push | drift between `.github/rulesets/*.json` and the applied rulesets | `bypass_actors`, which the CI token cannot see |
+| Release verification (release.yml's `verify` job) | every release | the image, every platform image and the chart verify with cosign against the exact tag, the image's provenance with `gh attestation verify`, and the published chart installs on kind | a release whose tagged `release.yml` was altered to skip it |
