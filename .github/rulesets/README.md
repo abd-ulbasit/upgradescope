@@ -88,7 +88,9 @@ same version (#127).
 What this means for maintainers:
 
 - A bad release is fixed forward with a new patch version. It is never
-  re-tagged.
+  re-tagged. Until the fix is out, `docs/maintainers/yanking-a-release.md`
+  says how to move Latest, `:latest`, `v0` and the Homebrew tap back, and,
+  for a compromised release, how to remove its artifacts.
 - Who may create a release tag is restricted by `release-tag-creation.json`
   (below), not by this ruleset. A mistyped tag that has not been released
   can only be removed by disabling this ruleset first, and that is visible
