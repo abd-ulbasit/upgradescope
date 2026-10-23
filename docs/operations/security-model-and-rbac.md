@@ -359,3 +359,15 @@ archives (through a signed `checksums.txt`), the image and the chart are
 signed keylessly with cosign, archives carry SBOMs and build provenance, and
 the GitHub Action installs only a release archive that matches its
 `checksums.txt` ([Install](install.md#verify-a-download)).
+
+Building and signing are separate jobs of the release workflow. The job
+that compiles the code and every dependency, and so would run a malicious
+one, holds no OIDC token: it cannot sign or attest anything as the release
+workflow. A second job, which builds nothing, checks that the release's
+`checksums.txt` and image are the ones the first job reported, then signs
+them and attests their provenance. Releases after v0.3.0 also carry a
+build-provenance attestation of the image in the registry. Publishing waits
+on the repository's `release` environment, whose required reviewer is a
+repository setting, and a ruleset kept in
+`.github/rulesets/release-tag-creation.json` lets only the repository's
+admin role create a release tag once it is applied.

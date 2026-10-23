@@ -1,10 +1,13 @@
 # GoReleaser config. Releases are cut by CI only: pushing a vX.Y.Z tag runs
-# .github/workflows/release.yml, which publishes archives, deb/rpm/apk
-# packages, checksums, SBOMs, cosign signatures and the multi-arch GHCR
-# image (the Helm chart is pushed by the workflow itself). ci.yml proves this
-# file on PRs that touch it.
+# .github/workflows/release.yml, whose goreleaser job publishes archives,
+# deb/rpm/apk packages, checksums, SBOMs and the multi-arch GHCR image with
+# this file. It signs nothing: there are no signs or docker_signs here, and
+# that job has no OIDC token. release.yml's sign job signs checksums.txt
+# and the image, and attests their provenance, in a job that builds nothing
+# (the Helm chart is pushed and signed by the workflow itself too).
+# ci.yml proves this file on PRs that touch it.
 #
-# Local dry run with the pinned GoReleaser (no publish, no signing, no SBOMs),
+# Local dry run with the pinned GoReleaser (no publish, no SBOMs),
 # the same command CI's release-check job runs:
 #   make release-check
 # It builds the per-arch images locally too (never pushed); on a machine
@@ -182,18 +185,14 @@ checksum:
 sboms:
   - artifacts: archive
 
-# Keyless (Sigstore OIDC from the GitHub Actions run): no key to manage.
-# checksums.txt covers every archive and package, so signing it signs them
-# all.
-signs:
-  - cmd: cosign
-    signature: '${artifact}.sigstore.json'
-    args:
-      - sign-blob
-      - '--bundle=${signature}'
-      - '${artifact}'
-      - --yes
-    artifacts: checksum
+# No signs: and no docker_signs: on purpose. release.yml's sign job signs
+# checksums.txt (keyless, Sigstore OIDC from the GitHub Actions run: no key
+# to manage; checksums.txt covers every archive and package, so signing it
+# signs them all) and the image index with every platform image (cosign
+# --recursive), after checking they are what this config built. The job
+# that runs GoReleaser compiles every dependency and holds no id-token
+# permission, so nothing it runs can sign as the release workflow
+# (hack/release-sign_test.sh).
 
 dockers_v2:
   - images:
@@ -262,18 +261,6 @@ dockers_v2:
       org.opencontainers.image.licenses: Apache-2.0
       org.opencontainers.image.description: Continuous Kubernetes upgrade-readiness scanner
 
-docker_signs:
-  # Default artifacts: the dockers_v2 images. Keyless, like signs above.
-  # --recursive signs the multi-arch index and every platform manifest in
-  # it, so `cosign verify image@<platform digest>` (what a node actually
-  # pulls) verifies too; release.yml's verify job checks each one.
-  - cmd: cosign
-    args:
-      - sign
-      - --recursive
-      - '${artifact}@${digest}'
-      - --yes
-
 changelog:
   use: git
   sort: asc
@@ -316,14 +303,16 @@ release:
   # GoReleaser publishes before actions/attest-build-provenance runs, and a
   # Latest set here is a release with no attestation for as long as the
   # attestation takes, or for good if it fails, and again on every re-run of
-  # the job (#304). release.yml's last step moves Latest, to the run's own
-  # release when that is the highest stable one, only after its attestation
-  # exists.
+  # the job (#304). The last step of release.yml's sign job moves Latest, to
+  # the run's own release when that is the highest stable one, only after
+  # its attestation exists.
   make_latest: "false"
   # Re-running a release that failed half-way (same tag, same commit)
   # overwrites the assets it already uploaded instead of failing on them.
-  # checksums.txt and its signature are replaced in the same run, so they
-  # always match the archives on the release.
+  # checksums.txt is replaced with the archives; its signature is replaced
+  # by release.yml's sign job, which a re-run of this job runs again after
+  # it, signing the checksums.txt this run uploaded (the build is
+  # reproducible, so a re-run on the same commit uploads the same one).
   replace_existing_artifacts: true
   # The contracts listed under checksum: (#60).
   extra_files: *contracts

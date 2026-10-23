@@ -18,14 +18,20 @@ name: release
 #              embedded, with completions, man pages and license notices),
 #              deb/rpm/apk packages, the published contracts (api/:
 #              report and webhook schemas, OpenAPI), checksums.txt over
-#              all of them, one SPDX SBOM per
-#              archive, a keyless cosign bundle, and a GitHub
-#              build-provenance attestation over every archive; the
+#              all of them, one SPDX SBOM per archive; the
 #              multi-arch image ghcr.io/abd-ulbasit/upgradescope:{X.Y.Z,
-#              vX.Y.Z,latest} from Dockerfile.release, with an SBOM and
-#              max-mode provenance attached and a cosign signature on the
-#              index and on every platform image. All of it reproducible
-#              from the tag (make release-repro);
+#              vX.Y.Z,latest} from Dockerfile.release, with BuildKit's SBOM
+#              and max-mode provenance attached. All of it reproducible
+#              from the tag (make release-repro). This job compiles every
+#              dependency and runs repository code, so it holds no OIDC
+#              token and signs nothing;
+#   sign       builds nothing: checks that the release's checksums.txt is
+#              the one the goreleaser job built (by its sha256, a job
+#              output), signs it (keyless cosign bundle) and the image index
+#              and every platform image (cosign --recursive), attests build
+#              provenance for every archive and package (through
+#              checksums.txt) and for the image (pushed to GHCR next to it),
+#              then moves GitHub's Latest and :latest;
 #   chart      oci://ghcr.io/abd-ulbasit/charts/upgradescope, version X.Y.Z /
 #              appVersion vX.Y.Z, its image pinned by the digest goreleaser
 #              just pushed and Artifact Hub annotations stamped
@@ -33,7 +39,9 @@ name: release
 #              Artifact Hub repository metadata (artifacthub.io tag);
 #   verify     anonymously, on a fresh kind cluster: the image pulls for both
 #              arches, every platform image verifies and carries /licenses,
-#              the published chart installs and runs the pinned image;
+#              the image's provenance attestation verifies from the
+#              registry, the published chart installs and runs the pinned
+#              image;
 #   major-tag  for a stable tag only, and only while it is the highest
 #              stable release of its major, moves the floating major tag
 #              (v0) that `uses: abd-ulbasit/upgradescope@v0` (and
@@ -61,8 +69,8 @@ name: release
 # actions/attest-build-provenance has run, and the Action's `version: latest`
 # (and @v0, and an untagged SHA) installs only a release whose attestation
 # verifies. A Latest set by GoReleaser would be a release with no attestation
-# until the next step finishes, for good when it fails, and again on every
-# re-run of the job. Instead, the last step of the goreleaser job points
+# until the attestation step finishes, for good when it fails, and again on
+# every re-run of the job. Instead, the last step of the sign job points
 # :latest at the highest published stable release, and GitHub's Latest at
 # this run's own release when that is the highest, after its attestation
 # exists (it runs only when every step before it succeeded, so a failed
@@ -72,7 +80,8 @@ name: release
 # moved by hand is therefore not put back by a run on a lower tag; only the
 # highest release's own run (a re-run of it) restores it.
 # A re-run of the goreleaser job for the release that is already Latest sends
-# make_latest=false for it again (GoReleaser edits the existing release).
+# make_latest=false for it again (GoReleaser edits the existing release), and
+# GitHub re-runs the sign job after it.
 # GitHub's REST reference for updating a release (PATCH
 # /repos/{owner}/{repo}/releases/{release_id}) defines make_latest as
 # whether the release "should be set as the latest release" (true, false or
@@ -182,6 +191,17 @@ jobs:
   # GoReleaser publishes the archives and the image together: the image
   # packages the exact linux binaries in the archives (Dockerfile.release).
   #
+  # Build and sign are separate jobs. This one compiles every module the
+  # binary links and runs repository code (GoReleaser's before hooks run
+  # `go run ./tools/gen-docs`), so a malicious dependency would run here.
+  # It therefore has no id-token or attestations permission: it cannot mint
+  # the OIDC token that Fulcio turns into a release.yml@refs/tags/vX
+  # certificate, so it cannot sign or attest anything, for this release or
+  # any other blob, as the release workflow. .goreleaser.yml has no signs or
+  # docker_signs either. The sign job signs and attests exactly what this
+  # job reports it built (checksums-sha256, image-digest), and builds
+  # nothing (hack/release-sign_test.sh).
+  #
   # The `release` environment is the human gate. Its protection rules live
   # in the repository settings, not here (Settings -> Environments ->
   # release: a required reviewer, and deployment tags limited to
@@ -202,8 +222,9 @@ jobs:
     permissions:
       contents: write # the GitHub release and its assets
       packages: write # the GHCR image
-      id-token: write # cosign keyless signing and the provenance attestation
-      attestations: write
+    outputs:
+      checksums-sha256: ${{ steps.built.outputs.checksums-sha256 }}
+      image-digest: ${{ steps.built.outputs.image-digest }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -223,7 +244,6 @@ jobs:
           # written by main-branch runs, and release inputs should come only
           # from the tagged commit and the module proxy.
           cache: false
-      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
       - uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
       # Dockerfile.release only COPYs a prebuilt binary (no RUN), so the
       # arm64 image needs no QEMU; buildx's docker-container driver does the
@@ -275,12 +295,96 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           UPGRADESCOPE_NEWEST: ${{ steps.newest.outputs.newest }}
+      # What the sign job signs: the sha256 of the checksums.txt GoReleaser
+      # wrote and uploaded, and the digest of the image index it pushed, as
+      # job outputs (fixed once this job ends, unlike a release asset or an
+      # image tag, which any token with contents: or packages: write can
+      # replace in between).
+      - name: report what was built, for the sign job
+        id: built
+        run: |
+          sum=$(sha256sum dist/checksums.txt | awk '{print $1}')
+          printf '%s' "$sum" | grep -Eq '^[0-9a-f]{64}$' || { echo "::error::no sha256 for dist/checksums.txt"; exit 1; }
+          digest="$(docker buildx imagetools inspect "$IMAGE:$GITHUB_REF_NAME" --format '{{json .Manifest}}' | jq -r .digest)"
+          printf '%s' "$digest" | grep -Eq '^sha256:[0-9a-f]{64}$' || { echo "::error::no digest for $IMAGE:$GITHUB_REF_NAME"; exit 1; }
+          echo "checksums-sha256=$sum" >>"$GITHUB_OUTPUT"
+          echo "image-digest=$digest" >>"$GITHUB_OUTPUT"
+          echo "built: checksums.txt sha256:$sum, $IMAGE@$digest" >>"$GITHUB_STEP_SUMMARY"
+
+  # Signs and attests what the goreleaser job built, and builds nothing: no
+  # Go, no GoReleaser, no make, no dependency code. The only repository code
+  # it runs is in its last step, hack/release-newest.sh and
+  # hack/install-tool.sh (shell, gh, jq and curl), and the only binaries it
+  # downloads are cosign (sigstore/cosign-installer) and the sha256-pinned
+  # oras, as the goreleaser job did before the split. It holds the OIDC
+  # token, so what it signs is fixed by the goreleaser job's outputs,
+  # checked before anything is signed. hack/release-sign_test.sh
+  # (make hack-test) keeps both jobs to this.
+  sign:
+    needs: goreleaser
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write # upload the bundle to the release; move GitHub's Latest
+      packages: write # push the image signatures and provenance to GHCR; move :latest
+      id-token: write # cosign keyless signing and the provenance attestations
+      attestations: write
+    env:
+      CHECKSUMS_SHA256: ${{ needs.goreleaser.outputs.checksums-sha256 }}
+      IMAGE_DIGEST: ${{ needs.goreleaser.outputs.image-digest }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: checksums.txt and the image are the ones the goreleaser job built
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          printf '%s' "$CHECKSUMS_SHA256" | grep -Eq '^[0-9a-f]{64}$' || { echo "::error::the goreleaser job reported no checksums.txt sha256"; exit 1; }
+          printf '%s' "$IMAGE_DIGEST" | grep -Eq '^sha256:[0-9a-f]{64}$' || { echo "::error::the goreleaser job reported no image digest"; exit 1; }
+          mkdir -p "$RUNNER_TEMP/sign"
+          gh release download "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" -p checksums.txt -D "$RUNNER_TEMP/sign"
+          got=$(sha256sum "$RUNNER_TEMP/sign/checksums.txt" | awk '{print $1}')
+          if [ "$got" != "$CHECKSUMS_SHA256" ]; then
+            echo "::error::the release's checksums.txt (sha256 $got) is not the one the goreleaser job built ($CHECKSUMS_SHA256); refusing to sign it"
+            exit 1
+          fi
+          docker buildx imagetools inspect "$IMAGE@$IMAGE_DIGEST" >/dev/null
+      # checksums.txt covers every archive, package, SBOM and contract, so
+      # signing it signs them all. The bundle replaces any an earlier run of
+      # this job uploaded (a re-run signs the same checksums.txt again).
+      - name: sign checksums.txt and the image
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cosign sign-blob --yes --bundle "$RUNNER_TEMP/sign/checksums.txt.sigstore.json" "$RUNNER_TEMP/sign/checksums.txt"
+          gh release upload "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" --clobber "$RUNNER_TEMP/sign/checksums.txt.sigstore.json"
+          # --recursive signs the multi-arch index and every platform
+          # manifest in it, so `cosign verify image@<platform digest>` (what
+          # a node actually pulls) verifies too; the verify job checks each.
+          cosign sign --yes --recursive "$IMAGE@$IMAGE_DIGEST"
       # checksums.txt names every archive (and package and contract), so one
       # attestation covers them all:
       # `gh attestation verify <archive> -R abd-ulbasit/upgradescope`.
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
-          subject-checksums: dist/checksums.txt
+          subject-checksums: ${{ runner.temp }}/sign/checksums.txt
+      # The image index, attested and the attestation pushed to GHCR beside
+      # it, so `gh attestation verify oci://ghcr.io/abd-ulbasit/upgradescope@<digest>`
+      # finds it (BuildKit's own provenance on the image is unsigned).
+      # Storage records exist for organization-owned repositories only.
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ needs.goreleaser.outputs.image-digest }}
+          push-to-registry: true
+          create-storage-record: false
       # The only place GitHub's Latest is set (GoReleaser's make_latest is
       # "false"), so it must stay after the attestation step above and keep
       # the implicit success() condition: a failed attestation then never
@@ -339,8 +443,10 @@ jobs:
             echo "$IMAGE:latest: ${got:-none} -> $highest ($want)" >>"$GITHUB_STEP_SUMMARY"
           fi
 
+  # After sign: a chart is never published pinning an image whose signing or
+  # attestation failed.
   chart:
-    needs: [preflight, goreleaser]
+    needs: [preflight, goreleaser, sign]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -415,7 +521,7 @@ jobs:
   # release, make the upgradescope and charts/upgradescope packages public
   # and re-run this job.
   verify:
-    needs: [preflight, goreleaser, chart]
+    needs: [preflight, goreleaser, sign, chart]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
@@ -447,13 +553,28 @@ jobs:
           cosign verify "$IMAGE:$VERSION" --certificate-identity "$identity" \
             --certificate-oidc-issuer https://token.actions.githubusercontent.com >/dev/null
           # What a node pulls is a platform image, not the index: each one
-          # is signed (docker_signs --recursive) and verifies on its own.
+          # is signed (the sign job's cosign sign --recursive) and verifies on its own.
           for d in $(docker buildx imagetools inspect "$IMAGE:$VERSION" --format '{{json .Manifest}}' \
               | jq -r '.manifests[] | select(.platform.os=="linux") | .digest'); do
             cosign verify "$IMAGE@$d" --certificate-identity "$identity" \
               --certificate-oidc-issuer https://token.actions.githubusercontent.com >/dev/null
             echo "platform image $d signed"
           done
+      # The sign job's provenance attestation of the image index, read from
+      # GHCR (--bundle-from-oci: it was pushed next to the image), must name
+      # this repository's release workflow at this tag, on a GitHub-hosted
+      # runner: the command docs/operations/install.md gives users.
+      - name: The image's build provenance verifies from the registry
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          digest="$(docker buildx imagetools inspect "$IMAGE:$GITHUB_REF_NAME" --format '{{json .Manifest}}' | jq -r .digest)"
+          case "$digest" in sha256:*) ;; *) echo "::error::no digest for $IMAGE:$GITHUB_REF_NAME"; exit 1 ;; esac
+          gh attestation verify "oci://$IMAGE@$digest" --bundle-from-oci \
+            --repo "$GITHUB_REPOSITORY" \
+            --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release.yml" \
+            --source-ref "$GITHUB_REF" --deny-self-hosted-runners >/dev/null
+          echo "image provenance verifies: $IMAGE@$digest" >>"$GITHUB_STEP_SUMMARY"
       - name: Chart signature verifies (anonymously, default cosign)
         run: |
           identity="https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release.yml@${GITHUB_REF}"

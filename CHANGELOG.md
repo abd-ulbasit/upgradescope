@@ -46,6 +46,14 @@ only through a new release.
   pins the required `ci-ok` check to the GitHub Actions app, so a commit
   status of that name no longer satisfies it. The two ruleset changes take
   effect once applied (`.github/rulesets/README.md`).
+- The release workflow builds and signs in separate jobs: the job that
+  compiles every dependency no longer holds an OIDC token, so nothing that
+  runs during the build can sign or attest as the release workflow, and a
+  job that builds nothing signs `checksums.txt` and the image after
+  checking they are the ones built. The image now gets a build-provenance
+  attestation of its own, pushed to GHCR beside it
+  (`gh attestation verify oci://ghcr.io/abd-ulbasit/upgradescope:<version>
+  --bundle-from-oci ...`), from the next release.
 
 ## [0.3.0] - 2026-10-12
 
