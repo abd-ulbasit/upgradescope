@@ -21,17 +21,27 @@ hours and on demand (Actions → update formula → Run workflow, optionally
 with a tag). Each run:
 
 1. reads the latest stable upgradescope release. Pre-releases are skipped.
-2. downloads that release's `checksums.txt` and `checksums.txt.sigstore.json`.
-3. verifies the bundle with cosign, keylessly. The certificate must have
+   A release older than the version the formula already ships is refused,
+   so GitHub's Latest moved back (by hand, or by a mistake) never
+   downgrades `brew upgrade`. To roll back on purpose, run the workflow by
+   hand with the tag and `allow-downgrade` checked.
+2. resolves the tag to its commit and refuses it unless that commit is on
+   upgradescope's `main` (GitHub's compare API says `main` is ahead of it
+   or identical). A release tag can be pushed on any commit, and the
+   release workflow's own "the tagged commit is on main" check runs from
+   that commit, so the tap checks again from outside.
+3. downloads that release's `checksums.txt` and `checksums.txt.sigstore.json`.
+4. verifies the bundle with cosign, keylessly. The certificate must have
    been issued to
    `https://github.com/abd-ulbasit/upgradescope/.github/workflows/release.yml@refs/tags/<tag>`
-   by `https://token.actions.githubusercontent.com`. If anything does not
-   verify, the run fails and the formula is left unchanged.
-4. re-renders `Formula/upgradescope.rb` from
+   by `https://token.actions.githubusercontent.com`, for a run at the
+   commit from step 2 (`--certificate-github-workflow-sha`). If anything
+   does not verify, the run fails and the formula is left unchanged.
+5. re-renders `Formula/upgradescope.rb` from
    [`formula.rb.tmpl`](formula.rb.tmpl) with
    [`script/render-formula.sh`](script/render-formula.sh). The run commits
    only when the formula changed, with this repository's own `GITHUB_TOKEN`.
-5. installs and tests the formula on macOS and Linux with `brew install` and
+6. installs and tests the formula on macOS and Linux with `brew install` and
    `brew test`. `brew test` runs `upgradescope version`.
 
 So a new upgradescope release reaches `brew upgrade` within about 6 hours.
@@ -40,6 +50,7 @@ To render by hand, for example to test a template change:
 
 ```sh
 script/render-formula_test.sh                       # offline, v0.1.1 fixture
+script/update_test.sh                               # offline, stub gh, curl and cosign
 UPGRADESCOPE_TAG=v0.2.0 GH_TOKEN=... script/update.sh   # needs cosign
 brew style Formula/upgradescope.rb
 ```
