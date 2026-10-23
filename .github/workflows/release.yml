@@ -461,6 +461,7 @@ jobs:
       id-token: write # cosign keyless signing
     env:
       VERSION: ${{ needs.preflight.outputs.version }}
+      IMAGE_DIGEST: ${{ needs.goreleaser.outputs.image-digest }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -476,11 +477,25 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      # The image is the index the goreleaser job reported and the sign job
+      # signed (a job output, fixed once that job ended), never whatever
+      # the tag names now: anything with packages: write can move a tag in
+      # between. This job goes on only while both release tags still name
+      # it (hack/release-sign_test.sh runs this step against a stub docker).
+      - name: the release tags still name the image the sign job signed
+        run: |
+          printf '%s' "$IMAGE_DIGEST" | grep -Eq '^sha256:[0-9a-f]{64}$' || { echo "::error::the goreleaser job reported no image digest"; exit 1; }
+          for t in "$GITHUB_REF_NAME" "$VERSION"; do
+            got=$(docker buildx imagetools inspect "$IMAGE:$t" --format '{{json .Manifest}}' | jq -r .digest)
+            if [ "$got" != "$IMAGE_DIGEST" ]; then
+              echo "::error::$IMAGE:$t names ${got:-nothing}, not $IMAGE_DIGEST, which the goreleaser job pushed and the sign job signed"
+              exit 1
+            fi
+          done
       - name: Package the chart (version/appVersion = the tag, image pinned by digest) and check it
         run: |
-          # The multi-arch index goreleaser pushed for this tag.
-          digest="$(docker buildx imagetools inspect "$IMAGE:$GITHUB_REF_NAME" --format '{{json .Manifest}}' | jq -r .digest)"
-          case "$digest" in sha256:*) ;; *) echo "::error::no digest for $IMAGE:$GITHUB_REF_NAME"; exit 1 ;; esac
+          # The multi-arch index goreleaser pushed and sign signed.
+          digest="$IMAGE_DIGEST"
           echo "$IMAGE:$GITHUB_REF_NAME@$digest" >> "$GITHUB_STEP_SUMMARY"
           # Stamp a copy: image.digest, the Artifact Hub image, prerelease
           # and changes (from CHANGELOG.md).
@@ -532,12 +547,28 @@ jobs:
     timeout-minutes: 20
     env:
       VERSION: ${{ needs.preflight.outputs.version }}
+      IMAGE_DIGEST: ${{ needs.goreleaser.outputs.image-digest }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - uses: ./.github/actions/dockerhub-mirror # Docker Hub's anonymous pull limit (429): pull through mirror.gcr.io
       - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+      # The image is the index the goreleaser job reported and the sign job
+      # signed (a job output, fixed once that job ended), never whatever
+      # the tag names now: anything with packages: write can move a tag in
+      # between. This job goes on only while both release tags still name
+      # it (hack/release-sign_test.sh runs this step against a stub docker).
+      - name: the release tags still name the image the sign job signed
+        run: |
+          printf '%s' "$IMAGE_DIGEST" | grep -Eq '^sha256:[0-9a-f]{64}$' || { echo "::error::the goreleaser job reported no image digest"; exit 1; }
+          for t in "$GITHUB_REF_NAME" "$VERSION"; do
+            got=$(docker buildx imagetools inspect "$IMAGE:$t" --format '{{json .Manifest}}' | jq -r .digest)
+            if [ "$got" != "$IMAGE_DIGEST" ]; then
+              echo "::error::$IMAGE:$t names ${got:-nothing}, not $IMAGE_DIGEST, which the goreleaser job pushed and the sign job signed"
+              exit 1
+            fi
+          done
       - name: Image is anonymously pullable for amd64 and arm64, signed, and attested
         run: |
           docker logout ghcr.io >/dev/null 2>&1 || true
@@ -566,21 +597,20 @@ jobs:
               --certificate-oidc-issuer https://token.actions.githubusercontent.com >/dev/null
             echo "platform image $d signed"
           done
-      # The sign job's provenance attestation of the image index, read from
-      # GHCR (--bundle-from-oci: it was pushed next to the image), must name
-      # this repository's release workflow at this tag, on a GitHub-hosted
-      # runner: the command docs/operations/install.md gives users.
+      # The sign job's provenance attestation of the image index it signed,
+      # read from GHCR (--bundle-from-oci: it was pushed next to the
+      # image), must name this repository's release workflow at this tag, on
+      # a GitHub-hosted runner: the command docs/operations/install.md gives
+      # users.
       - name: The image's build provenance verifies from the registry
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          digest="$(docker buildx imagetools inspect "$IMAGE:$GITHUB_REF_NAME" --format '{{json .Manifest}}' | jq -r .digest)"
-          case "$digest" in sha256:*) ;; *) echo "::error::no digest for $IMAGE:$GITHUB_REF_NAME"; exit 1 ;; esac
-          gh attestation verify "oci://$IMAGE@$digest" --bundle-from-oci \
+          gh attestation verify "oci://$IMAGE@$IMAGE_DIGEST" --bundle-from-oci \
             --repo "$GITHUB_REPOSITORY" \
             --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release.yml" \
             --source-ref "$GITHUB_REF" --deny-self-hosted-runners >/dev/null
-          echo "image provenance verifies: $IMAGE@$digest" >>"$GITHUB_STEP_SUMMARY"
+          echo "image provenance verifies: $IMAGE@$IMAGE_DIGEST" >>"$GITHUB_STEP_SUMMARY"
       # What govulncheck (the ci gate) cannot see: grype on both platform
       # images, the distroless base's OS packages included, and on the SBOMs
       # this release publishes, held to its signed checksums.txt
@@ -591,9 +621,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          digest="$(docker buildx imagetools inspect "$IMAGE:$GITHUB_REF_NAME" --format '{{json .Manifest}}' | jq -r .digest)"
-          case "$digest" in sha256:*) ;; *) echo "::error::no digest for $IMAGE:$GITHUB_REF_NAME"; exit 1 ;; esac
-          IMAGE_SCAN_IMAGE="$IMAGE" IMAGE_SCAN_DIGEST="$digest" UPGRADESCOPE_REPO="$GITHUB_REPOSITORY" \
+          IMAGE_SCAN_IMAGE="$IMAGE" IMAGE_SCAN_DIGEST="$IMAGE_DIGEST" UPGRADESCOPE_REPO="$GITHUB_REPOSITORY" \
             hack/image-scan.sh "$GITHUB_REF_NAME"
       - name: Chart signature verifies (anonymously, default cosign)
         run: |
@@ -645,7 +673,6 @@ jobs:
           "$kind" create cluster --name release-verify --image "$(hack/kind-images.sh image 1.37)" --wait 120s
       - name: Published chart installs and reaches Ready, on the pinned image (no side-loading)
         run: |
-          digest="$(docker buildx imagetools inspect "$IMAGE:$GITHUB_REF_NAME" --format '{{json .Manifest}}' | jq -r .digest)"
           helm --kube-context kind-release-verify install upgradescope "$CHART_REPO/upgradescope" --version "$VERSION" \
             --namespace upgradescope --create-namespace \
             --set server.enabled=true --set server.ingestToken=verify \
@@ -653,7 +680,7 @@ jobs:
           kubectl --context kind-release-verify -n upgradescope get pods -o wide
           kubectl --context kind-release-verify -n upgradescope get deploy \
             -o jsonpath='{range .items[*]}{.spec.template.spec.containers[0].image}{"\n"}{end}' \
-            | grep -qxF "$IMAGE:$GITHUB_REF_NAME@$digest"
+            | grep -qxF "$IMAGE:$GITHUB_REF_NAME@$IMAGE_DIGEST"
 
   # Actions convention: v0 names the newest stable v0.x.y. Only a stable tag
   # that is the highest stable release of its major moves it, and only once

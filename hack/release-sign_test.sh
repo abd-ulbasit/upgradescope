@@ -14,7 +14,10 @@
 #     replaced checksums.txt fails the step), and attests the image with
 #     push-to-registry;
 #   - only the sign and chart jobs can mint an OIDC token, and the chart and
-#     verify jobs run after sign.
+#     verify jobs run after sign;
+#   - the chart and verify jobs use the image digest the goreleaser job
+#     reported (what sign signed), never a fresh lookup of the tag, and stop
+#     when a release tag no longer names it (run here against a stub docker).
 # Offline; needs awk, grep and sha256sum or shasum.
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -160,6 +163,62 @@ check "only the sign and chart jobs can mint an OIDC token (got: $oidc)" "[ '$oi
 check "the top-level permissions grant no id-token" "! awk '/^permissions:/ { p = 1; next } p && /^[^ ]/ { p = 0 } p' '$wf' | grep -q 'id-token'"
 for j in chart verify; do
   check "$j runs after sign" "job $j | grep -E '^    needs:' | grep -qE '[[, ]sign[], ]|: sign\$'"
+done
+
+# --- chart and verify: the digest that was signed, not the tag's ----------
+
+tname="the release tags still name the image the sign job signed"
+# The stub docker: `docker buildx imagetools inspect <image>:<tag> --format ...`
+# prints an index whose digest is $STUB_TAG_<tag, with . and - as _>, or
+# fails as for a tag that does not exist.
+cat >"$work/bin/docker" <<'EOF'
+#!/usr/bin/env bash
+echo "docker $*" >>"$CALLS"
+tag=${4##*:}
+var="STUB_TAG_$(printf '%s' "$tag" | tr '.-' '__')"
+[ -n "${!var:-}" ] || { echo "ERROR: $4: not found" >&2; exit 1; }
+printf '{"mediaType":"application/vnd.oci.image.index.v1+json","digest":"%s","size":1}\n' "${!var}"
+EOF
+chmod +x "$work/bin/docker"
+other="sha256:$(printf '%064d' 8)"
+want_env='      IMAGE_DIGEST: ${{ needs.goreleaser.outputs.image-digest }}'
+# run_tags <job> <IMAGE_DIGEST> <digest vX.Y.Z names> <digest X.Y.Z names>
+run_tags() {
+  : >"$work/calls"
+  code=0
+  env PATH="$work/bin:$PATH" CALLS="$work/calls" GITHUB_REF_NAME=v9.9.9 VERSION=9.9.9 IMAGE=ghcr.io/o/r \
+    IMAGE_DIGEST="$2" STUB_TAG_v9_9_9="$3" STUB_TAG_9_9_9="$4" \
+    bash -e "$work/tags-$1.sh" >"$work/out" 2>&1 || code=$?
+}
+for j in chart verify; do
+  job "$j" >"$work/job-$j"
+  if grep -qxF -- "$want_env" "$work/job-$j"; then ok "$j reads the image digest from the goreleaser job's outputs"; else
+    fail "$j has no '$want_env'"; fi
+  if ! grep -qE 'digest="?\$\(docker buildx imagetools inspect' "$work/job-$j"; then ok "$j never takes a digest from a lookup of the tag"; else
+    fail "$j still looks a digest up by tag" "$work/job-$j"; fi
+  tl=$(grep -nF -- "- name: $tname" "$work/job-$j" | head -1 | cut -d: -f1 || true)
+  if [ -n "$tl" ] && ! sed -n "1,${tl}p" "$work/job-$j" | grep -qE '"\$IMAGE_DIGEST"|@\$IMAGE_DIGEST|\$digest'; then
+    ok "$j checks the tags before any step uses the digest"
+  else
+    fail "$j uses the digest before (or without) the '$tname' step" "$work/job-$j"
+  fi
+  step_run "$j" "$tname" >"$work/tags-$j.sh"
+  [ -s "$work/tags-$j.sh" ] || { fail "no '$tname' step in the $j job"; continue; }
+  run_tags "$j" "$digest" "$digest" "$digest"
+  if [ "$code" = 0 ] && grep -q 'ghcr.io/o/r:v9.9.9 ' "$work/calls" && grep -q 'ghcr.io/o/r:9.9.9 ' "$work/calls"; then
+    ok "$j: both release tags naming the signed index pass"; else fail "$j: both tags naming the signed index (exit $code)" "$work/out"; fi
+  run_tags "$j" "$digest" "$other" "$digest"
+  if [ "$code" != 0 ] && grep -qF "ghcr.io/o/r:v9.9.9 names $other, not $digest" "$work/out"; then
+    ok "$j: a vX.Y.Z tag moved to another index fails"; else fail "$j: a moved vX.Y.Z tag passed (exit $code)" "$work/out"; fi
+  run_tags "$j" "$digest" "$digest" "$other"
+  if [ "$code" != 0 ] && grep -qF "ghcr.io/o/r:9.9.9 names $other" "$work/out"; then
+    ok "$j: an X.Y.Z tag moved to another index fails"; else fail "$j: a moved X.Y.Z tag passed (exit $code)" "$work/out"; fi
+  run_tags "$j" "$digest" "" "$digest"
+  if [ "$code" != 0 ] && grep -qF 'names nothing' "$work/out"; then
+    ok "$j: a tag that no longer resolves fails"; else fail "$j: a missing tag passed (exit $code)" "$work/out"; fi
+  run_tags "$j" "" "$digest" "$digest"
+  if [ "$code" != 0 ] && grep -qF 'reported no image digest' "$work/out"; then
+    ok "$j: a missing image-digest output fails"; else fail "$j: a missing image-digest output passed (exit $code)" "$work/out"; fi
 done
 
 pass=$(grep -c '^ok' "$work/results" || true)
