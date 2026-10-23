@@ -36,6 +36,9 @@ also in `gh api repos/abd-ulbasit/upgradescope/rulesets`.)
 
 ## Checking the live rulesets
 
+(How this could become a plan-and-apply workflow instead:
+`docs/design/repository-settings-as-code.md`.)
+
 `hack/rulesets-live.sh` (`make rulesets-check`) reads the live rulesets with
 `gh api` (GET only; it never changes one) and compares each applied file
 (`main.json`, `release-tags.json` and `release-tag-creation.json`, never
