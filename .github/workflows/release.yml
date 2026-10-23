@@ -276,8 +276,8 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       # Re-checked here, not taken from preflight: a newer release may have
       # published while ci ran. .goreleaser.yml reads it for the :latest
-      # image tag only: GitHub's Latest is set by the last step of this job,
-      # after the attestation (#304).
+      # image tag only: GitHub's Latest is set by the last step of the sign
+      # job, after the attestations (#304).
       # The release list goes to a file first, never through a pipe: a run:
       # step without shell: runs under `bash -e`, with no pipefail, so a
       # failed `gh release list` piped into is-newest would read as an empty

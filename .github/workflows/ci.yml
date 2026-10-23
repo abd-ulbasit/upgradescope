@@ -611,7 +611,9 @@ jobs:
       - name: npm audit of hack/renovate (per-advisory ignore list)
         run: make renovate-audit
 
-  # Dashboard: npm ci, vitest, typecheck + vite build, production advisories,
+  # Dashboard: npm ci, vitest, typecheck + vite build, two npm audits
+  # (moderate and up in production dependencies, high and up in all of
+  # them, the vite and TypeScript build toolchain included: hack/web-test.sh),
   # and the committed go:embed copy equals the fresh build.
   web:
     if: github.event_name != 'schedule'
