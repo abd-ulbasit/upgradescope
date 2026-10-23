@@ -131,6 +131,7 @@ inert=(
   '.github/ISSUE_TEMPLATE/*'
   '.github/dependabot.yml'
   '.github/rulesets/*'
+  '.github/workflows/codeql.yml'
   '.github/workflows/docs.yml'
   '.github/workflows/kb-refresh-build.yml'
   '.github/workflows/kb-refresh.yml'

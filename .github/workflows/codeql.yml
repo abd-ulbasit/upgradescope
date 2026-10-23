@@ -1,0 +1,74 @@
+name: codeql
+
+# Static application security testing (SAST) with CodeQL's security-extended
+# queries, on three languages:
+#   go                     the binary: scan, agent and serve (request input
+#                          reaching SQL, a file path, a redirect, a log
+#                          line, an outbound request; weak crypto);
+#   javascript-typescript  the dashboard (DOM XSS and friends);
+#   actions                these workflows (untrusted input in run:
+#                          scripts, over-broad permissions, unsafe
+#                          checkouts), which zizmor was run on only by hand.
+# go vet and staticcheck (ci.yml's lint job) find bugs; CodeQL's taint
+# tracking finds the source-to-sink flows neither does. Results are code
+# scanning alerts on the Security tab and on each pull request. It is not
+# part of ci-ok, so an alert does not block a merge yet: make the CodeQL
+# check required once its findings have been triaged. Weekly too: new
+# queries ship without a commit here.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: '23 4 * * 2' # Tuesdays 04:23 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: codeql-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  analyze:
+    name: analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      security-events: write # upload the results to code scanning
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - language: go
+            build-mode: manual
+          - language: javascript-typescript
+            build-mode: none
+          - language: actions
+            build-mode: none
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - if: matrix.language == 'go'
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false # nothing here is worth a cache entry another run could restore
+      - uses: github/codeql-action/init@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+          queries: security-extended
+      # The main module only: the tools/ modules are build-time generators.
+      # The committed dashboard bundle is embedded, so no Node build is
+      # needed for Go; the TypeScript is analysed from source (build-mode
+      # none).
+      - if: matrix.build-mode == 'manual'
+        name: build the Go module
+        run: go build ./...
+      - uses: github/codeql-action/analyze@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
+        with:
+          category: /language:${{ matrix.language }}
