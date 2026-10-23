@@ -7,3 +7,9 @@ hack/
 *.md
 web/node_modules/
 web/dist/
+# Local credentials, at any depth: the from-source Dockerfile's build stage
+# runs `COPY . .`, so anything left in the tree would land in a layer.
+**/.env
+**/.env.*
+**/*.pem
+**/*.key
