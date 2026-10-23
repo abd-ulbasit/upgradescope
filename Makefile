@@ -132,6 +132,16 @@ vuln:
 vuln-latest:
 	./hack/vuln-latest-release.sh
 
+# What govulncheck cannot see in a release: grype (pinned, sha256-verified)
+# on the published image, both platforms, and on the SBOMs the release
+# publishes, held to its signed checksums.txt. Fails on a fixable high or
+# critical finding not accepted in hack/grype.yaml. RELEASE_TAG=vX.Y.Z picks a
+# release (default the latest). release.yml's verify job and the daily
+# vuln-latest-release workflow run it. Needs gh, jq, cosign and network.
+.PHONY: image-scan
+image-scan:
+	./hack/image-scan.sh $(RELEASE_TAG)
+
 # Offline tests for the gate itself: a stub scanner drives hack/vulncheck.sh
 # through its pass, fail and fail-closed paths.
 vuln-test:
@@ -421,6 +431,7 @@ hack-test:
 	./hack/chart-release-annotations_test.sh
 	./hack/vuln-latest-release_test.sh
 	./hack/vuln-latest-release-workflow_test.sh
+	./hack/image-scan_test.sh
 	./hack/release-artifacthub-workflow_test.sh
 	./hack/docs-live-check_test.sh
 	./hack/docs-live-workflow_test.sh

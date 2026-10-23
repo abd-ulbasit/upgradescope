@@ -10,7 +10,8 @@ name: vuln-latest-release
 # would never fire. The scan itself is hack/vuln-latest-release.sh
 # (also make vuln-latest): the latest release's linux/amd64 archive,
 # sha256-checked and signature-verified, through hack/vulncheck.sh's
-# binary-mode gate and allowlist.
+# binary-mode gate and allowlist. The image job scans what govulncheck
+# cannot see: the published image and the release SBOMs, with grype.
 on:
   schedule:
     - cron: '47 6 * * *' # daily 06:47 UTC
@@ -24,6 +25,29 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # What govulncheck cannot see in the latest release: grype on its
+  # published image (linux/amd64 and linux/arm64, the distroless base's OS
+  # packages included) and on the SBOMs it publishes, held to its signed
+  # checksums.txt (hack/image-scan.sh, also make image-scan). A fixable high
+  # or critical finding fails the run, and a failed scheduled run notifies
+  # the maintainer; release.yml's verify job runs the same scan on every
+  # new release.
+  image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      UPGRADESCOPE_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+      - name: grype on the latest release's image and SBOMs
+        run: hack/image-scan.sh
+
   scan:
     runs-on: ubuntu-latest
     timeout-minutes: 15

@@ -575,6 +575,20 @@ jobs:
             --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release.yml" \
             --source-ref "$GITHUB_REF" --deny-self-hosted-runners >/dev/null
           echo "image provenance verifies: $IMAGE@$digest" >>"$GITHUB_STEP_SUMMARY"
+      # What govulncheck (the ci gate) cannot see: grype on both platform
+      # images, the distroless base's OS packages included, and on the SBOMs
+      # this release publishes, held to its signed checksums.txt
+      # (hack/image-scan.sh; make image-scan). A fixable high or critical
+      # finding fails the run here: after publishing, but before major-tag
+      # moves v0, and red where the maintainer looks.
+      - name: The published image and SBOMs have no fixable high or critical vulnerability
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          digest="$(docker buildx imagetools inspect "$IMAGE:$GITHUB_REF_NAME" --format '{{json .Manifest}}' | jq -r .digest)"
+          case "$digest" in sha256:*) ;; *) echo "::error::no digest for $IMAGE:$GITHUB_REF_NAME"; exit 1 ;; esac
+          IMAGE_SCAN_IMAGE="$IMAGE" IMAGE_SCAN_DIGEST="$digest" UPGRADESCOPE_REPO="$GITHUB_REPOSITORY" \
+            hack/image-scan.sh "$GITHUB_REF_NAME"
       - name: Chart signature verifies (anonymously, default cosign)
         run: |
           identity="https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release.yml@${GITHUB_REF}"

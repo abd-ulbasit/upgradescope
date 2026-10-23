@@ -166,6 +166,10 @@ inert=(
   'hack/flags-diff.sh'
   'hack/helm-docs.sh'
   'hack/helm-test.sh'
+  # the published image and the release SBOMs, scanned by release.yml's
+  # verify job and daily; no gated job runs it
+  'hack/image-scan.sh'
+  'hack/grype.yaml'
   'hack/kb-derived.sh'
   'hack/notices.sh'
   'hack/release-*.sh'

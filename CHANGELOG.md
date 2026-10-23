@@ -68,6 +68,11 @@ only through a new release.
   where it outlives a rotation and is readable by anyone who can read
   Secrets in the namespace; `server.existingSecret` and
   `agent.existingSecret` keep secret values out of Helm.
+- The published image (both platforms) and the SBOMs each release
+  publishes are scanned with grype after every release and daily
+  (`make image-scan`), failing on a fixable high or critical finding:
+  the distroless base's OS packages and unreachable modules are what
+  govulncheck cannot see. v0.3.0 scans clean.
 
 ## [0.3.0] - 2026-10-12
 
