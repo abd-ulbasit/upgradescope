@@ -20,10 +20,12 @@ From v0.2.0 the chart is published, signed with cosign, as an OCI artifact:
       --version 0.3.0 -n upgradescope --create-namespace
 
 To verify the signature, use cosign 3.x, or 2.6.3 or later (older versions
-fail with `no signatures found`):
+fail with `no signatures found`). The identity names the tag of the chart
+version you verify (v0.3.0 for 0.3.0): a pattern over every tag would accept
+another release's chart.
 
-    cosign verify ghcr.io/abd-ulbasit/charts/upgradescope:0.2.0 \
-      --certificate-identity-regexp '^https://github.com/abd-ulbasit/upgradescope/\.github/workflows/release\.yml@refs/tags/' \
+    cosign verify ghcr.io/abd-ulbasit/charts/upgradescope:0.3.0 \
+      --certificate-identity https://github.com/abd-ulbasit/upgradescope/.github/workflows/release.yml@refs/tags/v0.3.0 \
       --certificate-oidc-issuer https://token.actions.githubusercontent.com
 
 To run unreleased changes, install from a clone

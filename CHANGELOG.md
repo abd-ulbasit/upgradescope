@@ -32,6 +32,62 @@ only through a new release.
 - The Action examples in the README and the docs, and the README's
   verification example, pin v0.3.0.
 
+### Security
+
+- Built with Go 1.26.10 (`go.mod` requires Go 1.26.10, and the Dockerfile
+  pins the `golang:1.26.10` image by digest). This fixes GO-2026-6809, the
+  `crypto/x509` advisory (compromised intermediate certificates are now
+  distrusted) that `govulncheck` reported as reachable against Go 1.26.9;
+  `make vuln` passes with an empty allowlist.
+- The Homebrew tap refuses a release older than the version its formula
+  ships, so GitHub's Latest moved back no longer downgrades `brew upgrade`
+  (a deliberate rollback is a manual run with `allow-downgrade`), and it
+  refuses a release whose tag is not on `main`, checking the signing
+  certificate's commit too (`--certificate-github-workflow-sha`).
+- Releases wait for the `release` environment (a required reviewer, set in
+  the repository settings) before anything is published, and CI fails on
+  every pull request and push while that environment is missing or has no
+  required reviewer (`make release-environment-check`), since GitHub would
+  create it unprotected on the first release; only the
+  repository's admin role may create a release tag
+  (`.github/rulesets/release-tag-creation.json`), and the `main` ruleset
+  pins the required `ci-ok` check to the GitHub Actions app, so a commit
+  status of that name no longer satisfies it. The two ruleset changes take
+  effect once applied (`.github/rulesets/README.md`).
+- The release workflow builds and signs in separate jobs: the job that
+  compiles every dependency no longer holds an OIDC token, so nothing that
+  runs during the build can sign or attest as the release workflow, and a
+  job that builds nothing signs `checksums.txt` and the image after
+  checking they are the ones built. The image now gets a build-provenance
+  attestation of its own, pushed to GHCR beside it
+  (`gh attestation verify oci://ghcr.io/abd-ulbasit/upgradescope:<version>
+  --bundle-from-oci ...`), from the next release.
+- The release notes, the Install page and the chart README verify
+  signatures against the exact release tag
+  (`--certificate-identity .../release.yml@refs/tags/vX.Y.Z`) instead of a
+  pattern over every tag, which accepted another release's signed
+  `checksums.txt`, image or chart, and show `gh attestation verify` with
+  `--signer-workflow` and `--source-ref` (as the Action runs it) instead of
+  `--repo` alone, which accepts an attestation from any workflow of the
+  repository. They ask for gh 2.102 or later: older gh matches
+  `--signer-workflow` only as a prefix and `--source-ref` ignoring case,
+  and the Action's README says what that means on a runner with an older
+  gh.
+- The chart's values reference and the security model page say that a
+  token, webhook URL or key passed as a chart value (and the ingest token
+  the chart generates) is stored in every Helm release revision Secret,
+  where it outlives a rotation and is readable by anyone who can read
+  Secrets in the namespace; `server.existingSecret` and
+  `agent.existingSecret` keep secret values out of Helm.
+- The published image (both platforms) and the SBOMs each release
+  publishes are scanned with grype after every release and daily
+  (`make image-scan`), failing on a fixable high or critical finding:
+  the distroless base's OS packages and unreachable modules are what
+  govulncheck cannot see. v0.3.0 scans clean.
+- CI scans every pull request and push for committed credentials with
+  gitleaks (`make secret-scan`); a scan of the whole history found only
+  two fake test fixtures, which `.gitleaks.toml` allowlists by value.
+
 ## [0.3.0] - 2026-10-12
 
 A release about add-on data: whether the add-on versions you run are past

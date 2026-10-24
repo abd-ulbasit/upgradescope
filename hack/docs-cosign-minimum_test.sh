@@ -5,8 +5,8 @@
 #     section shows `cosign verify` without the minimum, whether the minimum
 #     sits in another section or is missing;
 #   - release.yml's verify job installs cosign v2.6.3 (pinned by SHA) after
-#     the default one, runs the documented flags (the same regexp as
-#     install.md) for the index, each platform digest and the chart, and
+#     the default one, runs the documented flags (install.md's exact
+#     identity of the tag, never a regexp) for the index, each platform digest and the chart, and
 #     verifies the chart with the default cosign too; the signing steps use
 #     no cosign-release pin.
 set -euo pipefail
@@ -54,10 +54,18 @@ has "the second install pins cosign v2.6.3" '^          cosign-release: v2\.6\.3
 [ "$(grep -c 'cosign-release' "$vj")" = 1 ] && ok "only one cosign-release pin in the verify job" || fail "cosign-release count in verify job"
 ! grep -q 'cosign-release' <(awk '/^  verify:/ { exit } { print }' "$wf") && ok "no cosign-release in the signing jobs" || fail "a signing job pins cosign-release"
 has "the leg asserts the version it runs" "\[ \"\\\$got\" = v2\.6\.3 \]"
-# The leg's flags are install.md's, character for character.
-regexp="$(grep -o "'\^https://github.com/abd-ulbasit/upgradescope/[^']*'" docs/operations/install.md | sort -u)"
-[ "$(grep -c . <<<"$regexp")" = 1 ] && ok "install.md has one identity regexp" || fail "install.md identity regexps: $regexp"
-grep -qF -- "--certificate-identity-regexp $regexp" "$vj" && ok "the leg uses install.md's identity regexp" || fail "the leg's regexp differs from install.md's"
+# The leg's flags are install.md's: the exact identity of the tag, never a
+# regexp over every tag (which accepts another release's signature). In
+# install.md $VERSION is the tag (v0.3.0); in the verify job it is the
+# version (0.3.0), so the leg spells the tag v$VERSION.
+identity='https://github.com/abd-ulbasit/upgradescope/.github/workflows/release.yml@refs/tags/'
+! grep -q -- '--certificate-identity-regexp' docs/operations/install.md deploy/chart/README.md hack/docs/chart-README.md.gotmpl .goreleaser.yml &&
+  ok "no documented verify command uses an identity regexp" || fail "a documented verify command uses --certificate-identity-regexp"
+want_doc="--certificate-identity \"$identity\$VERSION\""
+[ "$(grep -cF -- "$want_doc" docs/operations/install.md)" -ge 2 ] && ok "install.md verifies checksums.txt and the image against the tag's exact identity" ||
+  fail "install.md does not use $want_doc for checksums.txt and the image"
+grep -qF -- "--certificate-identity \"${identity}v\$VERSION\"" "$vj" && ok "the leg uses install.md's exact identity" || fail "the leg's identity differs from install.md's"
+! grep -q -- '--certificate-identity-regexp' "$vj" && ok "the leg uses no identity regexp" || fail "the leg uses --certificate-identity-regexp"
 has "the leg verifies the image index" 'cosign verify "\$IMAGE:\$VERSION" "\$\{flags\[@\]\}"'
 has "the leg verifies each platform digest" 'cosign verify "\$IMAGE@\$d" "\$\{flags\[@\]\}"'
 has "the leg verifies the chart" 'cosign verify "\$\{CHART_REPO#oci://\}/upgradescope:\$VERSION" "\$\{flags\[@\]\}"'

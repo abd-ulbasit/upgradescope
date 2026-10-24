@@ -70,8 +70,44 @@ for v in "0.2.0 ''" "0.2.0-rc.2 rc.2"; do
   check "the footer ($1) shows the chart cosign verify command" "$1" "$pre" has "cosign verify ghcr.io/abd-ulbasit/charts/upgradescope:$1"
   check "the footer ($1) keeps verify-blob for checksums.txt" "$1" "$pre" has 'cosign verify-blob checksums.txt --bundle checksums.txt.sigstore.json'
   check "the footer ($1) says verify-blob works on older cosign" "$1" "$pre" has 'verify-blob` of `checksums.txt` works from cosign 2.4.3'
+  # The exact identity of this tag, never a pattern over every tag: one would
+  # accept another release's signed checksums.txt or image (a rollback or a
+  # swap between releases).
+  check "the footer ($1) verifies against this tag's exact identity" "$1" "$pre" has \
+    "--certificate-identity 'https://github.com/abd-ulbasit/upgradescope/.github/workflows/release.yml@refs/tags/v$1'"
+  check "the footer ($1) offers no identity regexp" "$1" "$pre" lacks 'identity-regexp'
+  # Build provenance: an attestation from any workflow of the repository
+  # passes without --signer-workflow and --source-ref.
+  check "the footer ($1) pins gh attestation verify to release.yml" "$1" "$pre" has \
+    '--signer-workflow abd-ulbasit/upgradescope/.github/workflows/release.yml'
+  check "the footer ($1) pins gh attestation verify to this tag" "$1" "$pre" has "--source-ref refs/tags/v$1 --deny-self-hosted-runners"
+  check "the footer ($1) verifies the image's provenance from the registry" "$1" "$pre" has \
+    "gh attestation verify oci://ghcr.io/abd-ulbasit/upgradescope:$1 --bundle-from-oci"
 done
 check "no template action is left unrendered" 0.2.0 "" lacks '{{'
+
+# The gh the release docs ask for: 2.102 and nothing older. Before 2.102.0,
+# gh attestation verify matched --signer-workflow only as a prefix of the
+# signing workflow's path (before 2.97.0 as an unescaped regexp) and
+# --source-ref ignoring case (cli/cli GHSA-wjmr-j3rp-mh2g,
+# GHSA-4mq3-hpgx-9cx8), so the commands would accept more than they claim.
+# The footer, install.md and the ledger's IR-28 name the same minimum. (The
+# Action's own gh_min, a capability check, is hack/action_test.sh's.)
+check "the footer names gh 2.102 as the provenance minimum" 0.2.0 "" has 'Build provenance (gh 2.102 or later)'
+check "the footer says why an older gh is not enough" 0.2.0 "" has '`--signer-workflow` as a prefix'
+for src in footer docs/operations/install.md IR-28; do
+  case $src in
+    footer) text=$(<"$work/footer.tmpl") ;;
+    IR-28) text=$(grep -E '^\| IR-28 ' docs/claims.md || true) ;;
+    *) text=$(<"$src") ;;
+  esac
+  found=$(grep -oE 'gh 2\.[0-9]+' <<<"$text" | sort -u | tr '\n' ',' || true)
+  if [ "$found" = "gh 2.102," ]; then
+    echo "ok   $src names gh 2.102 for gh attestation verify, and no other gh" | tee -a "$work/results"
+  else
+    echo "FAIL $src names gh versions '${found:-none}', want exactly 'gh 2.102'" | tee -a "$work/results" >&2
+  fi
+done
 
 # The header (#388): the notes list only the type!: commits under Breaking
 # changes, so they link the CHANGELOG at the tag, the reviewed record.

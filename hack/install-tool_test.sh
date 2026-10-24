@@ -47,6 +47,10 @@ expect "kyverno tarball checksum mismatch fails" 1 "sha256 mismatch for kyverno"
   UPGRADESCOPE_TOOL_URL="file://$work/junk"
 expect "gator tarball checksum mismatch fails" 1 "sha256 mismatch for gator" gator \
   UPGRADESCOPE_TOOL_URL="file://$work/junk"
+expect "grype tarball checksum mismatch fails" 1 "sha256 mismatch for grype" grype \
+  UPGRADESCOPE_TOOL_URL="file://$work/junk"
+expect "gitleaks tarball checksum mismatch fails" 1 "sha256 mismatch for gitleaks" gitleaks \
+  UPGRADESCOPE_TOOL_URL="file://$work/junk"
 expect "gator has no windows pin" 2 "no pinned gator for windows/amd64" gator \
   UPGRADESCOPE_TOOL_PLATFORM=windows/amd64
 

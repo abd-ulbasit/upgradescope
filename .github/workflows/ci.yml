@@ -369,11 +369,14 @@ jobs:
     if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    # hack/claims-trackers.sh reads issue states; the top-level block grants
-    # only contents.
+    # hack/claims-trackers.sh reads issue states, and
+    # hack/release-environment-live.sh the release environment (an Actions
+    # read); the top-level block grants only contents. release.yml's ci job
+    # must grant both too (hack/release-ci-permissions_test.sh).
     permissions:
       contents: read
       issues: read
+      actions: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -385,6 +388,14 @@ jobs:
           cache-dependency-path: |
             go.sum
             tools/*/go.sum
+      # No credential in the files this commit would ship: gitleaks (pinned,
+      # sha256-verified by hack/install-tool.sh) over the tracked and
+      # untracked, not ignored, files, with .gitleaks.toml's allowlist of fake
+      # fixtures. First, so a later step's output in the tree cannot hide or
+      # add a finding. GitHub's push protection, a repository setting, only
+      # stops known token formats; this also finds generic keys.
+      - name: no secrets in the tree
+        run: make secret-scan
       # The golang base image pins GOTOOLCHAIN=local, so a Dockerfile behind
       # go.mod's `go` directive fails at `go mod download` (the images and
       # kube jobs); GoReleaser must be one pinned version that go.mod's Go
@@ -417,16 +428,27 @@ jobs:
         run: hack/claims-trackers.sh
       # IR-06 and IR-11 are claims about the rulesets applied on GitHub, which
       # no file enforces: hack/rulesets-live.sh reads them (GET only) and
-      # fails when one differs from .github/rulesets/main.json or
-      # release-tags.json. It needs only metadata read, which the job's
-      # token has; with it the bypass actors are not visible, and are not
-      # compared. Online, so it skips a release like the step above, for the
-      # same reason (hack/claims-trackers_test.sh evaluates this if).
+      # fails when one differs from .github/rulesets/main.json,
+      # release-tags.json or release-tag-creation.json. It needs only
+      # metadata read, which the job's token has; with it the bypass actors
+      # are not visible, and are not compared. Online, so it skips a release
+      # like the step above, for the same reason (hack/claims-trackers_test.sh
+      # evaluates this if).
       - name: the live rulesets equal .github/rulesets
         if: ${{ !inputs.release }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: hack/rulesets-live.sh
+      # The `release` environment, which release.yml's goreleaser job waits
+      # on, is a repository setting too: GitHub creates it unprotected when a
+      # job first names it. hack/release-environment-live.sh reads it (GET
+      # only) and fails unless it has a required reviewer and deploys only
+      # tags v*.*.*. Online, so it skips a release like the steps above.
+      - name: the release environment holds releases for a reviewer
+        if: ${{ !inputs.release }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: hack/release-environment-live.sh
 
   # The heap-bound tests skip (or shrink) under the race detector, so
   # `make test` above never runs them in full; they are the proofs the
@@ -589,7 +611,9 @@ jobs:
       - name: npm audit of hack/renovate (per-advisory ignore list)
         run: make renovate-audit
 
-  # Dashboard: npm ci, vitest, typecheck + vite build, production advisories,
+  # Dashboard: npm ci, vitest, typecheck + vite build, two npm audits
+  # (moderate and up in production dependencies, high and up in all of
+  # them, the vite and TypeScript build toolchain included: hack/web-test.sh),
   # and the committed go:embed copy equals the fresh build.
   web:
     if: github.event_name != 'schedule'

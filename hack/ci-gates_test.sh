@@ -131,6 +131,7 @@ inert=(
   '.github/ISSUE_TEMPLATE/*'
   '.github/dependabot.yml'
   '.github/rulesets/*'
+  '.github/workflows/codeql.yml'
   '.github/workflows/docs.yml'
   '.github/workflows/kb-refresh-build.yml'
   '.github/workflows/kb-refresh.yml'
@@ -165,6 +166,13 @@ inert=(
   'hack/flags-diff.sh'
   'hack/helm-docs.sh'
   'hack/helm-test.sh'
+  # the published image and the release SBOMs, scanned by release.yml's
+  # verify job and daily; no gated job runs it
+  'hack/image-scan.sh'
+  'hack/grype.yaml'
+  # the secret scan and its allowlist: repo-checks (not gated) runs it
+  'hack/secret-scan.sh'
+  '.gitleaks.toml'
   'hack/kb-derived.sh'
   'hack/notices.sh'
   'hack/release-*.sh'

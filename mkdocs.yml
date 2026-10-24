@@ -135,4 +135,9 @@ nav:
       - Architecture: architecture.md
       - Background research (June 2026): research.md
       - Helm chart survey (October 2026): research/helm-chart-survey-2026-10/README.md
+      - Design notes:
+          - "The agent's access to Secrets": design/agent-secret-access.md
+          - "Signing the deb, rpm and apk packages": design/package-signing.md
+          - "Repository settings as code": design/repository-settings-as-code.md
+      - "Runbook: pulling back a bad release": maintainers/yanking-a-release.md
   - Changelog: changelog.md

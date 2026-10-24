@@ -8,10 +8,12 @@
 # kubectl: dl.k8s.io/.../kubectl.sha256; kubeconform: the release's
 # CHECKSUMS file; oras: the release's oras_<v>_checksums.txt; helm-docs: the
 # release's checksums.txt; kyverno: the release's checksums.txt; gator: the
-# release's sha256sums.txt), written down here so a tampered or substituted download
-# fails instead of running — in CI, kind and kubectl run with root-equivalent
-# access to the runner's Docker. Bump version and every checksum together,
-# from the upstream release page, never from a download of your own.
+# release's sha256sums.txt; grype: the release's grype_<v>_checksums.txt;
+# gitleaks: the release's gitleaks_<v>_checksums.txt), written down here so
+# a tampered or substituted download fails instead of running — in CI, kind
+# and kubectl run with root-equivalent access to the runner's Docker. Bump
+# version and every checksum together, from the upstream release page, never
+# from a download of your own.
 #
 # Installs into $TOOLS_BIN (default bin/tools, gitignored; a relative path is
 # relative to the repository root) and reuses an install whose recorded pin
@@ -35,6 +37,8 @@ ORAS_VERSION=v1.3.4 # release.yml pushes the Artifact Hub metadata with it
 HELM_DOCS_VERSION=v1.14.2 # make helm-docs: the chart values tables
 KYVERNO_VERSION=v1.19.1 # make examples-test: the Kyverno CLI that tests the example policy
 GATOR_VERSION=v3.23.1 # make examples-test: Gatekeeper's offline policy verifier
+GRYPE_VERSION=v0.120.1 # make image-scan: the published image and the release SBOMs
+GITLEAKS_VERSION=v8.30.1 # make secret-scan: credentials in the tree (CI's repo-checks job)
 
 # sha256 <tool> <os/arch>
 sha256_for() {
@@ -67,6 +71,14 @@ sha256_for() {
     "gator linux/arm64") echo 2d4bd0e28e708c2893a66fdca652f1d775b23fc5a3c07571fd314ba06d19ff2b ;;
     "gator darwin/amd64") echo 4318b3ce4bc115ed861ff4a1df26ad1ddf3ae0c7907f20caac85affd400af39e ;;
     "gator darwin/arm64") echo dc96df4a0bad0427b36d2b10473801528ca5bdb00f2addb34d17bb7d706ed99b ;;
+    "grype linux/amd64") echo 0a9ee97ef5ae2ee953b0a80098105052e846cdbe319a57d808b519c33cd1343d ;;
+    "grype linux/arm64") echo 29f47391dc283aa79fcc38e65224cd61f64dec0ecfd0db7074128ebf8ff23514 ;;
+    "grype darwin/amd64") echo 5313004ccbc524c8757521dc3913f1edf4309f56bef06a2fb2d0c0eeade7cc62 ;;
+    "grype darwin/arm64") echo cf97957fa467d25575ec2cc3228289f391ea51cf88b9cffc5f83dc03d4cbc732 ;;
+    "gitleaks linux/amd64") echo 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb ;;
+    "gitleaks linux/arm64") echo e4a487ee7ccd7d3a7f7ec08657610aa3606637dab924210b3aee62570fb4b080 ;;
+    "gitleaks darwin/amd64") echo dfe101a4db2255fc85120ac7f3d25e4342c3c20cf749f2c20a18081af1952709 ;;
+    "gitleaks darwin/arm64") echo b40ab0ae55c505963e365f271a8d3846efbc170aa17f2607f13df610a9aeb6a5 ;;
   esac
 }
 
@@ -82,7 +94,9 @@ case "$tool" in
   helm-docs) version=$HELM_DOCS_VERSION ;;
   kyverno) version=$KYVERNO_VERSION ;;
   gator) version=$GATOR_VERSION ;;
-  *) bad "unknown tool '$tool' (kind, kubectl, kubeconform, oras, helm-docs, kyverno, gator)" ;;
+  grype) version=$GRYPE_VERSION ;;
+  gitleaks) version=$GITLEAKS_VERSION ;;
+  *) bad "unknown tool '$tool' (kind, kubectl, kubeconform, oras, helm-docs, kyverno, gator, grype, gitleaks)" ;;
 esac
 
 platform=${UPGRADESCOPE_TOOL_PLATFORM:-$(uname -s | tr '[:upper:]' '[:lower:]')/$(uname -m)}
@@ -109,6 +123,11 @@ case "$tool" in
     url="https://github.com/kyverno/kyverno/releases/download/$version/kyverno-cli_${version}_${os}_${arch/amd64/x86_64}.tar.gz"
     ;;
   gator) url="https://github.com/open-policy-agent/gatekeeper/releases/download/$version/gator-$version-$os-$arch.tar.gz" ;;
+  grype) url="https://github.com/anchore/grype/releases/download/$version/grype_${version#v}_${os}_$arch.tar.gz" ;;
+  gitleaks)
+    # Asset names spell the architecture x64.
+    url="https://github.com/gitleaks/gitleaks/releases/download/$version/gitleaks_${version#v}_${os}_${arch/amd64/x64}.tar.gz"
+    ;;
 esac
 url=${UPGRADESCOPE_TOOL_URL:-$url}
 
@@ -151,6 +170,14 @@ case "$tool" in
   gator)
     tar -xzf "$work/download" -C "$work" gator || die "no gator in the $version archive"
     mv "$work/gator" "$work/bin"
+    ;;
+  grype)
+    tar -xzf "$work/download" -C "$work" grype || die "no grype in the $version archive"
+    mv "$work/grype" "$work/bin"
+    ;;
+  gitleaks)
+    tar -xzf "$work/download" -C "$work" gitleaks || die "no gitleaks in the $version archive"
+    mv "$work/gitleaks" "$work/bin"
     ;;
   *) mv "$work/download" "$work/bin" ;;
 esac

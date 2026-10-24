@@ -1287,10 +1287,13 @@ canverify "an unknown command" no 'unknown command "attestation" for "gh"'
 
 # The minimum gh is one number (run.sh's gh_min, read from cli/cli's source
 # at the release tags: --source-ref first ships in 2.68.0), and everything
-# that names a gh version names it.
+# about the Action that names a gh version names it: its files, the CI-gate
+# page and the ledger's Action rows (AC-). The release docs' own commands
+# name a higher one (IR-28; hack/release-footer_test.sh).
 gh_min=$(sed -n 's/^gh_min=//p' action/run.sh)
-for f in action.yml action/action.yml action/README.md docs/getting-started/ci-gate.md docs/claims.md; do
-  found=$(grep -oE 'gh 2\.[0-9]+' "$f" | sort -u | tr '\n' ',' || true)
+for f in action.yml action/action.yml action/README.md docs/getting-started/ci-gate.md 'docs/claims.md AC- rows'; do
+  if [ "$f" = 'docs/claims.md AC- rows' ]; then src=$(grep -E '^\| AC-' docs/claims.md); else src=$(cat "$f"); fi
+  found=$(grep -oE 'gh 2\.[0-9]+' <<<"$src" | sort -u | tr '\n' ',' || true)
   if [ "$gh_min" = 2.68 ] && [ "$found" = "gh $gh_min," ]; then ok "$f names gh $gh_min as the minimum, and no other"; else
     fail "$f names gh versions '${found:-none}', want exactly 'gh $gh_min' (gh_min=$gh_min)"
   fi

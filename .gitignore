@@ -6,3 +6,9 @@ node_modules/
 # internal/server/webdist (the dashboard staged for go:embed) is committed
 # on purpose so `go install …@vX` binaries serve the UI; `make web`
 # regenerates it and CI fails when it is stale.
+# Local credentials: never committed. Nothing tracked matches these; a test
+# that needs a key or certificate generates it at run time.
+.env
+.env.*
+*.pem
+*.key

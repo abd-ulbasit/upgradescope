@@ -104,7 +104,10 @@ The hardened settings are therefore `rbac.helmSecrets=false` (no Secret or
 ConfigMap read at all; Helm chart findings go missing), or
 `rbac.helmSecretsNamespaces` listing only the namespaces that hold add-on
 releases. Keep the default only where reading every Secret is acceptable for
-a read-only scanner's token.
+a read-only scanner's token. The chart has no egress NetworkPolicy for the
+agent, so nothing limits where a compromised agent could send what it
+reads. [A design note](../design/agent-secret-access.md) proposes making
+`false` the default in the next minor release and adding that policy.
 
 `rbac.create=false` lets you bind a role of your own; each collector that
 lacks access degrades to "not assessed" with the reason.
@@ -258,6 +261,21 @@ and the releases apart.
   URL as an environment variable, never as arguments. Either source is
   trimmed of surrounding whitespace (a Secret's trailing newline), and a
   value of whitespace only is refused.
+- **Values passed to Helm stay in Helm's history.** Helm stores each
+  release revision, the values you set and every rendered manifest, in a
+  Secret `sh.helm.release.v1.<release>.v<N>` in the release namespace. A
+  token, webhook URL or webhook key set as a chart value
+  (`server.ingestToken`, `readToken`, `adminToken`, `slackWebhook`,
+  `webhook`, `webhookSecret`, `agent.serverToken`), and the ingest token the
+  chart generates when none is set, is readable there by anyone who can
+  `get` Secrets in that namespace, the agent included when
+  `rbac.helmSecrets` covers it. Rotating the value leaves the old one in the
+  earlier revisions, up to `helm upgrade --history-max` of them (10 by
+  default). Outside a test install, create the Secrets yourself and name
+  them with `server.existingSecret` and `agent.existingSecret`: then no
+  secret value passes through Helm. After a token leaked through a value,
+  revoke it at its source (`tokens revoke`, a new Slack webhook), since
+  rotating it in the chart does not clear the history.
 - **Webhook URLs are secrets too.** A Slack webhook's path is its
   credential. `serve` refuses to start unless `--slack-webhook` and
   `--webhook` are absolute http(s) URLs, naming the flag and never the
@@ -359,3 +377,36 @@ archives (through a signed `checksums.txt`), the image and the chart are
 signed keylessly with cosign, archives carry SBOMs and build provenance, and
 the GitHub Action installs only a release archive that matches its
 `checksums.txt` ([Install](install.md#verify-a-download)).
+
+Building and signing are separate jobs of the release workflow. The job
+that compiles the code and every dependency, and so would run a malicious
+one, holds no OIDC token: it cannot sign or attest anything as the release
+workflow. A second job, which builds nothing, checks that the release's
+`checksums.txt` and image are the ones the first job reported, then signs
+them and attests their provenance. Releases after v0.3.0 also carry a
+build-provenance attestation of the image in the registry. Publishing waits
+on the repository's `release` environment, whose required reviewer is a
+repository setting that CI checks on every pull request and push, and a
+ruleset kept in
+`.github/rulesets/release-tag-creation.json` lets only the repository's
+admin role create a release tag once it is applied.
+
+### What each check catches, and what it misses
+
+No single check covers the supply chain. This is what runs, where, and the
+gap each one leaves; the claims ledger's IR rows hold the tests behind them.
+
+| Check | Runs | Catches | Misses |
+|---|---|---|---|
+| govulncheck, binary mode (`make vuln`, `hack/vuln-allowlist.txt`) | CI on code changes, `main`, weekly and every release; daily on the latest release's binary | Go advisories, standard library included, whose vulnerable code the linux/amd64 binary can reach; an accepted one needs a reason and an expiry | OS packages in the image, the dashboard's npm tree, CI tooling, and unreachable vulnerable code (by design) |
+| grype on the image and SBOMs (`make image-scan`, `hack/grype.yaml`) | every release (verify job) and daily | fixable high and critical CVEs in the distroless base's packages and in every module the published SBOMs list, reachable or not | anything before publishing (it scans what was pushed), unfixed CVEs, and findings below high |
+| npm audit (`make web-test`) | CI on every pull request and `main` | moderate and worse advisories in the dashboard's runtime dependencies, high and worse in all of them, the vite and TypeScript toolchain included | advisories published between pull requests (no scheduled run) and malicious packages that have no advisory |
+| npm audit of `hack/renovate` (`make renovate-audit`) | CI's vuln job, weekly | advisories in the CI-only Renovate validator | — |
+| CodeQL, security-extended (`codeql.yml`) | pull requests, `main`, weekly | taint flows in the Go code (request input into SQL, file paths, redirects, outbound requests, logs), DOM XSS in the dashboard, injection and permission problems in the workflows | authorization logic, and it does not block a merge (not part of `ci-ok`) |
+| go vet and staticcheck (`make lint`) | every pull request | bugs and API misuse | security flows |
+| gitleaks (`make secret-scan`, `.gitleaks.toml`) | every pull request and push | credentials, generic keys included, in the files a commit ships | secrets added and removed within a pull request's own commits (`--history` scans those by hand) |
+| Dependabot | weekly | outdated actions, Go modules, npm packages and base images | tool versions pinned in `hack/` scripts, the kind node images and the BuildKit image, bumped by hand |
+| OpenSSF Scorecard (`scorecard.yml`) | pushes to `main`, and weekly | repository practices: pinning, token permissions, branch protection | code |
+| `hack/rulesets-live.sh` | every pull request and push | drift between `.github/rulesets/*.json` and the applied rulesets | `bypass_actors`, which the CI token cannot see |
+| `hack/release-environment-live.sh` | every pull request and push | a `release` environment that is missing, has no required reviewer, or deploys from more than the tags `v*.*.*` | who the reviewer is, and an approval given with a stolen maintainer token |
+| Release verification (release.yml's `verify` job) | every release | the image, every platform image and the chart verify with cosign against the exact tag, the image's provenance with `gh attestation verify`, and the published chart installs on kind | a release whose tagged `release.yml` was altered to skip it |

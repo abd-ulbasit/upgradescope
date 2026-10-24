@@ -7,8 +7,8 @@
 #   - release.yml's steps that call it, run the way Actions runs a run:
 #     step without shell: (`bash -e {0}`: errexit, no pipefail) against a
 #     stub gh, docker and oras: preflight's newest outputs, the goreleaser
-#     job's re-check and its closing step that points Latest and :latest at
-#     the highest release, and major-tag; each with a failing gh too, which
+#     job's re-check, the sign job's closing step that points Latest and
+#     :latest at the highest release, and major-tag; each with a failing gh too, which
 #     must fail the step and decide nothing (a piped `gh release list`
 #     failing under bash -e read as an empty list: newest=true);
 #   - the wiring: major-tag runs only on preflight's major-newest, under one
@@ -16,9 +16,10 @@
 #     UPGRADESCOPE_NEWEST;
 #   - GitHub's Latest is set only after the build-provenance attestation
 #     exists (#304): .goreleaser.yml's make_latest is the literal "false", the
-#     closing step is the only one that can set Latest and runs after
-#     actions/attest-build-provenance with no status function in its if:, so
-#     a run whose attestation fails leaves Latest on the previous release;
+#     closing step is the only one that can set Latest and runs after every
+#     actions/attest-build-provenance step of its job (the sign job, which
+#     needs the goreleaser job) with no status function in its if:, so a run
+#     whose attestation fails leaves Latest on the previous release;
 #     and a run moves Latest only to its own release, never to a higher one
 #     that is published but not yet attested by its own run;
 #   - .goreleaser.yml's :latest image template, rendered with Go's
@@ -237,7 +238,7 @@ step preflight 'is this the highest stable release?' | grep -qxF '        id: ne
   ok "preflight outputs newest and major-newest from the step" ||
   fail "preflight does not output newest and major-newest from steps.newest"
 
-# --- goreleaser: re-check, GoReleaser's env, the closing reconcile -----------
+# --- goreleaser: re-check, GoReleaser's env; sign: the closing reconcile ----
 
 step_run goreleaser 'is this still the highest stable release?' >"$work/recheck.sh"
 [ -s "$work/recheck.sh" ] || { echo "FAIL no re-check step in the goreleaser job" >&2; exit 1; }
@@ -261,12 +262,13 @@ step goreleaser 'is this still the highest stable release?' | grep -qxF '       
   fail "GoReleaser does not get UPGRADESCOPE_NEWEST from the re-check step before it"
 
 name="GitHub's Latest and the image's :latest name the highest stable release"
-step_run goreleaser "$name" >"$work/reconcile.sh"
-[ -s "$work/reconcile.sh" ] || { echo "FAIL no '$name' step in the goreleaser job" >&2; exit 1; }
-step goreleaser "$name" | grep -qxF "        if: \${{ !contains(github.ref_name, '-') }}" &&
-  [ "$(job goreleaser | grep -n 'uses: goreleaser/goreleaser-action@' | cut -d: -f1)" -lt "$(job goreleaser | grep -nF -- "- name: $name" | cut -d: -f1)" ] &&
-  ok "goreleaser: the reconcile step runs after publishing, for stable tags only" ||
-  fail "goreleaser: the reconcile step is not after GoReleaser with if: !contains(github.ref_name, '-')"
+step_run sign "$name" >"$work/reconcile.sh"
+[ -s "$work/reconcile.sh" ] || { echo "FAIL no '$name' step in the sign job" >&2; exit 1; }
+step sign "$name" | grep -qxF "        if: \${{ !contains(github.ref_name, '-') }}" &&
+  job sign | grep -qxE '    needs: (goreleaser|\[goreleaser\])' &&
+  ! job sign | grep -qE '^    if:' &&
+  ok "sign: the reconcile step runs after publishing (the sign job needs the goreleaser job), for stable tags only" ||
+  fail "sign: the reconcile step is not in a job that needs goreleaser, with if: !contains(github.ref_name, '-')"
 cat >"$work/digests" <<'EOF'
 ghcr.io/o/r:v0.2.0 sha256:aaa
 ghcr.io/o/r:v0.2.1 sha256:bbb
@@ -406,10 +408,11 @@ ml=$(nonc "$gr" | grep -E '^ *make_latest:' || true)
 if [ "$ml" = '  make_latest: "false"' ]; then ok "GoReleaser's make_latest is the literal \"false\""; else
   fail "GoReleaser's make_latest is not exactly '  make_latest: \"false\"' (got: ${ml:-none})"
 fi
-# The step list of the goreleaser job, one line per step, comments dropped:
+# The step list of the sign job (the job that attests and then moves
+# Latest), one line per step, comments dropped:
 # "<n>|<first line>|<sets make_latest=true>|<status function in if:>|<continue-on-error>".
 gsteps() {
-  job goreleaser | awk '
+  job sign | awk '
     function flush() { if (n) printf "%d|%s|%d|%d|%d\n", n, first, lat, st, coe }
     /^      - / { flush(); n++; first = $0; sub(/^ *- /, "", first); lat = 0; st = 0; coe = 0 }
     /^ *#/ { next }
@@ -419,15 +422,24 @@ gsteps() {
     END { flush() }'
 }
 gsteps >"$work/gsteps"
-attest_n=$(awk -F'|' '$2 ~ /^uses: actions\/attest-build-provenance@/ { print $1 }' "$work/gsteps")
+# Every attest-build-provenance step (the archives through checksums.txt,
+# and the image), first and last.
+attest_ns=$(awk -F'|' '$2 ~ /^uses: actions\/attest-build-provenance@/ { print $1 }' "$work/gsteps")
+attest_first=$(head -1 <<<"$attest_ns")
+attest_last=$(tail -1 <<<"$attest_ns")
 setters=$(awk -F'|' '$3 == 1 { print $1 }' "$work/gsteps")
-if [ -n "$attest_n" ] && [ "$(wc -l <<<"$attest_n" | tr -d ' ')" = 1 ]; then ok "the goreleaser job has one attest-build-provenance step"; else
-  fail "the goreleaser job does not have exactly one actions/attest-build-provenance step (steps: $(cut -d'|' -f1,2 "$work/gsteps" | tr '\n' ' '))"
+if [ -n "$attest_ns" ] && [ "$(wc -l <<<"$attest_ns" | tr -d ' ')" = 2 ]; then ok "the sign job has two attest-build-provenance steps (archives, image)"; else
+  fail "the sign job does not have exactly two actions/attest-build-provenance steps (steps: $(cut -d'|' -f1,2 "$work/gsteps" | tr '\n' ' '))"
 fi
-if [ -n "$setters" ] && [ "$(wc -l <<<"$setters" | tr -d ' ')" = 1 ] && [ -n "$attest_n" ] && [ "$setters" -gt "${attest_n:-0}" ]; then
-  ok "the only step that sets make_latest=true runs after actions/attest-build-provenance in the same job"
+if job goreleaser | grep -q 'actions/attest-build-provenance@'; then
+  fail "the goreleaser job has an attest-build-provenance step: attesting is the sign job's"
 else
-  fail "the goreleaser job's steps that set make_latest=true ($(tr '\n' ' ' <<<"$setters")) are not exactly one, after the attest step ($attest_n)"
+  ok "the goreleaser job attests nothing"
+fi
+if [ -n "$setters" ] && [ "$(wc -l <<<"$setters" | tr -d ' ')" = 1 ] && [ -n "$attest_last" ] && [ "$setters" -gt "${attest_last:-0}" ]; then
+  ok "the only step that sets make_latest=true runs after every actions/attest-build-provenance step in the same job"
+else
+  fail "the sign job's steps that set make_latest=true ($(tr '\n' ' ' <<<"$setters")) are not exactly one, after the attest steps ($(tr '\n' ' ' <<<"$attest_ns"))"
 fi
 if [ "$setters" = "$(awk -F'|' -v want="name: $name" '$2 == want { print $1 }' "$work/gsteps")" ]; then
   ok "that step is '$name'"
@@ -443,9 +455,10 @@ fi
 # A failed attest step: every later step without a status function (if:
 # always(), failure(), cancelled()) is skipped, and so is a step whose job
 # carries on after a failure (continue-on-error).
-if [ "$(awk -F'|' -v a="$attest_n" '$1 == a { print $5 }' "$work/gsteps")" = 0 ] &&
-  [ "$(job goreleaser | grep -cE '^    continue-on-error:')" = 0 ] &&
-  ! awk -F'|' -v a="$attest_n" '$1 > a && $3 == 1 && $4 == 1 { bad = 1 } END { exit !bad }' "$work/gsteps"; then
+coe_attest=$(awk -F'|' '$2 ~ /^uses: actions\/attest-build-provenance@/ && $5 == 1' "$work/gsteps")
+if [ -z "$coe_attest" ] &&
+  [ "$(job sign | grep -cE '^    continue-on-error:')" = 0 ] &&
+  ! awk -F'|' -v a="$attest_first" '$1 > a && $3 == 1 && $4 == 1 { bad = 1 } END { exit !bad }' "$work/gsteps"; then
   ok "an attestation that fails skips the step that sets Latest (no continue-on-error, no always()/failure()/cancelled() in its if:)"
 else
   fail "a failed attest-build-provenance step would not skip the step that sets Latest"

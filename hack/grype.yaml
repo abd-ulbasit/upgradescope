@@ -1,0 +1,17 @@
+# grype configuration for hack/image-scan.sh (make image-scan; release.yml's
+# verify job; the daily image job of vuln-latest-release.yml). The scan fails
+# on any finding that has a fix and is high or critical, in the published
+# image (both platforms) or in a release SBOM.
+#
+# Accept a finding only with a reason, and with a review date in a comment:
+# grype's ignore rules do not expire on their own, so a release's PR
+# re-reads this list. Prefer fixing: the image is distroless and the binary
+# static, so a fixable finding is almost always a Go module or Go patch
+# bump (and govulncheck, hack/vulncheck.sh, says whether it is reachable).
+#
+# Example (do not commit an entry without both):
+#   - vulnerability: GHSA-xxxx-xxxx-xxxx
+#     package:
+#       name: example.com/module
+#     reason: not reachable (govulncheck); fixed by the next bump, review 2026-12-01
+ignore: []

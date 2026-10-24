@@ -8,8 +8,10 @@ the fix.
 
 | Version | Supported |
 |---|---|
-| 0.1.x (latest minor) | yes |
-| anything older | no |
+| 0.3.x (latest minor) | yes |
+| 0.2.x and older | no |
+
+The release commit of each new minor updates this table.
 
 The knowledge base is compiled into the binary and the container image. A fix
 to detection data (a wrong EOL date or a missed API removal) therefore also

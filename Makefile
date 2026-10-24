@@ -29,8 +29,9 @@ web:
 	find internal/server/webdist -mindepth 1 -type d -empty -delete
 	cp -R web/dist/. internal/server/webdist/
 
-# The CI dashboard gate: npm ci, vitest, typecheck + vite build, production
-# dependency advisories, and the committed webdist equals the fresh build.
+# The CI dashboard gate: npm ci, vitest, typecheck + vite build, advisories
+# (moderate and up in production dependencies, high and up in every one, the
+# build toolchain included), and the committed webdist equals the fresh build.
 # Read-only outside web/. Needs Node (CI runs it on Node 22 and 24).
 .PHONY: web-test
 web-test:
@@ -130,6 +131,25 @@ vuln:
 .PHONY: vuln-latest
 vuln-latest:
 	./hack/vuln-latest-release.sh
+
+# What govulncheck cannot see in a release: grype (pinned, sha256-verified)
+# on the published image, both platforms, and on the SBOMs the release
+# publishes, held to its signed checksums.txt. Fails on a fixable high or
+# critical finding not accepted in hack/grype.yaml. RELEASE_TAG=vX.Y.Z picks a
+# release (default the latest). release.yml's verify job and the daily
+# vuln-latest-release workflow run it. Needs gh, jq, cosign and network.
+.PHONY: image-scan
+image-scan:
+	./hack/image-scan.sh $(RELEASE_TAG)
+
+# No credentials in the files git would commit (gitleaks, pinned and
+# sha256-verified; .gitleaks.toml allowlists fake test fixtures by value).
+# CI's repo-checks job runs it first. `./hack/secret-scan.sh --history`
+# scans every commit of a full clone instead. Needs jq and, the first time,
+# network (it installs gitleaks into bin/tools).
+.PHONY: secret-scan
+secret-scan:
+	./hack/secret-scan.sh
 
 # Offline tests for the gate itself: a stub scanner drives hack/vulncheck.sh
 # through its pass, fail and fail-closed paths.
@@ -369,6 +389,13 @@ claims-server: build
 rulesets-check:
 	./hack/rulesets-live.sh
 
+# The release environment holds every release for a reviewer and deploys only
+# tags v*.*.*. Online and read-only, like rulesets-check (CI's repo-checks job
+# passes github.token with actions: read).
+.PHONY: release-environment-check
+release-environment-check:
+	./hack/release-environment-live.sh
+
 # Offline self-tests of the hack/ scripts CI is built from (stubs and
 # fixtures only: no network, cluster or Docker).
 .PHONY: hack-test
@@ -376,6 +403,7 @@ hack-test:
 	./hack/claims-check_test.sh
 	./hack/claims-trackers_test.sh
 	./hack/rulesets-live_test.sh
+	./hack/release-environment-live_test.sh
 	./hack/shard_test.sh
 	./hack/test-heap_test.sh
 	./hack/test_test.sh
@@ -412,6 +440,7 @@ hack-test:
 	./hack/check-release-ancestry_test.sh
 	./hack/release-preflight_test.sh
 	./hack/release-newest_test.sh
+	./hack/release-sign_test.sh
 	./hack/ruleset-tags_test.sh
 	./hack/flags-diff_test.sh
 	./hack/check-doc-sizes_test.sh
@@ -419,11 +448,14 @@ hack-test:
 	./hack/chart-release-annotations_test.sh
 	./hack/vuln-latest-release_test.sh
 	./hack/vuln-latest-release-workflow_test.sh
+	./hack/image-scan_test.sh
+	./hack/secret-scan_test.sh
 	./hack/release-artifacthub-workflow_test.sh
 	./hack/docs-live-check_test.sh
 	./hack/docs-live-workflow_test.sh
 	./hack/chart-survey_test.sh
 	./packaging/homebrew-tap/script/render-formula_test.sh
+	./packaging/homebrew-tap/script/update_test.sh
 
 .PHONY: demo-up demo-down
 demo-up:

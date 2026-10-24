@@ -57,9 +57,33 @@ sha256sum --ignore-missing -c checksums.txt   # macOS: shasum -a 256 -c --ignore
 cosign 2.4.1 fails on the bundle (`bundle does not contain cert for
 verification`) unless `verify-blob` also gets `--new-bundle-format`.
 
+The identity names the exact tag of the release you downloaded. Do not
+loosen it to a regular expression that matches every tag
+(`release\.yml@refs/tags/.*`): that accepts any release's signature, so
+another release's `checksums.txt` (an older one with a known flaw, say)
+would verify as this one.
+
 Each archive also has an SPDX SBOM (`<archive>.sbom.json`) and a GitHub
-build-provenance attestation (`gh attestation verify <archive> --repo
-abd-ulbasit/upgradescope`).
+build-provenance attestation. Verify it with gh 2.102 or later, naming the
+workflow and the tag (what the GitHub Action checks before it installs):
+
+```sh
+gh attestation verify upgradescope_linux_amd64.tar.gz --repo abd-ulbasit/upgradescope \
+  --signer-workflow abd-ulbasit/upgradescope/.github/workflows/release.yml \
+  --source-ref "refs/tags/$VERSION" --deny-self-hosted-runners
+```
+
+`--repo` alone accepts an attestation made by any workflow of the
+repository, on any branch; `--signer-workflow` and `--source-ref` limit it to
+the release workflow run for this tag. They do so exactly from gh 2.102.0
+on. Older versions accept more: `--signer-workflow` matches only the start
+of the signing workflow's path (and, before 2.97.0, as an unescaped regular
+expression), and `--source-ref` ignores case
+([GHSA-wjmr-j3rp-mh2g](https://github.com/cli/cli/security/advisories/GHSA-wjmr-j3rp-mh2g),
+[GHSA-4mq3-hpgx-9cx8](https://github.com/cli/cli/security/advisories/GHSA-4mq3-hpgx-9cx8)).
+With one of those, an attestation from another workflow of this repository
+whose path begins with `release.yml`, or from a tag that differs only in
+case, would pass.
 
 The deb, rpm and apk packages are covered by the same `checksums.txt`, under
 the names GitHub serves them with, so download them by those names and the
@@ -108,12 +132,27 @@ license notices in `/licenses/`, for linux/amd64 and linux/arm64. Verify
 the signature with **cosign 3.x, or 2.6.3 or later**:
 
 ```sh
-cosign verify ghcr.io/abd-ulbasit/upgradescope:0.2.0 \
-  --certificate-identity-regexp '^https://github.com/abd-ulbasit/upgradescope/\.github/workflows/release\.yml@refs/tags/' \
+VERSION=v0.3.0
+cosign verify "ghcr.io/abd-ulbasit/upgradescope:${VERSION#v}" \
+  --certificate-identity "https://github.com/abd-ulbasit/upgradescope/.github/workflows/release.yml@refs/tags/$VERSION" \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 ```
 
-Each platform image is signed too and verifies on its own, by digest.
+Each platform image is signed too and verifies on its own, by digest. As
+for `checksums.txt`, the identity is the exact tag of the image's version:
+a pattern over every tag would accept another release's image under this
+tag.
+
+Releases after v0.3.0 also attach a build-provenance attestation to the
+image index in the registry. Verify it with gh 2.102 or later (older
+versions check `--signer-workflow` and `--source-ref` loosely, as above):
+
+```sh
+gh attestation verify "oci://ghcr.io/abd-ulbasit/upgradescope:${VERSION#v}" --bundle-from-oci \
+  --repo abd-ulbasit/upgradescope \
+  --signer-workflow abd-ulbasit/upgradescope/.github/workflows/release.yml \
+  --source-ref "refs/tags/$VERSION" --deny-self-hosted-runners
+```
 
 The signatures are in cosign 3's bundle format, stored as OCI referrers. On
 cosign 2.6.2 or older the command above fails with `Error: no signatures
@@ -132,10 +171,11 @@ helm install upgradescope oci://ghcr.io/abd-ulbasit/charts/upgradescope \
 ```
 
 The published chart pins the image of its release by digest. It is signed
-with cosign (`cosign verify ghcr.io/abd-ulbasit/charts/upgradescope:0.2.0`
-with the flags above, and the same minimum: **cosign 3.x, or 2.6.3 or
-later**; older versions fail with `no signatures found`). To run unreleased
-changes, install from a clone of the repository instead:
+with cosign (`cosign verify "ghcr.io/abd-ulbasit/charts/upgradescope:${VERSION#v}"`
+with the flags above, the identity naming that version's tag, and the same
+minimum: **cosign 3.x, or 2.6.3 or later**; older versions fail with
+`no signatures found`). To run unreleased changes, install from a clone of
+the repository instead:
 `helm install upgradescope deploy/chart ...`, with `image.repository` and
 `image.tag` set to an image built from the clone (`make docker-build`): a
 clone's chart defaults to the image of the release it was cut for.

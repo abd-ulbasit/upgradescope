@@ -479,6 +479,15 @@ cannot write the step summary, so a warning replaces it.
   `gh` without `attestation`, not as a failed verification. Once the `gh`
   can verify, any `gh` failure fails the step; `cosign` is not tried after
   it.
+  A `gh` older than 2.102.0 runs the same call but checks it more loosely:
+  it matches `--signer-workflow` against only the start of the signing
+  workflow's path, and `--source-ref` without regard to case
+  ([GHSA-wjmr-j3rp-mh2g](https://github.com/cli/cli/security/advisories/GHSA-wjmr-j3rp-mh2g),
+  [GHSA-4mq3-hpgx-9cx8](https://github.com/cli/cli/security/advisories/GHSA-4mq3-hpgx-9cx8)).
+  There, an attestation from another workflow of this repository whose path
+  begins with `release.yml`, or from a tag that differs only in case, would
+  pass; making either needs write access to this repository. Update `gh`
+  on self-hosted runners.
   On GitHub Enterprise Server or GHE.com runners, `github.token` belongs to
   that host, not github.com, so `gh attestation verify` against this
   repository fails: put `cosign` on `PATH` and no `gh`, or set

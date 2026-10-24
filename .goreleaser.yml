@@ -1,10 +1,13 @@
 # GoReleaser config. Releases are cut by CI only: pushing a vX.Y.Z tag runs
-# .github/workflows/release.yml, which publishes archives, deb/rpm/apk
-# packages, checksums, SBOMs, cosign signatures and the multi-arch GHCR
-# image (the Helm chart is pushed by the workflow itself). ci.yml proves this
-# file on PRs that touch it.
+# .github/workflows/release.yml, whose goreleaser job publishes archives,
+# deb/rpm/apk packages, checksums, SBOMs and the multi-arch GHCR image with
+# this file. It signs nothing: there are no signs or docker_signs here, and
+# that job has no OIDC token. release.yml's sign job signs checksums.txt
+# and the image, and attests their provenance, in a job that builds nothing
+# (the Helm chart is pushed and signed by the workflow itself too).
+# ci.yml proves this file on PRs that touch it.
 #
-# Local dry run with the pinned GoReleaser (no publish, no signing, no SBOMs),
+# Local dry run with the pinned GoReleaser (no publish, no SBOMs),
 # the same command CI's release-check job runs:
 #   make release-check
 # It builds the per-arch images locally too (never pushed); on a machine
@@ -182,18 +185,14 @@ checksum:
 sboms:
   - artifacts: archive
 
-# Keyless (Sigstore OIDC from the GitHub Actions run): no key to manage.
-# checksums.txt covers every archive and package, so signing it signs them
-# all.
-signs:
-  - cmd: cosign
-    signature: '${artifact}.sigstore.json'
-    args:
-      - sign-blob
-      - '--bundle=${signature}'
-      - '${artifact}'
-      - --yes
-    artifacts: checksum
+# No signs: and no docker_signs: on purpose. release.yml's sign job signs
+# checksums.txt (keyless, Sigstore OIDC from the GitHub Actions run: no key
+# to manage; checksums.txt covers every archive and package, so signing it
+# signs them all) and the image index with every platform image (cosign
+# --recursive), after checking they are what this config built. The job
+# that runs GoReleaser compiles every dependency and holds no id-token
+# permission, so nothing it runs can sign as the release workflow
+# (hack/release-sign_test.sh).
 
 dockers_v2:
   - images:
@@ -262,18 +261,6 @@ dockers_v2:
       org.opencontainers.image.licenses: Apache-2.0
       org.opencontainers.image.description: Continuous Kubernetes upgrade-readiness scanner
 
-docker_signs:
-  # Default artifacts: the dockers_v2 images. Keyless, like signs above.
-  # --recursive signs the multi-arch index and every platform manifest in
-  # it, so `cosign verify image@<platform digest>` (what a node actually
-  # pulls) verifies too; release.yml's verify job checks each one.
-  - cmd: cosign
-    args:
-      - sign
-      - --recursive
-      - '${artifact}@${digest}'
-      - --yes
-
 changelog:
   use: git
   sort: asc
@@ -316,14 +303,16 @@ release:
   # GoReleaser publishes before actions/attest-build-provenance runs, and a
   # Latest set here is a release with no attestation for as long as the
   # attestation takes, or for good if it fails, and again on every re-run of
-  # the job (#304). release.yml's last step moves Latest, to the run's own
-  # release when that is the highest stable one, only after its attestation
-  # exists.
+  # the job (#304). The last step of release.yml's sign job moves Latest, to
+  # the run's own release when that is the highest stable one, only after
+  # its attestation exists.
   make_latest: "false"
   # Re-running a release that failed half-way (same tag, same commit)
   # overwrites the assets it already uploaded instead of failing on them.
-  # checksums.txt and its signature are replaced in the same run, so they
-  # always match the archives on the release.
+  # checksums.txt is replaced with the archives; its signature is replaced
+  # by release.yml's sign job, which a re-run of this job runs again after
+  # it, signing the checksums.txt this run uploaded (the build is
+  # reproducible, so a re-run on the same commit uploads the same one).
   replace_existing_artifacts: true
   # The contracts listed under checksum: (#60).
   extra_files: *contracts
@@ -343,7 +332,7 @@ release:
 
     {{ if not .Prerelease }}- Homebrew: `brew install abd-ulbasit/tap/upgradescope` (the tap pulls each stable release within about 6 hours)
     {{ end }}- krew: `kubectl krew install upgradescope` (once the plugin is in krew-index)
-    - Debian/Ubuntu, Fedora/RHEL, Alpine: the `.deb`, `.rpm` and `.apk` packages below. The packages themselves are unsigned (verify them with `checksums.txt`), so Alpine needs `apk add --allow-untrusted ./upgradescope_*.apk`.
+    - Debian/Ubuntu, Fedora/RHEL, Alpine: the `.deb`, `.rpm` and `.apk` packages below. The packages themselves are unsigned ([why](https://github.com/abd-ulbasit/upgradescope/blob/{{ .Tag }}/docs/design/package-signing.md)): run the Verify commands below on `checksums.txt` and the package first, because Alpine's `apk add --allow-untrusted ./upgradescope_*.apk` skips apk's own signature check.
     - Binary: download the archive for your platform below; it includes shell completions and man pages.
     - Image: `ghcr.io/abd-ulbasit/upgradescope:{{ .Version }}` (linux/amd64, linux/arm64)
     - Helm: `helm install upgradescope oci://ghcr.io/abd-ulbasit/charts/upgradescope --version {{ .Version }}`
@@ -354,17 +343,29 @@ release:
 
     ## Verify
 
-    Archives, the image and the chart are signed keylessly by this repository's release workflow. Verifying the image or the chart needs **cosign 3.x, or 2.6.3 or later** (older versions fail with `no signatures found`); `cosign verify-blob` of `checksums.txt` works from cosign 2.4.3.
+    Archives, the image and the chart are signed keylessly by this repository's release workflow at this release's tag. Verifying the image or the chart needs **cosign 3.x, or 2.6.3 or later** (older versions fail with `no signatures found`); `cosign verify-blob` of `checksums.txt` works from cosign 2.4.3. The identity below names this tag exactly: a pattern that accepts any tag would also accept another release's signed `checksums.txt` or image, so an older release could be passed off as this one.
 
     ```sh
     cosign verify-blob checksums.txt --bundle checksums.txt.sigstore.json \
-      --certificate-identity-regexp '^https://github.com/abd-ulbasit/upgradescope/\.github/workflows/release\.yml@refs/tags/' \
+      --certificate-identity 'https://github.com/abd-ulbasit/upgradescope/.github/workflows/release.yml@refs/tags/{{ .Tag }}' \
       --certificate-oidc-issuer https://token.actions.githubusercontent.com
     sha256sum --ignore-missing -c checksums.txt
 
     cosign verify ghcr.io/abd-ulbasit/upgradescope:{{ .Version }} \
-      --certificate-identity-regexp '^https://github.com/abd-ulbasit/upgradescope/\.github/workflows/release\.yml@refs/tags/' \
+      --certificate-identity 'https://github.com/abd-ulbasit/upgradescope/.github/workflows/release.yml@refs/tags/{{ .Tag }}' \
       --certificate-oidc-issuer https://token.actions.githubusercontent.com
     ```
 
     Each platform image is signed too and verifies on its own: `cosign verify ghcr.io/abd-ulbasit/upgradescope@<platform digest>` with the same flags (and the chart: `cosign verify ghcr.io/abd-ulbasit/charts/upgradescope:{{ .Version }}`). Each archive has an SPDX SBOM (`<archive>.sbom.json`); archives, packages and the image carry LICENSE, NOTICE and THIRD_PARTY_NOTICES (in the image under `/licenses/`).
+
+    Build provenance (gh 2.102 or later), for an archive or package and for the image. `--signer-workflow` and `--source-ref` are what tie the attestation to this release: without them, an attestation made by any workflow of the repository, on any branch, would pass. Older gh checks both loosely (`--signer-workflow` as a prefix of the workflow's path, `--source-ref` ignoring case), so use 2.102 or later.
+
+    ```sh
+    gh attestation verify upgradescope_linux_amd64.tar.gz --repo abd-ulbasit/upgradescope \
+      --signer-workflow abd-ulbasit/upgradescope/.github/workflows/release.yml \
+      --source-ref refs/tags/{{ .Tag }} --deny-self-hosted-runners
+    gh attestation verify oci://ghcr.io/abd-ulbasit/upgradescope:{{ .Version }} --bundle-from-oci \
+      --repo abd-ulbasit/upgradescope \
+      --signer-workflow abd-ulbasit/upgradescope/.github/workflows/release.yml \
+      --source-ref refs/tags/{{ .Tag }} --deny-self-hosted-runners
+    ```

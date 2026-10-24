@@ -8,7 +8,7 @@ workflow can do.
 | Channel | Built by | Verified by |
 | --- | --- | --- |
 | Archives, linux/darwin/windows × amd64/arm64 (binary, completions, man pages, LICENSE, NOTICE, THIRD_PARTY_NOTICES) | GoReleaser (`.goreleaser.yml`) | `checksums.txt` + keyless cosign bundle, SBOM per archive, GitHub build provenance |
-| deb / rpm / apk packages (linux amd64/arm64) | GoReleaser `nfpms` | covered by `checksums.txt`; the packages themselves are unsigned, so Alpine needs `apk add --allow-untrusted ./upgradescope_*.apk` |
+| deb / rpm / apk packages (linux amd64/arm64) | GoReleaser `nfpms` | covered by `checksums.txt`; the packages themselves are unsigned ([design note](../docs/design/package-signing.md)), so verify `checksums.txt` and the package first: Alpine's `apk add --allow-untrusted ./upgradescope_*.apk` skips apk's own signature check |
 | Image `ghcr.io/abd-ulbasit/upgradescope` (licenses in `/licenses/`) | GoReleaser `dockers_v2` | cosign on the index and every platform image, SBOM and provenance attestations |
 | Helm chart `oci://ghcr.io/abd-ulbasit/charts/upgradescope` (image pinned by digest) | release.yml `chart` job | cosign |
 | Homebrew `abd-ulbasit/tap/upgradescope` | the tap's own workflow ([homebrew-tap/](homebrew-tap/)) | the tap verifies `checksums.txt` with cosign before rendering |
@@ -40,10 +40,34 @@ account action that a workflow cannot do.
 2. **The rulesets** in [`.github/rulesets/`](../.github/rulesets/) are
    applied (2026-10-11): `release-tags.json` as ruleset 24349764 and
    `main.json` as ruleset 24343445, which requires `ci-ok` and
-   `breaking-change`. Nothing to do here; CI's `hack/rulesets-live.sh` checks
-   on every pull request and push that the live rulesets still equal the
-   files. After a change to a file, or an intended change in the UI, that
-   README has the update commands.
+   `breaking-change`. Two changes wait to be applied (that README has the
+   commands): `main.json` now pins `ci-ok` to the GitHub Actions app (PUT),
+   and `release-tag-creation.json` (POST), which lets only the admin role
+   create a release tag. CI's `hack/rulesets-live.sh` checks on every pull
+   request and push that the live rulesets still equal the files, and fails
+   until both are applied. After a change to a file, or an intended change
+   in the UI, that README has the update commands.
+3. **The `release` environment.** `release.yml`'s `goreleaser` job waits
+   for it. GitHub creates it on first use with no protection, so set it up
+   before the next tag: Settings -> Environments -> `release` -> Required
+   reviewers (the maintainer), and Deployment branches and tags -> Selected
+   -> tag pattern `v*.*.*`. Leave "Prevent self-review" off while one
+   maintainer both tags and approves, or no release can be approved. Every
+   release then waits for one approval after CI has passed. CI's
+   `hack/release-environment-live.sh` (`make release-environment-check`)
+   fails on every pull request and push until the environment has a
+   required reviewer and only that tag pattern. With the API instead of the
+   UI:
+
+   ```sh
+   uid=$(gh api users/abd-ulbasit --jq .id)
+   jq -n --argjson uid "$uid" '{reviewers: [{type: "User", id: $uid}],
+     deployment_branch_policy: {protected_branches: false, custom_branch_policies: true}}' |
+     gh api -X PUT repos/abd-ulbasit/upgradescope/environments/release --input -
+   gh api -X POST repos/abd-ulbasit/upgradescope/environments/release/deployment-branch-policies \
+     -f name='v*.*.*' -f type=tag
+   make release-environment-check
+   ```
 
 ### Homebrew tap
 
@@ -57,6 +81,18 @@ first run creates `Formula/upgradescope.rb`.
 3. Run its *update formula* workflow once (Actions → Run workflow). It
    verifies the latest signed release and commits the formula. After that
    it runs every 6 hours.
+
+After that first push, the tap repository owns its files, and
+[`homebrew-tap/`](homebrew-tap/) here is a copy that `make hack-test`
+tests (the scripts and the template). Dependabot bumps the tap's action
+pins in the tap repository only: upgradescope's own Dependabot does not
+read `packaging/homebrew-tap/.github/`, and GitHub ignores a
+`dependabot.yml` outside the repository root's `.github/`. So the pins
+here lag the tap's, on purpose. To change the tap, make the same change
+in both repositories file by file, and never push this whole directory
+over the tap again, which would undo Dependabot's bumps. To see how the
+two differ: `git diff --no-index packaging/homebrew-tap <tap checkout>`
+(the tap also has `Formula/` and `LICENSE`).
 
 The tap holds no upgradescope secret, and upgradescope holds no tap
 secret. The tap pulls and verifies.
