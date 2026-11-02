@@ -3,10 +3,10 @@ module github.com/abd-ulbasit/upgradescope/tools/gen-kb
 go 1.26.2
 
 require (
-	k8s.io/api v0.37.1
-	k8s.io/apiextensions-apiserver v0.37.1
-	k8s.io/apimachinery v0.37.1
-	k8s.io/kube-aggregator v0.37.1
+	k8s.io/api v0.37.2
+	k8s.io/apiextensions-apiserver v0.37.2
+	k8s.io/apimachinery v0.37.2
+	k8s.io/kube-aggregator v0.37.2
 )
 
 require (
