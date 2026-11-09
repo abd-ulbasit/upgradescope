@@ -48,13 +48,13 @@ For AKS 1.33 on 2026-10-04:
 [support-lifecycle] Kubernetes 1.33 is past Azure Kubernetes Service standard support (ended 2026-07-31)
     Azure Kubernetes Service ended standard support for Kubernetes 1.33 on
     2026-07-31; extended support, which applies only if Long Term Support is
-    enabled, runs until 2027-07-31; upgradescope cannot see whether this
-    cluster is enrolled. AKS has no automatic extended support. Without Long
-    Term Support (which needs the Premium tier), a cluster past community
-    support gets only platform support (Azure and AKS platform issues, no
-    Kubernetes fixes) while its minor is N-3, one behind the oldest minor in
-    community support. Older minors are out of support.
-    fix: Upgrade the control plane, one minor at a time. The nearest minor in standard support is 1.34; the newest known is 1.36.
+    enabled, runs until 2027-07-31; upgradescope cannot see whether this cluster
+    is enrolled. AKS has no automatic extended support. Without Long Term
+    Support (which needs the Premium tier), a cluster past community support
+    gets only platform support (Azure and AKS platform issues, no Kubernetes
+    fixes) while its minor is N-3, one behind the oldest minor in community
+    support. Older minors are out of support.
+    fix: Upgrade the control plane, one minor at a time. The nearest minor in standard support is 1.34; the newest known is 1.37.
 ```
 
 and on a GKE cluster, "extended support, which applies only if the cluster

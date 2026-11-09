@@ -27,9 +27,10 @@ support:
     - https://endoflife.date/argo-cd
     - https://argo-cd.readthedocs.io/en/stable/developer-guide/release-process-and-cadence/
 cycles:
+  - {cycle: "3.6", eol: false, citations: ["https://endoflife.date/argo-cd"]}
   - {cycle: "3.5", eol: false, citations: ["https://endoflife.date/argo-cd"]}
   - {cycle: "3.4", eol: false, citations: ["https://endoflife.date/argo-cd"]}
-  - {cycle: "3.3", eol: false, citations: ["https://endoflife.date/argo-cd"]}
+  - {cycle: "3.3", eol: "2026-11-04", citations: ["https://endoflife.date/argo-cd"]}
   - {cycle: "3.2", eol: "2026-08-04", citations: ["https://endoflife.date/argo-cd"]}
   - {cycle: "3.1", eol: "2026-05-05", citations: ["https://endoflife.date/argo-cd"]}
   - {cycle: "3.0", eol: "2026-02-02", citations: ["https://endoflife.date/argo-cd"]}
